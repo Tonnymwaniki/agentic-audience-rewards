@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, Suspense } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAnalyze } from '@/lib/hooks/useAnalyze'
 import { createClient } from '@/lib/supabase/client'
@@ -13,7 +13,7 @@ type ChannelVideo = {
   publishedAt: string
 }
 
-export default function PickPage() {
+function PickPageInner() {
   const searchParams = useSearchParams()
   const channelParam = searchParams.get('channel')
 
@@ -212,5 +212,17 @@ export default function PickPage() {
         </div>
       )}
     </div>
+  )
+}
+
+export default function PickPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <p className="text-text-muted">Loading...</p>
+      </div>
+    }>
+      <PickPageInner />
+    </Suspense>
   )
 }

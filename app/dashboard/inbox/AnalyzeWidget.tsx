@@ -10,7 +10,7 @@ type AnalyzeWidgetProps = {
 
 export default function AnalyzeWidget({ creatorId }: AnalyzeWidgetProps) {
   const [url, setUrl] = useState('')
-  const { start, status, progressText, progressPercent, error, result } = useAnalyze(creatorId)
+  const { start, status, progressText, progressPercent, error, result, setResult } = useAnalyze(creatorId)
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

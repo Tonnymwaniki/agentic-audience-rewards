@@ -44,10 +44,10 @@ export default async function RecognizedPage() {
   }
 
   const events = (rewardEvents || [])
-    .filter(event => event.audience_members)
+    .filter(event => event.audience_members && event.audience_members.length > 0)
     .map(event => {
       const rawStatus = event.status
-      const displayName = (event.audience_members as { display_name: string } | null)?.display_name || 'Unknown'
+      const displayName = event.audience_members[0].display_name || 'Unknown'
       if (displayName === '@draxisskjoung6772' || displayName.toLowerCase().includes('draxisskjoung6772')) {
         console.log('RECOGNIZED PAGE DEBUG for draxisskjoung6772:', {
           rawStatus,

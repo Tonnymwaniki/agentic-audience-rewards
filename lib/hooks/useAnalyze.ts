@@ -135,5 +135,6 @@ export function useAnalyze(creatorId: string) {
     progressPercent,
     error,
     result,
+    setResult,
   }
 }
