@@ -1,5 +1,49 @@
+import { createServiceClient } from '@/lib/supabase/service'
+
+export type ProgressCallback = (count: number) => void
+
+export async function generateDraftReply(commentText: string): Promise<string> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+  try {
+    const prompt = `You are drafting a short, professional reply from a content creator to an audience member who showed purchase intent or business interest. Their comment: '${commentText}'. Write a brief (2-3 sentence), warm, professional reply that acknowledges their interest and invites next steps. Respond with ONLY the reply text, no preamble.`
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 256,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Anthropic API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+    const content = data.content?.[0]?.text
+
+    if (!content) {
+      throw new Error('Empty response from Anthropic')
+    }
+
+    return content.trim()
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 export async function categorizeComments(
-  comments: { id: string; text: string }[]
+  comments: { id: string; text: string }[],
+  onProgress?: ProgressCallback
 ) {
   const results: Array<{
     id: string
@@ -25,6 +69,7 @@ export async function categorizeComments(
     }
 
     results.push(...batchResults)
+    onProgress?.(results.length)
   }
 
   return results
@@ -58,15 +103,17 @@ ${JSON.stringify(batch)}${retrySuffix}`
     let response: Response
     try {
       response = await fetch(
-        'https://openrouter.ai/api/v1/chat/completions',
+        'https://api.anthropic.com/v1/messages',
         {
           method: 'POST',
           headers: {
-            Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            'x-api-key': process.env.ANTHROPIC_API_KEY!,
+            'anthropic-version': '2023-06-01',
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({
-            model: 'openrouter/free',
+            model: 'claude-haiku-4-5-20251001',
+            max_tokens: 1024,
             messages: [{ role: 'user', content: prompt }],
           }),
           signal: controller.signal,
@@ -85,14 +132,14 @@ ${JSON.stringify(batch)}${retrySuffix}`
     }
 
     if (!response.ok) {
-      throw new Error(`OpenRouter API error: ${response.status}`)
+      throw new Error(`Anthropic API error: ${response.status}`)
     }
 
     const data = await response.json()
-    const content = data.choices?.[0]?.message?.content
+    const content = data.content?.[0]?.text
 
     if (!content) {
-      throw new Error('Empty response from OpenRouter')
+      throw new Error('Empty response from Anthropic')
     }
 
     const match = content.match(/\[[\s\S]*\]/)
@@ -133,4 +180,82 @@ ${JSON.stringify(batch)}${retrySuffix}`
   }
 
   return batchResults
+}
+
+export async function categorizePost(post_id: string, onProgress?: ProgressCallback) {
+  const supabase = createServiceClient()
+
+  const { data: comments, error: commentsError } = await supabase
+    .from('comments')
+    .select('id, text')
+    .eq('post_id', post_id)
+
+  if (commentsError) {
+    console.error('Fetch comments error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+    throw new Error('Failed to fetch comments')
+  }
+
+  if (!comments || comments.length === 0) {
+    return { success: true, categorized: 0 }
+  }
+
+  const { data: existingCategories, error: categoriesError } = await supabase
+    .from('comment_categories')
+    .select('comment_id')
+
+  if (categoriesError) {
+    console.error('Fetch categories error:', JSON.stringify(categoriesError, Object.getOwnPropertyNames(categoriesError), 2))
+    throw new Error('Failed to fetch existing categories')
+  }
+
+  const categorizedIds = new Set(
+    existingCategories?.map(c => c.comment_id) || []
+  )
+  const uncategorized = comments.filter(c => !categorizedIds.has(c.id))
+
+  if (uncategorized.length === 0) {
+    return { success: true, categorized: 0 }
+  }
+
+  const categorized = await categorizeComments(uncategorized, onProgress)
+
+  if (categorized.length === 0) {
+    return { success: true, categorized: 0 }
+  }
+
+  const upsertData = categorized.map(c => ({
+    comment_id: c.id,
+    category: c.category,
+    topic: c.topic,
+    confidence: c.confidence,
+  }))
+
+  const { error: upsertError } = await supabase
+    .from('comment_categories')
+    .upsert(upsertData, { onConflict: 'comment_id' })
+
+  if (upsertError) {
+    console.error('Upsert categories error:', JSON.stringify(upsertError, Object.getOwnPropertyNames(upsertError), 2))
+    throw new Error('Failed to upsert categories')
+  }
+
+  const uncategorizedTextMap = new Map(uncategorized.map(c => [c.id, c.text]))
+  const purchaseIntents = categorized.filter(c => c.category === 'purchase_intent')
+
+  for (const comment of purchaseIntents) {
+    const text = uncategorizedTextMap.get(comment.id)
+    if (!text) continue
+
+    try {
+      const draftReply = await generateDraftReply(text)
+      await supabase
+        .from('comment_categories')
+        .update({ draft_reply: draftReply })
+        .eq('comment_id', comment.id)
+    } catch (err) {
+      console.error('Draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    }
+  }
+
+  return { success: true, categorized: categorized.length }
 }

@@ -34,7 +34,7 @@ export default function LoginPage() {
         if (error) throw error
       }
 
-      router.push('/dashboard/inbox')
+      router.push('/dashboard/connect')
       router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')
