@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { evaluateRewards } from '@/lib/rewards/evaluate'
 
+export const maxDuration = 60
+
 export async function POST(request: NextRequest) {
   try {
     const { creator_id, post_id } = await request.json()
