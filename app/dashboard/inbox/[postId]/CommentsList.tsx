@@ -12,6 +12,7 @@ type Comment = {
   topic: string | null
   hasReward?: boolean
   draftReply?: string | null
+  profileSummary?: string | null
 }
 
 type CommentsListProps = {
@@ -160,6 +161,9 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
                     {comment.category.replace('_', ' ')}
                   </span>
                 </div>
+                 {comment.profileSummary && (
+                   <p className="mt-0.5 text-xs italic text-text-muted">{comment.profileSummary}</p>
+                 )}
                  <p className="mt-1 text-sm leading-relaxed text-text-primary">{comment.text}</p>
                  <span className="mt-1 inline-block text-xs font-mono text-text-muted">{timeAgo(comment.postedAt)}</span>
                  {comment.topic && (

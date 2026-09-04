@@ -2,12 +2,22 @@ import { createServiceClient } from '@/lib/supabase/service'
 
 export type ProgressCallback = (count: number) => void
 
-export async function generateDraftReply(commentText: string): Promise<string> {
+const DRAFT_REPLY_INSTRUCTIONS: Record<string, string> = {
+  purchase_intent:
+    'Write a brief (2-3 sentence), warm, professional reply that acknowledges their interest and invites next steps.',
+  question:
+    "Write a brief, helpful, direct answer or acknowledgment to this question, in the creator's voice, 2-3 sentences.",
+  complaint:
+    'Write a brief, empathetic, professional response acknowledging this concern, 2-3 sentences, without being defensive.',
+}
+
+export async function generateDraftReply(commentText: string, category: string): Promise<string> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
 
   try {
-    const prompt = `You are drafting a short, professional reply from a content creator to an audience member who showed purchase intent or business interest. Their comment: '${commentText}'. Write a brief (2-3 sentence), warm, professional reply that acknowledges their interest and invites next steps. Respond with ONLY the reply text, no preamble.`
+    const instruction = DRAFT_REPLY_INSTRUCTIONS[category] ?? DRAFT_REPLY_INSTRUCTIONS.purchase_intent
+    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'. ${instruction} Respond with ONLY the reply text, no preamble.`
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -240,14 +250,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   }
 
   const uncategorizedTextMap = new Map(uncategorized.map(c => [c.id, c.text]))
-  const purchaseIntents = categorized.filter(c => c.category === 'purchase_intent')
+  const draftableCategories = new Set(['purchase_intent', 'question', 'complaint'])
+  const draftable = categorized.filter(c => draftableCategories.has(c.category))
 
-  for (const comment of purchaseIntents) {
+  for (const comment of draftable) {
     const text = uncategorizedTextMap.get(comment.id)
     if (!text) continue
 
     try {
-      const draftReply = await generateDraftReply(text)
+      const draftReply = await generateDraftReply(text, comment.category)
       await supabase
         .from('comment_categories')
         .update({ draft_reply: draftReply })

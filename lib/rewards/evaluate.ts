@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
+import { updateAudienceProfile } from '@/lib/audience-memory'
 
 export type EvaluateProgressCallback = (evaluated: number, total: number) => void
 
@@ -12,7 +13,7 @@ export async function evaluateRewards(
 
   const { data: audienceMembers, error: membersError } = await supabase
     .from('audience_members')
-    .select('id, display_name, reward_status')
+    .select('id, display_name, reward_status, profile_summary')
     .eq('creator_id', creator_id)
     .eq('reward_status', 'none')
 
@@ -98,6 +99,16 @@ export async function evaluateRewards(
 
   console.log("REWARD DEBUG - members found for evaluation:", eligibleMembers.length)
 
+  const ELIGIBLE_MEMBERS_WARNING_THRESHOLD = 40
+
+  if (eligibleMembers.length > ELIGIBLE_MEMBERS_WARNING_THRESHOLD) {
+    console.warn(
+      `Reward evaluate warning: ${eligibleMembers.length} eligible members for creator ${creator_id}` +
+      (post_id ? ` (post ${post_id})` : '') +
+      ` — each member now makes up to 2 sequential Claude calls (eligibility + profile update), so this run may approach Vercel's function duration limit.`
+    )
+  }
+
   let evaluated = 0
   let qualified = 0
   const results: Array<{
@@ -123,13 +134,14 @@ export async function evaluateRewards(
       praiseCount,
       questionCount,
       sampleComments,
+      priorEngagementProfile: member.profile_summary || null,
     }
 
     try {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), 15000)
 
-      const prompt = `You are deciding which audience members deserve on-chain recognition for genuine engagement with a content creator. Given this audience member's activity: ${JSON.stringify(signals)}, decide if they qualify for a Proof of Engagement reward. Qualify people who show genuine engagement — this can include: commenting 3+ times with substantive (non-spam, non-repetitive) content even on a single post, asking thoughtful questions, showing clear purchase intent, or giving specific praise that references actual content (not just emojis or one-word reactions). Do not require engagement across multiple posts — that's a bonus signal, not a requirement. Disqualify only clear one-off/low-effort engagement (1-2 very short or generic comments) or spam/repetitive content. Respond with ONLY valid JSON: {"qualifies": true or false, "reason": "one sentence explaining why, referencing specific evidence"}`
+      const prompt = `You are deciding which audience members deserve on-chain recognition for genuine engagement with a content creator. Given this audience member's activity: ${JSON.stringify(signals)}, decide if they qualify for a Proof of Engagement reward. If priorEngagementProfile is present, it summarizes this person's engagement across all of the creator's posts over time — weigh it alongside the current signals, and let a consistent pattern of genuine engagement count in their favor even if this post's comments alone are borderline. Qualify people who show genuine engagement — this can include: commenting 3+ times with substantive (non-spam, non-repetitive) content even on a single post, asking thoughtful questions, showing clear purchase intent, or giving specific praise that references actual content (not just emojis or one-word reactions). Do not require engagement across multiple posts — that's a bonus signal, not a requirement. Disqualify only clear one-off/low-effort engagement (1-2 very short or generic comments) or spam/repetitive content. Respond with ONLY valid JSON: {"qualifies": true or false, "reason": "one sentence explaining why, referencing specific evidence"}`
 
       let response: Response
       try {
@@ -195,6 +207,12 @@ export async function evaluateRewards(
         evaluated++
         onProgress?.(evaluated, eligibleMembers.length)
         continue
+      }
+
+      try {
+        await updateAudienceProfile(member.id)
+      } catch (profileErr) {
+        console.error('Audience profile update error:', JSON.stringify(profileErr, Object.getOwnPropertyNames(profileErr), 2))
       }
 
       if (!decision.qualifies) {

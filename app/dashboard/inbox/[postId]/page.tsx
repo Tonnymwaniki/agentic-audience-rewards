@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
+import TrackVideoToggle from '@/components/TrackVideoToggle'
 import CommentsList from './CommentsList'
 
 export const dynamic = 'force-dynamic'
@@ -59,7 +60,8 @@ export default async function PostInboxPage({
       posted_at,
       audience_member_id,
       audience_members (
-        display_name
+        display_name,
+        profile_summary
       ),
       comment_categories (
         category,
@@ -85,6 +87,7 @@ export default async function PostInboxPage({
     text: comment.text,
     postedAt: comment.posted_at,
     authorName: (comment.audience_members as unknown as { display_name: string } | null)?.display_name || 'Unknown',
+    profileSummary: (comment.audience_members as unknown as { profile_summary: string | null } | null)?.profile_summary || null,
     category: (comment.comment_categories as unknown as { category: string; topic: string; draft_reply?: string | null } | null)?.category || 'other',
     topic: (comment.comment_categories as unknown as { category: string; topic: string; draft_reply?: string | null } | null)?.topic || null,
     draftReply: (comment.comment_categories as unknown as { draft_reply?: string | null } | null)?.draft_reply || null,
@@ -161,6 +164,9 @@ export default async function PostInboxPage({
         >
           Rewards
         </Link>
+        <div className="w-48">
+          <TrackVideoToggle postId={postId} />
+        </div>
       </div>
 
       <CommentsList

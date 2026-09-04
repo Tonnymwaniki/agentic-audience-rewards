@@ -5,6 +5,7 @@ import { useSearchParams } from 'next/navigation'
 import { useAnalyze } from '@/lib/hooks/useAnalyze'
 import { createClient } from '@/lib/supabase/client'
 import Link from 'next/link'
+import TrackVideoToggle from '@/components/TrackVideoToggle'
 
 type ChannelVideo = {
   videoId: string
@@ -165,12 +166,15 @@ function PickPageInner() {
 
                 <div className="px-4 pb-4">
                   {isDone && result ? (
-                    <Link
-                      href={`/dashboard/inbox/${result.postId}`}
-                      className="btn-primary w-full"
-                    >
-                      View Results
-                    </Link>
+                    <div className="space-y-2">
+                      <Link
+                        href={`/dashboard/inbox/${result.postId}`}
+                        className="btn-primary w-full"
+                      >
+                        View Results
+                      </Link>
+                      <TrackVideoToggle postId={result.postId} />
+                    </div>
                   ) : isError ? (
                     <div>
                       <p className="mb-2 text-sm text-avax-red">{analyzeError}</p>

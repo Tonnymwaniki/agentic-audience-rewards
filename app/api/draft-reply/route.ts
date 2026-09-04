@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     const { data: comment } = await supabase
       .from('comments')
-      .select('text')
+      .select('text, comment_categories (category)')
       .eq('id', comment_id)
       .single()
 
@@ -28,7 +28,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const draftReply = await generateDraftReply(comment.text)
+    const category = (comment.comment_categories as unknown as { category: string } | null)?.category || 'purchase_intent'
+    const draftReply = await generateDraftReply(comment.text, category)
 
     await supabase
       .from('comment_categories')
