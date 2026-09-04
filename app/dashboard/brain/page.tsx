@@ -181,6 +181,38 @@ export default async function BrainPage({
 
   const maxCategoryCount = Math.max(...Object.values(categoryCounts), 1)
 
+  const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
+
+  function formatHour(hour: number): string {
+    const period = hour < 12 ? 'AM' : 'PM'
+    const displayHour = hour % 12 === 0 ? 12 : hour % 12
+    return `${displayHour} ${period}`
+  }
+
+  // Groups comment posted_at timestamps by day-of-week + hour-of-day (UTC, since
+  // posted_at comes from the YouTube API as UTC and there's no per-creator timezone
+  // preference stored anywhere) to find when this audience is most active.
+  const activityBuckets = new Map<string, number>()
+  for (const comment of filteredComments) {
+    const date = new Date(comment.posted_at)
+    if (isNaN(date.getTime())) continue
+    const key = `${date.getUTCDay()}-${date.getUTCHours()}`
+    activityBuckets.set(key, (activityBuckets.get(key) || 0) + 1)
+  }
+
+  const bestTimes = Array.from(activityBuckets.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([key, count]) => {
+      const [day, hour] = key.split('-').map(Number)
+      return {
+        day,
+        hour,
+        count,
+        percentage: totalComments > 0 ? (count / totalComments) * 100 : 0,
+      }
+    })
+
   return (
     <div>
       <PageHeader title="Audience Brain" backHref="/dashboard/inbox" backLabel="My Videos" />
@@ -235,6 +267,42 @@ export default async function BrainPage({
           )}
         </section>
       </div>
+
+      <section className="card mt-8">
+        <h2 className="mb-4 font-display text-lg font-semibold text-text-primary">Best Time to Post</h2>
+        {totalComments < 5 ? (
+          <p className="text-sm text-text-muted">Not enough comment data yet to find a reliable pattern.</p>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <p className="text-sm text-text-primary">
+                Your audience is most active on{' '}
+                <span className="font-body font-medium">{DAY_NAMES[bestTimes[0].day]}</span> around{' '}
+                <span className="font-body font-medium">{formatHour(bestTimes[0].hour)} UTC</span>.
+              </p>
+              <p className="mt-1 text-xs text-text-muted">
+                {bestTimes[0].percentage.toFixed(0)}% of engagement happens in this window.
+              </p>
+            </div>
+
+            {bestTimes.length > 1 && (
+              <ol className="space-y-2 border-t border-white/10 pt-3">
+                {bestTimes.map((slot, index) => (
+                  <li key={`${slot.day}-${slot.hour}`} className="flex items-center justify-between text-sm">
+                    <span className="flex items-center gap-2">
+                      <span className="font-mono text-xs text-text-muted">{index + 1}.</span>
+                      <span className="font-body text-text-primary">
+                        {DAY_NAMES[slot.day]}, {formatHour(slot.hour)} UTC
+                      </span>
+                    </span>
+                    <span className="text-text-muted">{slot.percentage.toFixed(0)}%</span>
+                  </li>
+                ))}
+              </ol>
+            )}
+          </div>
+        )}
+      </section>
 
       <div className="mt-8 grid grid-cols-1 gap-8 lg:grid-cols-2">
         <section className="card">

@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import NotificationBell from '@/components/NotificationBell'
 
 const NAV_ITEMS = [
   { href: '/dashboard/inbox', label: 'My Videos' },
@@ -40,6 +41,7 @@ export default function DashboardLayout({
               </Link>
             )
           })}
+          <NotificationBell />
         </div>
       </nav>
       {children}
