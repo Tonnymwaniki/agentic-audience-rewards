@@ -12,7 +12,77 @@ const SUGGESTED_QUESTIONS = [
   'Show me repeated comments',
 ]
 
-export default function ResearchChat({ creatorId }: { creatorId: string }) {
+// Deterministic pseudo-random (seeded by index) rather than Math.random() during
+// render — this component is server-rendered then hydrated, and Math.random()
+// would produce different values in each pass, causing a hydration mismatch.
+function seededRandom(seed: number): number {
+  const x = Math.sin(seed) * 10000
+  return x - Math.floor(x)
+}
+
+// Two visual states, driven by whether the conversation has started yet:
+//  - "active" (no messages sent): brighter cobalt/pink mix, higher opacity, bouncy
+//  - "calm" (after the first message): the original faint, slow, muted drift
+// Position/opacity/color all live on the element itself (inline style + the
+// .ambient-fragment CSS transition), so React re-rendering with a new `active`
+// value animates smoothly rather than snapping between states.
+function AmbientBackground({
+  fragments,
+  active,
+  dimmed,
+}: {
+  fragments: string[]
+  active: boolean
+  dimmed: boolean
+}) {
+  if (fragments.length === 0) return null
+
+  return (
+    <div
+      aria-hidden="true"
+      className={`pointer-events-none absolute inset-0 z-0 overflow-hidden transition-all duration-500 ease-out ${
+        dimmed ? 'opacity-10 blur-[2px]' : 'opacity-100'
+      }`}
+    >
+      {fragments.map((text, i) => {
+        const top = seededRandom(i * 7.3 + 1) * 88
+        const left = seededRandom(i * 13.7 + 2) * 78
+        const duration = 24 + seededRandom(i * 3.1 + 3) * 22
+        const delay = -seededRandom(i * 5.9 + 4) * duration
+        const driftX = (seededRandom(i * 2.3 + 5) - 0.5) * 70
+        const driftY = (seededRandom(i * 4.1 + 6) - 0.5) * 70
+        const isCobalt = i % 2 === 0
+
+        return (
+          <span
+            key={i}
+            className={`ambient-fragment absolute whitespace-nowrap text-sm ${active ? 'ambient-fragment-active' : ''}`}
+            style={{
+              top: `${top}%`,
+              left: `${left}%`,
+              animationDuration: `${duration}s`,
+              animationDelay: `${delay}s`,
+              opacity: active ? 0.3 : 0.07,
+              color: active ? (isCobalt ? 'var(--cobalt)' : 'var(--pink)') : 'var(--text-muted)',
+              '--drift-x': `${driftX}px`,
+              '--drift-y': `${driftY}px`,
+            } as React.CSSProperties}
+          >
+            {text}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+export default function ResearchChat({
+  creatorId,
+  ambientFragments = [],
+}: {
+  creatorId: string
+  ambientFragments?: string[]
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -66,15 +136,21 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
   }
 
   return (
-    <div className="flex h-screen flex-col bg-background">
-      <header className="flex flex-shrink-0 items-center gap-4 border-b border-white/10 px-6 py-4">
+    <div className="relative flex h-screen flex-col overflow-hidden bg-background">
+      {/* Ambient "Quiet Room" backdrop — sits behind everything; the header, message
+          area, and input bar above all get z-10 so content is never obscured. It
+          dims sharply (via the `loading` flag) while a message is in flight, then
+          fades back once the reply lands. */}
+      <AmbientBackground fragments={ambientFragments} active={messages.length === 0} dimmed={loading} />
+
+      <header className="relative z-10 flex flex-shrink-0 items-center gap-4 border-b border-white/10 bg-background px-6 py-4">
         <Link href="/dashboard/agent" className="text-sm text-text-muted hover:text-text-primary">
           ← Agent
         </Link>
         <h1 className="font-display text-lg font-semibold text-text-primary">Research</h1>
       </header>
 
-      <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-8">
+      <div ref={scrollRef} className="relative z-10 flex-1 overflow-y-auto px-6 py-8">
         <div className="mx-auto flex max-w-2xl flex-col gap-4">
           {messages.length === 0 && (
             <div className="flex flex-col items-center gap-6 py-16 text-center">
@@ -118,7 +194,7 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex-shrink-0 border-t border-white/10 px-6 py-5">
+      <form onSubmit={handleSubmit} className="relative z-10 flex-shrink-0 border-t border-white/10 bg-background px-6 py-5">
         <div className="mx-auto flex max-w-2xl items-center gap-3">
           <input
             type="text"
