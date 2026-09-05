@@ -33,7 +33,7 @@ export async function POST(request: NextRequest) {
 
     await supabase
       .from('comment_categories')
-      .update({ draft_reply: draftReply })
+      .update({ draft_reply: draftReply, draft_reply_created_at: new Date().toISOString() })
       .eq('comment_id', comment_id)
 
     return NextResponse.json({ draft_reply: draftReply })

@@ -33,6 +33,7 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
         external_post_id: videoId,
         title: meta.title,
         content: meta.description,
+        thumbnail_url: meta.thumbnailUrl,
       },
       {
         onConflict: 'platform_id, external_post_id',

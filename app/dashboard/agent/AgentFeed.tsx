@@ -62,6 +62,7 @@ export type FeedGroup = {
 }
 
 type AgentFeedProps = {
+  creatorDisplayName: string
   commentsReadCount: number
   draftsWrittenCount: number
   recognizedCount: number
@@ -85,6 +86,7 @@ function timeAgo(dateString: string): string {
 }
 
 export default function AgentFeed({
+  creatorDisplayName,
   commentsReadCount,
   draftsWrittenCount,
   recognizedCount,
@@ -104,6 +106,8 @@ export default function AgentFeed({
       return true
     })
   )
+
+  const quietDay = commentsReadCount === 0 && draftsWrittenCount === 0 && recognizedCount === 0
 
   async function approveDraft(commentId: string) {
     setDismissedDraftIds(prev => new Set(prev).add(commentId))
@@ -143,15 +147,28 @@ export default function AgentFeed({
   return (
     <div className="space-y-6">
       <section className="card">
-        <p className="text-sm leading-relaxed text-text-primary">
-          Today, your agent read{' '}
-          <span className="font-body font-semibold text-cobalt">{commentsReadCount}</span>{' '}
-          comment{commentsReadCount === 1 ? '' : 's'}, drafted{' '}
-          <span className="font-body font-semibold text-cobalt">{draftsWrittenCount}</span>{' '}
-          repl{draftsWrittenCount === 1 ? 'y' : 'ies'}, and recognized{' '}
-          <span className="font-body font-semibold text-pink">{recognizedCount}</span>{' '}
-          {recognizedCount === 1 ? 'person' : 'people'}.
-        </p>
+        {quietDay ? (
+          <p className="text-sm leading-relaxed text-text-primary">
+            Hello, {creatorDisplayName} — nothing new in the last 24 hours. Since you started, your agent
+            has read <span className="font-body font-semibold text-cobalt">{totalCommentsCount}</span>{' '}
+            comment{totalCommentsCount === 1 ? '' : 's'}, drafted{' '}
+            <span className="font-body font-semibold text-cobalt">{totalDraftsCount}</span> repl
+            {totalDraftsCount === 1 ? 'y' : 'ies'}, and recognized{' '}
+            <span className="font-body font-semibold text-pink">{totalRecognizedCount}</span>{' '}
+            {totalRecognizedCount === 1 ? 'person' : 'people'}. It&apos;s still watching your connected
+            channels and will let you know the moment something comes in.
+          </p>
+        ) : (
+          <p className="text-sm leading-relaxed text-text-primary">
+            Hello, {creatorDisplayName} — today your agent read{' '}
+            <span className="font-body font-semibold text-cobalt">{commentsReadCount}</span>{' '}
+            comment{commentsReadCount === 1 ? '' : 's'}, drafted{' '}
+            <span className="font-body font-semibold text-cobalt">{draftsWrittenCount}</span>{' '}
+            repl{draftsWrittenCount === 1 ? 'y' : 'ies'}, and recognized{' '}
+            <span className="font-body font-semibold text-pink">{recognizedCount}</span>{' '}
+            {recognizedCount === 1 ? 'person' : 'people'}.
+          </p>
+        )}
         <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="rounded-lg bg-surface-hover p-3 text-center">
             <p className="text-xl font-display font-semibold text-text-primary">{commentsReadCount}</p>

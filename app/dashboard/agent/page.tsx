@@ -23,13 +23,17 @@ export default async function AgentHomePage() {
 
   const { data: creator, error: creatorError } = await supabase
     .from('creators')
-    .select('id')
+    .select('id, display_name')
     .eq('user_id', user.id)
     .single()
 
   if (creatorError || !creator) {
     redirect('/login')
   }
+
+  // Falls back to email or "there" only if this creator predates display_name being
+  // populated at signup — per product decision, an email value is shown as-is, not parsed.
+  const creatorDisplayName = creator.display_name || user.email || 'there'
 
   const { data: posts, error: postsError } = await supabase
     .from('posts')
@@ -100,6 +104,7 @@ export default async function AgentHomePage() {
     topic: string | null
     draft_reply: string | null
     draft_reply_approved_at: string | null
+    draft_reply_created_at: string | null
   }
 
   let categories: CategoryRow[] = []
@@ -107,7 +112,7 @@ export default async function AgentHomePage() {
   if (commentIds.length > 0) {
     categories = await fetchInBatches<CategoryRow>(supabase, {
       table: 'comment_categories',
-      select: 'comment_id, category, topic, draft_reply, draft_reply_approved_at',
+      select: 'comment_id, category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at',
       inColumn: 'comment_id',
       inValues: commentIds,
     })
@@ -162,13 +167,19 @@ export default async function AgentHomePage() {
     timestamp: data.latest,
   }))
 
-  // --- Pending drafted replies — a backlog, so no time bound, just a UI safety cap ---
+  // --- Pending drafted replies — a backlog, so no time bound, just a UI safety cap.
+  // Sorted and timestamped by when the draft itself was generated, not the comment's
+  // original posted_at, so an old comment with a fresh draft doesn't show as "days ago."
   const pendingDrafts = allComments
     .filter(c => {
       const cat = categoriesByCommentId.get(c.id)
       return cat?.draft_reply && !cat.draft_reply_approved_at
     })
-    .sort((a, b) => new Date(b.posted_at).getTime() - new Date(a.posted_at).getTime())
+    .sort((a, b) => {
+      const aTime = categoriesByCommentId.get(a.id)?.draft_reply_created_at || a.posted_at
+      const bTime = categoriesByCommentId.get(b.id)?.draft_reply_created_at || b.posted_at
+      return new Date(bTime).getTime() - new Date(aTime).getTime()
+    })
     .slice(0, PENDING_DRAFTS_LIMIT)
 
   const pendingDraftItems: FeedItem[] = pendingDrafts.map(comment => {
@@ -183,7 +194,7 @@ export default async function AgentHomePage() {
       commentText: comment.text,
       draftReply: cat.draft_reply!,
       category: cat.category,
-      timestamp: comment.posted_at,
+      timestamp: cat.draft_reply_created_at || comment.posted_at,
     }
   })
 
@@ -304,6 +315,7 @@ export default async function AgentHomePage() {
     <div>
       <PageHeader title="Agent Home" />
       <AgentFeed
+        creatorDisplayName={creatorDisplayName}
         commentsReadCount={commentsReadCount}
         draftsWrittenCount={draftsWrittenCount}
         recognizedCount={recognizedTodayCount}

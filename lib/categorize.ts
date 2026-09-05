@@ -261,7 +261,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       const draftReply = await generateDraftReply(text, comment.category)
       await supabase
         .from('comment_categories')
-        .update({ draft_reply: draftReply })
+        .update({ draft_reply: draftReply, draft_reply_created_at: new Date().toISOString() })
         .eq('comment_id', comment.id)
     } catch (err) {
       console.error('Draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))

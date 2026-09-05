@@ -18,9 +18,16 @@ export async function fetchVideoMeta(videoId: string) {
   }
 
   const snippet = item.snippet
+  const thumbnailUrl =
+    snippet.thumbnails?.high?.url ||
+    snippet.thumbnails?.medium?.url ||
+    snippet.thumbnails?.default?.url ||
+    null
+
   return {
     title: snippet.title,
     description: snippet.description,
+    thumbnailUrl,
   }
 }
 
