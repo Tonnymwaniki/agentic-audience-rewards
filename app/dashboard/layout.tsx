@@ -7,9 +7,8 @@ import NotificationBell from '@/components/NotificationBell'
 const NAV_ITEMS = [
   { href: '/dashboard/agent', label: 'Agent Home' },
   { href: '/dashboard/inbox', label: 'My Videos' },
-  { href: '/dashboard/brain', label: 'Audience Brain' },
+  { href: '/dashboard/research', label: 'Research' },
   { href: '/dashboard/rewards', label: 'Rewards' },
-  { href: '/dashboard/repeated', label: 'Repeated' },
 ]
 
 export default function DashboardLayout({

@@ -186,10 +186,10 @@ export default async function PostInboxPage({
 
       <div className="mb-4 flex gap-2">
         <Link
-          href={`/dashboard/brain?post=${postId}`}
+          href="/dashboard/research"
           className="btn-primary inline-flex items-center justify-center"
         >
-          Audience Brain
+          Research
         </Link>
         <Link
           href={`/dashboard/rewards?post=${postId}`}
