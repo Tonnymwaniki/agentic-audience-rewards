@@ -65,6 +65,9 @@ type AgentFeedProps = {
   commentsReadCount: number
   draftsWrittenCount: number
   recognizedCount: number
+  totalCommentsCount: number
+  totalDraftsCount: number
+  totalRecognizedCount: number
   groups: FeedGroup[]
   groupByVideo: boolean
 }
@@ -85,6 +88,9 @@ export default function AgentFeed({
   commentsReadCount,
   draftsWrittenCount,
   recognizedCount,
+  totalCommentsCount,
+  totalDraftsCount,
+  totalRecognizedCount,
   groups,
   groupByVideo,
 }: AgentFeedProps) {
@@ -164,7 +170,16 @@ export default function AgentFeed({
 
       {!hasAnyActivity ? (
         <div className="card p-8 text-center">
-          <p className="text-sm text-text-muted">Nothing new in the last 7 days. Check back later.</p>
+          <p className="text-sm text-text-primary">No new activity in the last 7 days.</p>
+          <p className="mt-2 text-sm text-text-muted">
+            Since you started:{' '}
+            <span className="font-body font-medium text-text-primary">{totalCommentsCount}</span> comment
+            {totalCommentsCount === 1 ? '' : 's'} understood,{' '}
+            <span className="font-body font-medium text-text-primary">{totalRecognizedCount}</span>{' '}
+            {totalRecognizedCount === 1 ? 'person' : 'people'} recognized,{' '}
+            <span className="font-body font-medium text-text-primary">{totalDraftsCount}</span> repl
+            {totalDraftsCount === 1 ? 'y' : 'ies'} drafted.
+          </p>
         </div>
       ) : (
         <div className="space-y-6">

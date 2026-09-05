@@ -121,6 +121,11 @@ export default async function AgentHomePage() {
 
   const recentComments = allComments.filter(c => new Date(c.posted_at) >= sevenDaysAgo)
 
+  // --- All-time totals, for the empty state — proves the agent has real history
+  // even when nothing happened in the recent-activity windows above ---
+  const totalCommentsCount = allComments.length
+  const totalDraftsCount = categories.filter(c => c.draft_reply).length
+
   // --- Header summary stats (rolling 24h — there's no per-creator timezone stored,
   // so this is "last 24 hours," not a calendar-aligned "today") ---
   const commentsToday = allComments.filter(c => new Date(c.posted_at) >= oneDayAgo)
@@ -196,22 +201,27 @@ export default async function AgentHomePage() {
 
   let rewardEventItems: FeedItem[] = []
   let recognizedTodayCount = 0
+  let totalRecognizedCount = 0
 
   if (memberIds.length > 0) {
-    const { data: rewardEvents, error: rewardError } = await supabase
+    // Fetched all-time (no gte filter) so we can report a real total for the empty
+    // state, then filtered client-side for the 7-day feed and 24h header count —
+    // same full-fetch-then-filter approach already used for comments above.
+    const { data: rewardEvents, error: rewardError, count: rewardCount } = await supabase
       .from('reward_events')
-      .select('id, post_id, reason, status, claim_token, tx_hash, created_at, audience_members (display_name)')
+      .select('id, post_id, reason, status, claim_token, tx_hash, created_at, audience_members (display_name)', { count: 'exact' })
       .in('audience_member_id', memberIds)
-      .gte('created_at', sevenDaysAgo.toISOString())
       .order('created_at', { ascending: false })
 
     if (rewardError) {
       console.error('Agent home reward events fetch error:', JSON.stringify(rewardError, Object.getOwnPropertyNames(rewardError), 2))
     } else {
       const events = rewardEvents || []
+      totalRecognizedCount = rewardCount ?? events.length
       recognizedTodayCount = events.filter(e => new Date(e.created_at) >= oneDayAgo).length
+      const recentEvents = events.filter(e => new Date(e.created_at) >= sevenDaysAgo)
 
-      rewardEventItems = events.map(event => ({
+      rewardEventItems = recentEvents.map(event => ({
         type: 'reward',
         key: `reward-${event.id}`,
         rewardEventId: event.id,
@@ -297,6 +307,9 @@ export default async function AgentHomePage() {
         commentsReadCount={commentsReadCount}
         draftsWrittenCount={draftsWrittenCount}
         recognizedCount={recognizedTodayCount}
+        totalCommentsCount={totalCommentsCount}
+        totalDraftsCount={totalDraftsCount}
+        totalRecognizedCount={totalRecognizedCount}
         groups={groups}
         groupByVideo={groupByVideo}
       />
