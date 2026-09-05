@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation'
 import NotificationBell from '@/components/NotificationBell'
 
 const NAV_ITEMS = [
+  { href: '/dashboard/agent', label: 'Agent Home' },
   { href: '/dashboard/inbox', label: 'My Videos' },
   { href: '/dashboard/brain', label: 'Audience Brain' },
   { href: '/dashboard/rewards', label: 'Rewards' },
@@ -20,11 +21,11 @@ export default function DashboardLayout({
 
   return (
     <div className="mx-auto max-w-5xl p-6">
-      <nav className="mb-6 flex items-center justify-between border-b border-white/10 pb-4">
-        <Link href="/dashboard/inbox" className="block">
+      <nav className="mb-6 flex flex-wrap items-center justify-between gap-y-2 border-b border-white/10 pb-4">
+        <Link href="/dashboard/agent" className="block">
           <h1 className="text-xl font-bold font-display text-text-primary">Creator Dashboard</h1>
         </Link>
-        <div className="flex items-center gap-1">
+        <div className="flex flex-wrap items-center gap-1">
           {NAV_ITEMS.map(item => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
             return (

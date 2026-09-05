@@ -81,54 +81,59 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const supabase = createServiceClient()
-  const threshold = new Date(Date.now() - POLL_INTERVAL_MS).toISOString()
+  try {
+    const supabase = createServiceClient()
+    const threshold = new Date(Date.now() - POLL_INTERVAL_MS).toISOString()
 
-  const { data: tracked, error } = await supabase
-    .from('tracked_videos')
-    .select('id, creator_id, post_id, posts (external_post_id, title)')
-    .eq('polling_enabled', true)
-    .lt('last_checked_at', threshold)
+    const { data: tracked, error } = await supabase
+      .from('tracked_videos')
+      .select('id, creator_id, post_id, posts (external_post_id, title)')
+      .eq('polling_enabled', true)
+      .lt('last_checked_at', threshold)
 
-  if (error) {
-    console.error('Poll comments: fetch tracked_videos error', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
-    return NextResponse.json({ error: 'Failed to fetch tracked videos' }, { status: 500 })
-  }
-
-  const results: Array<{ post_id: string; success: boolean; newComments?: number; error?: string }> = []
-
-  for (const track of tracked || []) {
-    const post = track.posts as unknown as { external_post_id: string; title: string } | null
-    const videoId = post?.external_post_id
-
-    if (!videoId) {
-      results.push({ post_id: track.post_id, success: false, error: 'Missing external_post_id on post' })
-      continue
+    if (error) {
+      console.error('Poll comments: fetch tracked_videos error', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+      return NextResponse.json({ error: 'Failed to fetch tracked videos' }, { status: 500 })
     }
 
-    try {
-      const ingestResult = await ingestNewComments(track.creator_id, track.post_id, videoId)
+    const results: Array<{ post_id: string; success: boolean; newComments?: number; error?: string }> = []
 
-      if (ingestResult.newCommentIds.length > 0) {
-        await categorizePost(track.post_id)
-        await notifyNewComments(supabase, track.creator_id, post?.title || 'your video', ingestResult.newCommentIds)
+    for (const track of tracked || []) {
+      const post = track.posts as unknown as { external_post_id: string; title: string } | null
+      const videoId = post?.external_post_id
+
+      if (!videoId) {
+        results.push({ post_id: track.post_id, success: false, error: 'Missing external_post_id on post' })
+        continue
       }
 
-      await supabase
-        .from('tracked_videos')
-        .update({ last_checked_at: new Date().toISOString() })
-        .eq('id', track.id)
+      try {
+        const ingestResult = await ingestNewComments(track.creator_id, track.post_id, videoId)
 
-      results.push({ post_id: track.post_id, success: true, newComments: ingestResult.commentsIngested })
-    } catch (err) {
-      console.error('Poll comments: error processing post', track.post_id, JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
-      results.push({
-        post_id: track.post_id,
-        success: false,
-        error: err instanceof Error ? err.message : 'Unknown error',
-      })
+        if (ingestResult.newCommentIds.length > 0) {
+          await categorizePost(track.post_id)
+          await notifyNewComments(supabase, track.creator_id, post?.title || 'your video', ingestResult.newCommentIds)
+        }
+
+        await supabase
+          .from('tracked_videos')
+          .update({ last_checked_at: new Date().toISOString() })
+          .eq('id', track.id)
+
+        results.push({ post_id: track.post_id, success: true, newComments: ingestResult.commentsIngested })
+      } catch (err) {
+        console.error('Poll comments: error processing post', track.post_id, JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        results.push({
+          post_id: track.post_id,
+          success: false,
+          error: err instanceof Error ? err.message : 'Unknown error',
+        })
+      }
     }
-  }
 
-  return NextResponse.json({ success: true, checked: results.length, results })
+    return NextResponse.json({ success: true, checked: results.length, results })
+  } catch (error) {
+    console.error("CRON POLL ERROR:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    return NextResponse.json({ error: "Internal error" }, { status: 500 })
+  }
 }
