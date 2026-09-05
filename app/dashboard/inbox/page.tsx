@@ -3,6 +3,7 @@ import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import PageHeader from '@/components/PageHeader'
+import PasteVideoLink from './PasteVideoLink'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,7 +29,7 @@ export default async function InboxPage() {
 
   const { data: posts, error: postsError } = await supabase
     .from('posts')
-    .select('id, title, ingested_at')
+    .select('id, title, ingested_at, thumbnail_url')
     .eq('creator_id', creator.id)
     .order('ingested_at', { ascending: false })
 
@@ -45,6 +46,19 @@ export default async function InboxPage() {
   const postIds = postList.map(p => p.id)
 
   console.log("MY VIDEOS DEBUG - total posts:", postList.length, "postIds:", postIds)
+
+  const { data: trackedRows, error: trackedError } = await supabase
+    .from('tracked_videos')
+    .select('post_id, polling_enabled')
+    .eq('creator_id', creator.id)
+
+  if (trackedError) {
+    console.error('Tracked videos fetch error:', JSON.stringify(trackedError, Object.getOwnPropertyNames(trackedError), 2))
+  }
+
+  const trackedPostIds = new Set(
+    (trackedRows || []).filter(t => t.polling_enabled).map(t => t.post_id)
+  )
 
   let totalCounts: Record<string, number> = {}
   let categorizedCounts: Record<string, number> = {}
@@ -119,27 +133,71 @@ export default async function InboxPage() {
   return (
     <div>
       <PageHeader title="My Videos" />
+      <PasteVideoLink creatorId={creator.id} />
 
       {postList.length === 0 ? (
-        <p className="text-text-muted">No videos yet. Connect a channel or paste a single video link to get started.</p>
+        <div className="card p-6 text-center">
+          <p className="text-sm text-text-muted">No videos yet. Connect a channel to get started.</p>
+          <Link href="/dashboard/connect" className="btn-primary mt-4 inline-flex">
+            Connect a channel
+          </Link>
+        </div>
       ) : (
-        <ul className="space-y-3">
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {postList.map(post => {
             const total = totalCounts[post.id] || 0
             const categorized = categorizedCounts[post.id] || 0
+            const isTracked = trackedPostIds.has(post.id)
 
-             return (
-               <li key={post.id} className="card">
-                 <Link href={`/dashboard/inbox/${post.id}`} className="block">
-                   <h2 className="font-body font-medium text-text-primary">{post.title}</h2>
-                   <p className="mt-1 text-sm text-text-muted">
-                     {total > 0 ? `${categorized}/${total} categorized` : '0 comments'}
-                   </p>
-                 </Link>
-               </li>
-             )
+            return (
+              <Link
+                key={post.id}
+                href={`/dashboard/inbox/${post.id}`}
+                className="card block overflow-hidden transition-all duration-200 hover:bg-surface-hover hover:scale-[1.01]"
+              >
+                <div className="aspect-video w-full overflow-hidden rounded-t-lg bg-surface-hover">
+                  {post.thumbnail_url ? (
+                    <img
+                      src={post.thumbnail_url}
+                      alt={post.title}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-full w-full items-center justify-center">
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth={1.5}
+                        className="h-10 w-10 text-text-muted"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          d="M15.75 10.5l4.72-2.36a.75.75 0 0 1 1.08.67v8.38a.75.75 0 0 1-1.08.67l-4.72-2.36M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-7.5A2.25 2.25 0 0 0 13.5 6.75h-9A2.25 2.25 0 0 0 2.25 9v7.5a2.25 2.25 0 0 0 2.25 2.25Z"
+                        />
+                      </svg>
+                    </div>
+                  )}
+                </div>
+                <div className="p-4">
+                  <h2 className="truncate font-body font-medium text-text-primary">{post.title}</h2>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <p className="text-xs text-text-muted">
+                      {total > 0 ? `${categorized}/${total} categorized` : '0 comments'}
+                    </p>
+                    {isTracked && (
+                      <span className="inline-flex flex-shrink-0 items-center rounded-full border border-cobalt/40 bg-cobalt/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cobalt">
+                        Tracked
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </Link>
+            )
           })}
-        </ul>
+        </div>
       )}
     </div>
   )

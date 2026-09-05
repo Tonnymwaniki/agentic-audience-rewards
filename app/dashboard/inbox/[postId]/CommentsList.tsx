@@ -48,8 +48,11 @@ const CATEGORIES = [
   { key: 'other', label: 'Other' },
 ] as const
 
+const SUMMARY_CATEGORIES = CATEGORIES.filter(c => c.key !== 'all')
+
 export default function CommentsList({ comments, categoryCounts, peopleNoticed, repeatedCommentIds }: CommentsListProps) {
-  const [filter, setFilter] = useState<string>('all')
+  // null = default category-summary-cards view. 'all' or a specific category key = drilled in.
+  const [filter, setFilter] = useState<string | null>(null)
   const [expandedDrafts, setExpandedDrafts] = useState<Set<string>>(new Set())
   const [copyingId, setCopyingId] = useState<string | null>(null)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
@@ -57,7 +60,7 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
   const [draftReplies, setDraftReplies] = useState<Map<string, string>>(new Map())
 
   const filtered =
-    filter === 'all'
+    filter === null || filter === 'all'
       ? comments
       : comments.filter(c => c.category === filter)
 
@@ -120,8 +123,26 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
     }
   }
 
+  if (filter === null) {
+    return (
+      <CategorySummary
+        comments={comments}
+        peopleNoticed={peopleNoticed}
+        onSelectCategory={setFilter}
+        onViewAll={() => setFilter('all')}
+      />
+    )
+  }
+
   return (
     <div>
+      <button
+        onClick={() => setFilter(null)}
+        className="mb-4 inline-flex items-center text-sm text-text-muted hover:text-text-primary"
+      >
+        ← Back to categories
+      </button>
+
       <div className="mb-4 flex flex-wrap gap-2">
         {CATEGORIES.map(cat => (
           <button
@@ -134,6 +155,7 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
             }`}
           >
             {cat.label}
+            {cat.key !== 'all' && categoryCounts[cat.key] ? ` (${categoryCounts[cat.key]})` : ''}
           </button>
         ))}
       </div>
@@ -213,6 +235,76 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
           <p className="text-sm text-text-muted">No comments in this category.</p>
         )}
       </div>
+    </div>
+  )
+}
+
+function CategorySummary({
+  comments,
+  peopleNoticed,
+  onSelectCategory,
+  onViewAll,
+}: {
+  comments: Comment[]
+  peopleNoticed: number
+  onSelectCategory: (key: string) => void
+  onViewAll: () => void
+}) {
+  const summaries = SUMMARY_CATEGORIES.map(cat => {
+    const matches = comments.filter(c => c.category === cat.key)
+
+    let latest: Comment | null = null
+    for (const c of matches) {
+      if (!latest || new Date(c.postedAt).getTime() > new Date(latest.postedAt).getTime()) {
+        latest = c
+      }
+    }
+
+    return { ...cat, count: matches.length, latest }
+  })
+
+  return (
+    <div>
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+        <p className="text-sm text-text-muted">
+          {comments.length} comment{comments.length === 1 ? '' : 's'}
+          {peopleNoticed > 0 && ` · ${peopleNoticed} ${peopleNoticed === 1 ? 'person' : 'people'} noticed`}
+        </p>
+        <button
+          onClick={onViewAll}
+          className="text-sm text-cobalt underline hover:text-cobalt-hover"
+        >
+          View all comments
+        </button>
+      </div>
+
+      {comments.length === 0 ? (
+        <p className="text-sm text-text-muted">No comments yet.</p>
+      ) : (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {summaries.map(cat => (
+            <button
+              key={cat.key}
+              onClick={() => onSelectCategory(cat.key)}
+              disabled={cat.count === 0}
+              className="card text-left transition-all duration-200 hover:bg-surface-hover hover:scale-[1.01] disabled:cursor-default disabled:opacity-50 disabled:hover:scale-100 disabled:hover:bg-transparent"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className={`badge badge-${cat.key}`}>{cat.label}</span>
+                <span className="font-display text-2xl font-semibold text-text-primary">{cat.count}</span>
+              </div>
+              {cat.latest ? (
+                <p className="mt-3 line-clamp-2 text-sm text-text-muted">
+                  <span className="font-body font-medium text-text-primary">{cat.latest.authorName}:</span>{' '}
+                  {cat.latest.text}
+                </p>
+              ) : (
+                <p className="mt-3 text-sm text-text-muted">No comments yet.</p>
+              )}
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
