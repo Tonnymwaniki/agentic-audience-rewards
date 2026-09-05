@@ -1,9 +1,7 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Avatar from '@/components/Avatar'
-
-const PAGE_SIZE = 25
 
 type Comment = {
   id: string
@@ -19,7 +17,6 @@ type Comment = {
 
 type CommentsListProps = {
   comments: Comment[]
-  categoryCounts: Record<string, number>
   peopleNoticed: number
   repeatedCommentIds?: string[]
 }
@@ -40,43 +37,40 @@ function timeAgo(dateString: string): string {
   return date.toLocaleDateString()
 }
 
-const CATEGORIES = [
-  { key: 'all', label: 'All' },
-  { key: 'question', label: 'Question' },
-  { key: 'praise', label: 'Praise' },
-  { key: 'complaint', label: 'Complaint' },
-  { key: 'purchase_intent', label: 'Purchase Intent' },
-  { key: 'spam', label: 'Spam' },
-  { key: 'other', label: 'Other' },
-] as const
+// Muted/darkened tints of each category's existing badge hue (see .badge-* in
+// globals.css) — rendered at low alpha over the app's near-black background so
+// the whole card reads as that color without looking like a bright UI-kit swatch.
+const CATEGORY_STYLES: Record<string, { label: string; bg: string; accent: string }> = {
+  question: { label: 'Question', bg: 'rgba(59, 130, 246, 0.22)', accent: '#93c5fd' },
+  praise: { label: 'Praise', bg: 'rgba(34, 197, 94, 0.22)', accent: '#86efac' },
+  complaint: { label: 'Complaint', bg: 'rgba(239, 68, 68, 0.22)', accent: '#fca5a5' },
+  purchase_intent: { label: 'Purchase Intent', bg: 'rgba(255, 127, 236, 0.22)', accent: '#FF7FEC' },
+  spam: { label: 'Spam', bg: 'rgba(148, 163, 184, 0.22)', accent: '#cbd5e1' },
+  other: { label: 'Other', bg: 'rgba(100, 116, 139, 0.22)', accent: '#94a3b8' },
+}
 
-const SUMMARY_CATEGORIES = CATEGORIES.filter(c => c.key !== 'all')
+const CATEGORY_ORDER = ['question', 'praise', 'complaint', 'purchase_intent', 'spam', 'other']
 
-export default function CommentsList({ comments, categoryCounts, peopleNoticed, repeatedCommentIds }: CommentsListProps) {
-  // null = default category-summary-cards view. 'all' or a specific category key = drilled in.
-  const [filter, setFilter] = useState<string | null>(null)
-  const [page, setPage] = useState(1)
+const SWIPE_THRESHOLD_PX = 50
+
+export default function CommentsList({ comments, peopleNoticed, repeatedCommentIds }: CommentsListProps) {
+  // null = category-summary-cards view (the only entry point now — there is no "all").
+  const [category, setCategory] = useState<string | null>(null)
+  const [commentIndex, setCommentIndex] = useState(0)
   const [expandedDrafts, setExpandedDrafts] = useState<Set<string>>(new Set())
   const [copyingId, setCopyingId] = useState<string | null>(null)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
   const [draftErrors, setDraftErrors] = useState<Set<string>>(new Set())
   const [draftReplies, setDraftReplies] = useState<Map<string, string>>(new Map())
+  const touchStartX = useRef<number | null>(null)
 
-  // Switching categories (including going back to the summary view) always starts
-  // back at page 1 — otherwise landing on "Complaints" could silently show page 3
-  // just because that's where you'd scrolled to on "Purchase Intent".
+  // Picking a new category always starts back at the first comment.
   useEffect(() => {
-    setPage(1)
-  }, [filter])
+    setCommentIndex(0)
+  }, [category])
 
-  const filtered =
-    filter === null || filter === 'all'
-      ? comments
-      : comments.filter(c => c.category === filter)
-
-  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
-  const currentPage = Math.min(page, totalPages)
-  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const filtered = category === null ? [] : comments.filter(c => c.category === category)
+  const current = filtered[commentIndex] ?? null
 
   function getDraftReply(comment: Comment): string | null {
     return draftReplies.get(comment.id) ?? comment.draftReply ?? null
@@ -137,13 +131,36 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
     }
   }
 
-  if (filter === null) {
+  function goToPrevious() {
+    setCommentIndex(i => Math.max(0, i - 1))
+  }
+
+  function goToNext() {
+    setCommentIndex(i => Math.min(filtered.length - 1, i + 1))
+  }
+
+  function handleTouchStart(e: React.TouchEvent) {
+    touchStartX.current = e.touches[0]?.clientX ?? null
+  }
+
+  function handleTouchEnd(e: React.TouchEvent) {
+    if (touchStartX.current === null) return
+    const deltaX = (e.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current
+    touchStartX.current = null
+
+    if (deltaX > SWIPE_THRESHOLD_PX) {
+      goToPrevious()
+    } else if (deltaX < -SWIPE_THRESHOLD_PX) {
+      goToNext()
+    }
+  }
+
+  if (category === null) {
     return (
       <CategorySummary
         comments={comments}
         peopleNoticed={peopleNoticed}
-        onSelectCategory={setFilter}
-        onViewAll={() => setFilter('all')}
+        onSelectCategory={setCategory}
       />
     )
   }
@@ -151,182 +168,113 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
   return (
     <div>
       <button
-        onClick={() => setFilter(null)}
+        onClick={() => setCategory(null)}
         className="mb-4 inline-flex items-center text-sm text-text-muted hover:text-text-primary"
       >
         ← Back to categories
       </button>
 
-      <div className="mb-4 flex flex-wrap gap-2">
-        {CATEGORIES.map(cat => (
-          <button
-            key={cat.key}
-            onClick={() => setFilter(cat.key)}
-            className={`rounded-full px-3 py-1.5 text-sm font-medium transition-colors ${
-              filter === cat.key
-                ? 'bg-cobalt text-white'
-                : 'bg-surface-hover text-text-muted hover:text-text-primary'
-            }`}
-          >
-            {cat.label}
-            {cat.key !== 'all' && categoryCounts[cat.key] ? ` (${categoryCounts[cat.key]})` : ''}
-          </button>
-        ))}
-      </div>
+      {!current ? (
+        <p className="text-sm text-text-muted">No comments in this category.</p>
+      ) : (
+        <div>
+          <div className="mb-3 flex items-center justify-between">
+            <span className={`badge badge-${current.category}`}>
+              {CATEGORY_STYLES[current.category]?.label || current.category.replace('_', ' ')}
+            </span>
+            <p className="text-sm text-text-muted">
+              Comment {commentIndex + 1} of {filtered.length}
+            </p>
+          </div>
 
-      <div className="space-y-4">
-        {paginated.map(comment => (
           <div
-            key={comment.id}
-            className="card hover:bg-surface-hover hover:scale-[1.01] transition-all duration-200"
+            onTouchStart={handleTouchStart}
+            onTouchEnd={handleTouchEnd}
+            className="card p-6 sm:p-8"
           >
             <div className="flex items-start gap-4">
-              <Avatar name={comment.authorName} size={40} />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <p className="font-body font-medium text-sm text-text-primary">{comment.authorName}</p>
-                    {comment.hasReward && (
-                      <span className="text-xs text-pink">Noticed ✦</span>
-                    )}
-                    {repeatedCommentIds && repeatedCommentIds.includes(comment.id) && (
-                      <span className="text-xs text-avax-red">🚩 Repeated</span>
+              <Avatar name={current.authorName} size={56} />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-2">
+                  <p className="font-body text-base font-medium text-text-primary">{current.authorName}</p>
+                  {current.hasReward && (
+                    <span className="text-sm text-pink">Noticed ✦</span>
+                  )}
+                  {repeatedCommentIds && repeatedCommentIds.includes(current.id) && (
+                    <span className="text-sm text-avax-red">🚩 Repeated</span>
+                  )}
+                  <span className="text-xs font-mono text-text-muted">{timeAgo(current.postedAt)}</span>
+                </div>
+
+                <p className="mt-3 text-lg leading-relaxed text-text-primary">{current.text}</p>
+
+                {current.topic && (
+                  <span className="mt-3 inline-block text-xs text-text-muted">{current.topic}</span>
+                )}
+
+                {current.profileSummary && (
+                  <div className="mt-4 rounded-md bg-surface-hover p-3">
+                    <p className="text-xs font-medium text-text-muted">🧠 What we know about this person</p>
+                    <p className="mt-1 text-sm italic text-text-muted">{current.profileSummary}</p>
+                  </div>
+                )}
+
+                {getDraftReply(current) && (
+                  <div className="mt-5">
+                    <button
+                      onClick={() => toggleDraft(current.id)}
+                      className="text-sm font-medium text-cobalt hover:text-cobalt-hover"
+                    >
+                      💬 Suggested reply
+                    </button>
+                    {expandedDrafts.has(current.id) && (
+                      <div className="mt-2 rounded-md bg-surface-hover p-4">
+                        <p className="text-sm text-text-primary">{getDraftReply(current)}</p>
+                        <div className="mt-2 flex gap-3">
+                          <button
+                            onClick={() => copyReply(current.id, getDraftReply(current)!)}
+                            disabled={copyingId === current.id}
+                            className="text-xs text-cobalt underline hover:text-cobalt-hover disabled:opacity-50"
+                          >
+                            {copyingId === current.id ? 'Copied!' : 'Copy Reply'}
+                          </button>
+                          <button
+                            onClick={() => regenerateDraft(current.id)}
+                            disabled={regeneratingId === current.id}
+                            className="text-xs text-text-muted underline hover:text-text-primary disabled:opacity-50"
+                          >
+                            {regeneratingId === current.id ? 'Regenerating...' : 'Regenerate'}
+                          </button>
+                        </div>
+                        {draftErrors.has(current.id) && (
+                          <p className="mt-2 text-xs text-avax-red">Failed to regenerate. Please try again.</p>
+                        )}
+                      </div>
                     )}
                   </div>
-                  <span className={`badge badge-${comment.category}`}>
-                    {comment.category.replace('_', ' ')}
-                  </span>
-                </div>
-                 {comment.profileSummary && (
-                   <p className="mt-0.5 text-xs italic text-text-muted">{comment.profileSummary}</p>
-                 )}
-                 <p className="mt-1 text-sm leading-relaxed text-text-primary">{comment.text}</p>
-                 <span className="mt-1 inline-block text-xs font-mono text-text-muted">{timeAgo(comment.postedAt)}</span>
-                 {comment.topic && (
-                   <span className="mt-1 inline-block text-xs text-text-muted">{comment.topic}</span>
-                 )}
-
-                 {getDraftReply(comment) && (
-                   <div className="mt-3">
-                     <button
-                       onClick={() => toggleDraft(comment.id)}
-                       className="text-xs font-medium text-cobalt hover:text-cobalt-hover"
-                     >
-                       💬 Suggested reply
-                     </button>
-                     {expandedDrafts.has(comment.id) && (
-                       <div className="mt-2 rounded-md bg-surface-hover p-3">
-                         <p className="text-sm text-text-primary">{getDraftReply(comment)}</p>
-                         <div className="mt-2 flex gap-2">
-                           <button
-                             onClick={() => copyReply(comment.id, getDraftReply(comment)!)}
-                             disabled={copyingId === comment.id}
-                             className="text-xs text-cobalt underline hover:text-cobalt-hover disabled:opacity-50"
-                           >
-                             {copyingId === comment.id ? 'Copied!' : 'Copy Reply'}
-                           </button>
-                           <button
-                             onClick={() => regenerateDraft(comment.id)}
-                             disabled={regeneratingId === comment.id}
-                             className="text-xs text-text-muted underline hover:text-text-primary disabled:opacity-50"
-                           >
-                             {regeneratingId === comment.id ? 'Regenerating...' : 'Regenerate'}
-                           </button>
-                         </div>
-                         {draftErrors.has(comment.id) && (
-                           <p className="mt-2 text-xs text-avax-red">Failed to regenerate. Please try again.</p>
-                         )}
-                       </div>
-                     )}
-                   </div>
-                 )}
+                )}
               </div>
             </div>
           </div>
-        ))}
 
-        {filtered.length === 0 && (
-          <p className="text-sm text-text-muted">No comments in this category.</p>
-        )}
-      </div>
-
-      {totalPages > 1 && (
-        <PaginationControls
-          currentPage={currentPage}
-          totalPages={totalPages}
-          onPageChange={setPage}
-        />
+          <div className="mt-4 flex items-center justify-between gap-2">
+            <button
+              onClick={goToPrevious}
+              disabled={commentIndex === 0}
+              className="rounded-md bg-surface-hover px-4 py-2 text-sm font-medium text-text-muted transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              ← Previous
+            </button>
+            <button
+              onClick={goToNext}
+              disabled={commentIndex === filtered.length - 1}
+              className="rounded-md bg-surface-hover px-4 py-2 text-sm font-medium text-text-muted transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              Next →
+            </button>
+          </div>
+        </div>
       )}
-    </div>
-  )
-}
-
-function getPageNumbers(current: number, total: number): Array<number | 'ellipsis'> {
-  if (total <= 7) {
-    return Array.from({ length: total }, (_, i) => i + 1)
-  }
-
-  const keep = new Set<number>([1, 2, total - 1, total, current - 1, current, current + 1])
-  const sorted = Array.from(keep)
-    .filter(p => p >= 1 && p <= total)
-    .sort((a, b) => a - b)
-
-  const result: Array<number | 'ellipsis'> = []
-  let previous = 0
-  for (const p of sorted) {
-    if (previous && p - previous > 1) result.push('ellipsis')
-    result.push(p)
-    previous = p
-  }
-  return result
-}
-
-function PaginationControls({
-  currentPage,
-  totalPages,
-  onPageChange,
-}: {
-  currentPage: number
-  totalPages: number
-  onPageChange: (page: number) => void
-}) {
-  return (
-    <div className="mt-6 flex flex-wrap items-center justify-center gap-1">
-      <button
-        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
-        disabled={currentPage === 1}
-        className="rounded-md px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-      >
-        Previous
-      </button>
-
-      {getPageNumbers(currentPage, totalPages).map((p, i) =>
-        p === 'ellipsis' ? (
-          <span key={`ellipsis-${i}`} className="px-2 text-sm text-text-muted">
-            …
-          </span>
-        ) : (
-          <button
-            key={p}
-            onClick={() => onPageChange(p)}
-            className={`min-w-[2rem] rounded-md px-2 py-1.5 text-sm font-medium transition-colors ${
-              p === currentPage
-                ? 'bg-cobalt text-white'
-                : 'text-text-muted hover:bg-surface-hover hover:text-text-primary'
-            }`}
-          >
-            {p}
-          </button>
-        )
-      )}
-
-      <button
-        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
-        disabled={currentPage === totalPages}
-        className="rounded-md px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-      >
-        Next
-      </button>
     </div>
   )
 }
@@ -335,15 +283,13 @@ function CategorySummary({
   comments,
   peopleNoticed,
   onSelectCategory,
-  onViewAll,
 }: {
   comments: Comment[]
   peopleNoticed: number
   onSelectCategory: (key: string) => void
-  onViewAll: () => void
 }) {
-  const summaries = SUMMARY_CATEGORIES.map(cat => {
-    const matches = comments.filter(c => c.category === cat.key)
+  const summaries = CATEGORY_ORDER.map(key => {
+    const matches = comments.filter(c => c.category === key)
 
     let latest: Comment | null = null
     for (const c of matches) {
@@ -352,23 +298,15 @@ function CategorySummary({
       }
     }
 
-    return { ...cat, count: matches.length, latest }
+    return { key, ...CATEGORY_STYLES[key], count: matches.length, latest }
   })
 
   return (
     <div>
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-        <p className="text-sm text-text-muted">
-          {comments.length} comment{comments.length === 1 ? '' : 's'}
-          {peopleNoticed > 0 && ` · ${peopleNoticed} ${peopleNoticed === 1 ? 'person' : 'people'} noticed`}
-        </p>
-        <button
-          onClick={onViewAll}
-          className="text-sm text-cobalt underline hover:text-cobalt-hover"
-        >
-          View all comments
-        </button>
-      </div>
+      <p className="mb-4 text-sm text-text-muted">
+        {comments.length} comment{comments.length === 1 ? '' : 's'}
+        {peopleNoticed > 0 && ` · ${peopleNoticed} ${peopleNoticed === 1 ? 'person' : 'people'} noticed`}
+      </p>
 
       {comments.length === 0 ? (
         <p className="text-sm text-text-muted">No comments yet.</p>
@@ -379,16 +317,23 @@ function CategorySummary({
               key={cat.key}
               onClick={() => onSelectCategory(cat.key)}
               disabled={cat.count === 0}
-              className="card text-left transition-all duration-200 hover:bg-surface-hover hover:scale-[1.01] disabled:cursor-default disabled:opacity-50 disabled:hover:scale-100 disabled:hover:bg-transparent"
+              style={cat.count > 0 ? { backgroundColor: cat.bg } : undefined}
+              className={`card text-left transition-all duration-200 ${
+                cat.count > 0 ? 'hover:brightness-110 hover:scale-[1.01]' : 'cursor-default opacity-50'
+              }`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className={`badge badge-${cat.key}`}>{cat.label}</span>
-                <span className="font-display text-2xl font-semibold text-text-primary">{cat.count}</span>
+                <span
+                  className="font-body text-sm font-semibold uppercase tracking-wide"
+                  style={{ color: cat.accent }}
+                >
+                  {cat.label}
+                </span>
+                <span className="font-display text-3xl font-semibold text-text-primary">{cat.count}</span>
               </div>
               {cat.latest ? (
-                <p className="mt-3 line-clamp-2 text-sm text-text-muted">
-                  <span className="font-body font-medium text-text-primary">{cat.latest.authorName}:</span>{' '}
-                  {cat.latest.text}
+                <p className="mt-3 line-clamp-2 text-sm text-text-primary">
+                  <span className="font-body font-medium">{cat.latest.authorName}:</span> {cat.latest.text}
                 </p>
               ) : (
                 <p className="mt-3 text-sm text-text-muted">No comments yet.</p>

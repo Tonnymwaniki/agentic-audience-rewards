@@ -183,6 +183,18 @@ export default function AgentFeed({
             <p className="text-xs text-text-muted">people recognized</p>
           </div>
         </div>
+
+        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
+          <Link href="/dashboard/highlights" className="btn-primary inline-flex items-center justify-center">
+            View Highlights
+          </Link>
+          <Link
+            href="/dashboard/research"
+            className="inline-flex items-center justify-center rounded-lg border border-pink/40 bg-pink-dim px-4 py-2 font-medium text-pink transition-colors hover:bg-pink-dim/70"
+          >
+            Ask Research →
+          </Link>
+        </div>
       </section>
 
       {!hasAnyActivity ? (

@@ -51,30 +51,68 @@ export default async function PostInboxPage({
 
   const allPostIds = (posts || []).map(p => p.id)
 
-  const { data: comments, error: commentsError } = await supabase
-    .from('comments')
-    .select(
-      `
-      id,
-      text,
-      posted_at,
-      audience_member_id,
-      audience_members (
-        display_name,
-        profile_summary
-      ),
-      comment_categories (
-        category,
-        topic,
-        draft_reply
-      )
-    `
-    )
-    .eq('post_id', postId)
-    .order('posted_at', { ascending: true })
+  // Batched fetch (same range()-loop pattern used on the Brain and My Videos pages)
+  // instead of a single unbounded query — a popular video's comment count can exceed
+  // Supabase's default per-request row cap, which would otherwise silently truncate.
+  type CommentRow = {
+    id: string
+    text: string
+    posted_at: string
+    audience_member_id: string | null
+    audience_members: unknown
+    comment_categories: unknown
+  }
 
-  if (commentsError) {
-    console.error('Comments fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+  const comments: CommentRow[] = []
+  let commentsFetchError: unknown = null
+
+  {
+    let offset = 0
+    const batchSize = 1000
+    let hasMore = true
+
+    while (hasMore) {
+      const { data: batch, error: commentsError } = await supabase
+        .from('comments')
+        .select(
+          `
+          id,
+          text,
+          posted_at,
+          audience_member_id,
+          audience_members (
+            display_name,
+            profile_summary
+          ),
+          comment_categories (
+            category,
+            topic,
+            draft_reply
+          )
+        `
+        )
+        .eq('post_id', postId)
+        .order('posted_at', { ascending: true })
+        .range(offset, offset + batchSize - 1)
+
+      if (commentsError) {
+        commentsFetchError = commentsError
+        break
+      }
+
+      if (batch && batch.length > 0) {
+        comments.push(...(batch as unknown as CommentRow[]))
+        offset += batchSize
+      }
+
+      if (!batch || batch.length < batchSize) {
+        hasMore = false
+      }
+    }
+  }
+
+  if (commentsFetchError) {
+    console.error('Comments fetch error:', JSON.stringify(commentsFetchError, Object.getOwnPropertyNames(commentsFetchError as object), 2))
     return (
       <div className="p-6">
         <p className="text-red-500">Failed to load comments</p>
@@ -82,7 +120,7 @@ export default async function PostInboxPage({
     )
   }
 
-  const formattedComments = (comments || []).map(comment => ({
+  const formattedComments = comments.map(comment => ({
     id: comment.id,
     text: comment.text,
     postedAt: comment.posted_at,
@@ -93,11 +131,6 @@ export default async function PostInboxPage({
     draftReply: (comment.comment_categories as unknown as { draft_reply?: string | null } | null)?.draft_reply || null,
     audienceMemberId: comment.audience_member_id,
   }))
-
-  const categoryCounts: Record<string, number> = {}
-  for (const comment of formattedComments) {
-    categoryCounts[comment.category] = (categoryCounts[comment.category] || 0) + 1
-  }
 
   const memberIds = formattedComments.map(c => c.audienceMemberId).filter(Boolean) as string[]
   let peopleNoticed = 0
@@ -121,7 +154,7 @@ export default async function PostInboxPage({
 
   const commentsWithRewardFlag = formattedComments.map(c => ({
     ...c,
-    hasReward: rewardedMemberIds.has(c.audienceMemberId),
+    hasReward: rewardedMemberIds.has(c.audienceMemberId || ''),
   }))
 
   const repeatedCommentIdsSet = new Set<string>()
@@ -171,7 +204,6 @@ export default async function PostInboxPage({
 
       <CommentsList
         comments={commentsWithRewardFlag}
-        categoryCounts={categoryCounts}
         peopleNoticed={peopleNoticed}
         repeatedCommentIds={repeatedCommentIds}
       />

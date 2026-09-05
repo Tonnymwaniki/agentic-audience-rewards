@@ -51,6 +51,57 @@ export async function generateDraftReply(commentText: string, category: string):
   }
 }
 
+// Cheap pre-check before spending a full draft-reply call on a question/complaint:
+// skips drafting for casual/off-topic comments (upload schedule, chit-chat) so only
+// genuine business inquiries get a reply drafted. Fails closed (treats errors as
+// "not business") since a missed draft is a much smaller cost than a wrong one, and
+// the caller's own try/catch still protects the rest of the categorization run.
+async function isBusinessRelevant(
+  commentText: string,
+  postTitle: string,
+  postDescription: string
+): Promise<boolean> {
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+  try {
+    const prompt = `This comment is a question on a video titled '${postTitle}' with description '${postDescription}'. Question: '${commentText}'. Is this a genuine business/customer inquiry (about products, pricing, delivery, availability, wholesale, collaboration, or the creator's actual work/services) or a casual/off-topic question (upload schedule, personal chit-chat, unrelated small talk)? Respond with ONLY 'business' or 'casual'.`
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 8,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Anthropic API error: ${response.status}`)
+    }
+
+    const data = await response.json()
+    const content = data.content?.[0]?.text?.trim().toLowerCase()
+
+    return content === 'business'
+  } catch (err) {
+    if (err instanceof Error && err.name === 'AbortError') {
+      console.error('Relevance check error: request timed out after 15s')
+    } else {
+      console.error('Relevance check error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    }
+    return false
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 export async function categorizeComments(
   comments: { id: string; text: string }[],
   onProgress?: ProgressCallback
@@ -251,13 +302,40 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
   const uncategorizedTextMap = new Map(uncategorized.map(c => [c.id, c.text]))
   const draftableCategories = new Set(['purchase_intent', 'question', 'complaint'])
+  // purchase_intent is inherently business-relevant by definition and skips the
+  // check; question and complaint get the relevance check first since both can be
+  // casual (a joking complaint, an off-topic question) rather than genuine business.
+  const relevanceCheckCategories = new Set(['question', 'complaint'])
   const draftable = categorized.filter(c => draftableCategories.has(c.category))
+
+  let postTitle = ''
+  let postDescription = ''
+
+  if (draftable.some(c => relevanceCheckCategories.has(c.category))) {
+    const { data: post, error: postFetchError } = await supabase
+      .from('posts')
+      .select('title, content')
+      .eq('id', post_id)
+      .single()
+
+    if (postFetchError) {
+      console.error('Fetch post metadata error:', JSON.stringify(postFetchError, Object.getOwnPropertyNames(postFetchError), 2))
+    } else if (post) {
+      postTitle = post.title || ''
+      postDescription = post.content || ''
+    }
+  }
 
   for (const comment of draftable) {
     const text = uncategorizedTextMap.get(comment.id)
     if (!text) continue
 
     try {
+      if (relevanceCheckCategories.has(comment.category)) {
+        const isRelevant = await isBusinessRelevant(text, postTitle, postDescription)
+        if (!isRelevant) continue
+      }
+
       const draftReply = await generateDraftReply(text, comment.category)
       await supabase
         .from('comment_categories')

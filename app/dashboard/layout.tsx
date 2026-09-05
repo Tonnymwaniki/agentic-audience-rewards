@@ -19,6 +19,13 @@ export default function DashboardLayout({
 }) {
   const pathname = usePathname()
 
+  // Research is a fully immersive, full-height chat experience — it renders its own
+  // header and shell, so it deliberately skips the standard dashboard nav/chrome
+  // rather than being squeezed into the shared max-w-5xl padded container below.
+  if (pathname?.startsWith('/dashboard/research')) {
+    return <>{children}</>
+  }
+
   return (
     <div className="mx-auto max-w-5xl p-6">
       <nav className="mb-6 flex flex-wrap items-center justify-between gap-y-2 border-b border-white/10 pb-4">
