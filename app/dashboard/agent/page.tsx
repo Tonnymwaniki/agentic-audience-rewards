@@ -218,21 +218,38 @@ export default async function AgentHomePage() {
     // Fetched all-time (no gte filter) so we can report a real total for the empty
     // state, then filtered client-side for the 7-day feed and 24h header count —
     // same full-fetch-then-filter approach already used for comments above.
-    const { data: rewardEvents, error: rewardError, count: rewardCount } = await supabase
-      .from('reward_events')
-      .select('id, post_id, reason, status, claim_token, tx_hash, created_at, audience_members (display_name)', { count: 'exact' })
-      .in('audience_member_id', memberIds)
-      .order('created_at', { ascending: false })
+    console.log("AGENT HOME 24H WINDOW:", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), "to", new Date().toISOString())
 
-    if (rewardError) {
-      console.error('Agent home reward events fetch error:', JSON.stringify(rewardError, Object.getOwnPropertyNames(rewardError), 2))
-    } else {
-      const events = rewardEvents || []
-      totalRecognizedCount = rewardCount ?? events.length
-      recognizedTodayCount = events.filter(e => new Date(e.created_at) >= oneDayAgo).length
-      const recentEvents = events.filter(e => new Date(e.created_at) >= sevenDaysAgo)
+    type RewardEventRow = {
+      id: string
+      post_id: string | null
+      reason: string
+      status: string
+      claim_token: string
+      tx_hash: string | null
+      created_at: string
+      audience_members: { display_name: string } | null
+    }
 
-      rewardEventItems = recentEvents.map(event => ({
+    // memberIds can be large (600+ audience members for an active creator) — a single
+    // .in() call blows past Supabase's URL length limit and fails with "Bad Request",
+    // so this batches the same way fetchInBatches already does elsewhere in this file.
+    const events = await fetchInBatches<RewardEventRow>(supabase, {
+      table: 'reward_events',
+      select: 'id, post_id, reason, status, claim_token, tx_hash, created_at, audience_members (display_name)',
+      inColumn: 'audience_member_id',
+      inValues: memberIds,
+    })
+
+    totalRecognizedCount = events.length
+    const rewardEventsInWindow = events.filter(e => new Date(e.created_at) >= oneDayAgo)
+    recognizedTodayCount = rewardEventsInWindow.length
+    console.log("AGENT HOME REWARD EVENTS IN WINDOW:", JSON.stringify(rewardEventsInWindow, null, 2))
+    const recentEvents = events.filter(e => new Date(e.created_at) >= sevenDaysAgo)
+
+    rewardEventItems = recentEvents
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .map(event => ({
         type: 'reward',
         key: `reward-${event.id}`,
         rewardEventId: event.id,
@@ -245,7 +262,6 @@ export default async function AgentHomePage() {
         txHash: event.tx_hash,
         timestamp: event.created_at,
       }))
-    }
   }
 
   // --- Unread notifications ---
