@@ -10,6 +10,7 @@ export default function ConnectPage() {
   const [savedChannel, setSavedChannel] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [creatorId, setCreatorId] = useState<string | null>(null)
+  const [autoAnalyze, setAutoAnalyze] = useState(false)
   const router = useRouter()
 
   const {
@@ -71,12 +72,20 @@ export default function ConnectPage() {
       console.error('Save channel error:', err)
     }
 
-    router.push(`/dashboard/connect/pick?channel=${encodeURIComponent(trimmed)}`)
+    navigateToPick(trimmed)
+  }
+
+  function navigateToPick(channelUrl: string) {
+    const query = new URLSearchParams({ channel: channelUrl })
+    if (autoAnalyze) {
+      query.set('autoAnalyze', 'true')
+    }
+    router.push(`/dashboard/connect/pick?${query.toString()}`)
   }
 
   function handleUseSaved() {
     if (savedChannel) {
-      router.push(`/dashboard/connect/pick?channel=${encodeURIComponent(savedChannel)}`)
+      navigateToPick(savedChannel)
     }
   }
 
@@ -118,6 +127,19 @@ export default function ConnectPage() {
               placeholder="https://www.youtube.com/@yourchannel"
               className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
             />
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              id="auto-analyze"
+              type="checkbox"
+              checked={autoAnalyze}
+              onChange={e => setAutoAnalyze(e.target.checked)}
+              className="h-4 w-4 rounded border-white/10 bg-surface text-cobalt focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
+            />
+            <label htmlFor="auto-analyze" className="text-sm text-text-muted">
+              Automatically analyze my 5 most recent videos
+            </label>
           </div>
 
           <button
