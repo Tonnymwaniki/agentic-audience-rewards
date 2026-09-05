@@ -49,7 +49,7 @@ export async function POST(request: NextRequest) {
 
     const { data: posts, error: postsError } = await supabase
       .from('posts')
-      .select('id')
+      .select('id, title')
       .eq('creator_id', creator_id)
 
     if (postsError) {
@@ -57,9 +57,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to fetch posts' }, { status: 500 })
     }
 
-    const postIds = (posts || []).map(p => p.id)
+    const postList = posts || []
+    const postIds = postList.map(p => p.id)
+    const postMap = new Map(postList.map(p => [p.id, p.title]))
 
-    const comments: Array<{ id: string; text: string; audience_member_id: string | null }> = []
+    const comments: Array<{ id: string; text: string; post_id: string; audience_member_id: string | null }> = []
 
     if (postIds.length > 0) {
       let offset = 0
@@ -69,7 +71,7 @@ export async function POST(request: NextRequest) {
       while (hasMore) {
         const { data: batch, error: commentsError } = await supabase
           .from('comments')
-          .select('id, text, audience_member_id')
+          .select('id, text, post_id, audience_member_id')
           .in('post_id', postIds)
           .range(offset, offset + batchSize - 1)
 
@@ -137,19 +139,21 @@ export async function POST(request: NextRequest) {
     // --- Repeated/trending comment groups — same normalize-and-group approach as
     // the Repeated Comments page, but correctly scoped to this creator's own
     // comments (the original page has no creator_id filter at all) ---
-    const normalizedGroups = new Map<string, Array<{ text: string; audienceMemberId: string | null }>>()
+    const normalizedGroups = new Map<string, Array<{ text: string; postId: string; audienceMemberId: string | null }>>()
     for (const comment of comments) {
       const key = normalizeText(comment.text)
       const existing = normalizedGroups.get(key) || []
-      existing.push({ text: comment.text, audienceMemberId: comment.audience_member_id })
+      existing.push({ text: comment.text, postId: comment.post_id, audienceMemberId: comment.audience_member_id })
       normalizedGroups.set(key, existing)
     }
 
-    const repeatedGroups: Array<{ text: string; count: number; uniquePeople: number }> = []
+    const repeatedGroups: Array<{ text: string; count: number; uniquePeople: number; videoTitles: string[] }> = []
     for (const entries of normalizedGroups.values()) {
       const uniqueMembers = new Set(entries.map(e => e.audienceMemberId).filter(Boolean))
       if (uniqueMembers.size < 2) continue
-      repeatedGroups.push({ text: entries[0].text, count: entries.length, uniquePeople: uniqueMembers.size })
+
+      const videoTitles = Array.from(new Set(entries.map(e => postMap.get(e.postId) || 'Untitled video')))
+      repeatedGroups.push({ text: entries[0].text, count: entries.length, uniquePeople: uniqueMembers.size, videoTitles })
     }
     repeatedGroups.sort((a, b) => b.count - a.count)
     const topRepeated = repeatedGroups.slice(0, 10)
@@ -170,7 +174,7 @@ export async function POST(request: NextRequest) {
     const topTopicsStr = topTopics.map(([topic, count]) => `${topic}: ${count}`).join(', ') || 'none yet'
     const sampleStr = sample.map(c => `"${c.text}"`).join('\n') || 'none yet'
     const repeatedStr = topRepeated.length > 0
-      ? topRepeated.map(g => `"${g.text}" (said by ${g.uniquePeople} different people, ${g.count} times total)`).join('\n')
+      ? topRepeated.map(g => `"${g.text}" (said by ${g.uniquePeople} different people, ${g.count} times total, on: ${g.videoTitles.join(', ')})`).join('\n')
       : 'none found'
     const profilesStr = (profiledMembers || []).length > 0
       ? (profiledMembers || []).map(m => `${m.display_name}: ${m.profile_summary}`).join('\n')
