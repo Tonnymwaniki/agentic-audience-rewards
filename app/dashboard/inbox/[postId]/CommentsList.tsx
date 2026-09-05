@@ -1,7 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import Avatar from '@/components/Avatar'
+
+const PAGE_SIZE = 25
 
 type Comment = {
   id: string
@@ -53,16 +55,28 @@ const SUMMARY_CATEGORIES = CATEGORIES.filter(c => c.key !== 'all')
 export default function CommentsList({ comments, categoryCounts, peopleNoticed, repeatedCommentIds }: CommentsListProps) {
   // null = default category-summary-cards view. 'all' or a specific category key = drilled in.
   const [filter, setFilter] = useState<string | null>(null)
+  const [page, setPage] = useState(1)
   const [expandedDrafts, setExpandedDrafts] = useState<Set<string>>(new Set())
   const [copyingId, setCopyingId] = useState<string | null>(null)
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
   const [draftErrors, setDraftErrors] = useState<Set<string>>(new Set())
   const [draftReplies, setDraftReplies] = useState<Map<string, string>>(new Map())
 
+  // Switching categories (including going back to the summary view) always starts
+  // back at page 1 — otherwise landing on "Complaints" could silently show page 3
+  // just because that's where you'd scrolled to on "Purchase Intent".
+  useEffect(() => {
+    setPage(1)
+  }, [filter])
+
   const filtered =
     filter === null || filter === 'all'
       ? comments
       : comments.filter(c => c.category === filter)
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const paginated = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   function getDraftReply(comment: Comment): string | null {
     return draftReplies.get(comment.id) ?? comment.draftReply ?? null
@@ -161,7 +175,7 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
       </div>
 
       <div className="space-y-4">
-        {filtered.map(comment => (
+        {paginated.map(comment => (
           <div
             key={comment.id}
             className="card hover:bg-surface-hover hover:scale-[1.01] transition-all duration-200"
@@ -235,6 +249,84 @@ export default function CommentsList({ comments, categoryCounts, peopleNoticed, 
           <p className="text-sm text-text-muted">No comments in this category.</p>
         )}
       </div>
+
+      {totalPages > 1 && (
+        <PaginationControls
+          currentPage={currentPage}
+          totalPages={totalPages}
+          onPageChange={setPage}
+        />
+      )}
+    </div>
+  )
+}
+
+function getPageNumbers(current: number, total: number): Array<number | 'ellipsis'> {
+  if (total <= 7) {
+    return Array.from({ length: total }, (_, i) => i + 1)
+  }
+
+  const keep = new Set<number>([1, 2, total - 1, total, current - 1, current, current + 1])
+  const sorted = Array.from(keep)
+    .filter(p => p >= 1 && p <= total)
+    .sort((a, b) => a - b)
+
+  const result: Array<number | 'ellipsis'> = []
+  let previous = 0
+  for (const p of sorted) {
+    if (previous && p - previous > 1) result.push('ellipsis')
+    result.push(p)
+    previous = p
+  }
+  return result
+}
+
+function PaginationControls({
+  currentPage,
+  totalPages,
+  onPageChange,
+}: {
+  currentPage: number
+  totalPages: number
+  onPageChange: (page: number) => void
+}) {
+  return (
+    <div className="mt-6 flex flex-wrap items-center justify-center gap-1">
+      <button
+        onClick={() => onPageChange(Math.max(1, currentPage - 1))}
+        disabled={currentPage === 1}
+        className="rounded-md px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+      >
+        Previous
+      </button>
+
+      {getPageNumbers(currentPage, totalPages).map((p, i) =>
+        p === 'ellipsis' ? (
+          <span key={`ellipsis-${i}`} className="px-2 text-sm text-text-muted">
+            …
+          </span>
+        ) : (
+          <button
+            key={p}
+            onClick={() => onPageChange(p)}
+            className={`min-w-[2rem] rounded-md px-2 py-1.5 text-sm font-medium transition-colors ${
+              p === currentPage
+                ? 'bg-cobalt text-white'
+                : 'text-text-muted hover:bg-surface-hover hover:text-text-primary'
+            }`}
+          >
+            {p}
+          </button>
+        )
+      )}
+
+      <button
+        onClick={() => onPageChange(Math.min(totalPages, currentPage + 1))}
+        disabled={currentPage === totalPages}
+        className="rounded-md px-3 py-1.5 text-sm font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+      >
+        Next
+      </button>
     </div>
   )
 }
