@@ -38,6 +38,18 @@ type StatsCard = {
   stats: Array<{ label: string; value: string | number }>
 }
 
+type IdeaCard = {
+  number: number
+  title: string
+  description: string
+  signal: string
+}
+
+type AnomalyCard = {
+  hasAnomaly: boolean
+  findings: Array<{ description: string; severity: 'high' | 'medium' }>
+}
+
 type RichCommentRow = {
   id: string
   text: string
@@ -620,7 +632,7 @@ async function toolSuggestContentIdeas(ctx: ToolContext) {
 
   return {
     instruction:
-      'Synthesize 3-5 concrete content ideas from this data. Ground each idea in a specific repeated comment, question, or topic below, and say which signal it came from.',
+      'Synthesize 3-5 concrete content ideas from this data, grounding each in a specific repeated comment, question, or topic below. Then call present_content_ideas with those ideas so they render as cards.',
     trending_comments: trending.slice(0, 10),
     audience_questions: questions.slice(0, 15).map(c => ({
       text: c.text,
@@ -826,6 +838,76 @@ function buildStatsCard(toolName: string, output: Record<string, unknown>): Stat
   return null
 }
 
+// detect_anomalies already returns structured findings, so its card is built
+// deterministically from the tool's own output — no model involvement needed.
+function buildAnomalyCard(output: Record<string, unknown>): AnomalyCard | null {
+  const anomalies = output.anomalies
+  if (!Array.isArray(anomalies)) return null
+
+  const findings: AnomalyCard['findings'] = []
+
+  for (const raw of anomalies) {
+    const a = raw as {
+      name?: unknown
+      direction?: unknown
+      recent_per_day?: unknown
+      baseline_per_day?: unknown
+      ratio?: unknown
+    }
+
+    if (typeof a.name !== 'string') continue
+
+    const label = a.name.replace(/_/g, ' ')
+    const recent = typeof a.recent_per_day === 'number' ? a.recent_per_day : 0
+    const baseline = typeof a.baseline_per_day === 'number' ? a.baseline_per_day : 0
+    const ratio = typeof a.ratio === 'number' ? a.ratio : null
+
+    let description: string
+    let severity: 'high' | 'medium'
+
+    if (ratio === null) {
+      // No prior baseline — this signal is new rather than N times bigger.
+      description = `${label} is new — ${recent}/day over the last 7 days, with nothing comparable in the prior 30`
+      severity = 'high'
+    } else if (a.direction === 'drop') {
+      description = `${label} dropped to ${ratio}x normal — ${recent}/day now vs ${baseline}/day before`
+      severity = ratio <= 0.34 ? 'high' : 'medium'
+    } else {
+      description = `${label} spiked ${ratio}x — ${recent}/day now vs ${baseline}/day before`
+      severity = ratio >= 3 ? 'high' : 'medium'
+    }
+
+    findings.push({ description, severity })
+  }
+
+  return { hasAnomaly: findings.length > 0, findings }
+}
+
+// present_content_ideas is a display tool: the model passes its synthesized ideas
+// in as tool INPUT, and we lift them straight onto the response as cards. This
+// keeps suggest_content_ideas returning raw signal only (no idea generation inside
+// a tool function) while still producing structured, renderable output.
+function buildIdeaCards(input: Record<string, unknown>): IdeaCard[] {
+  const ideas = input.ideas
+  if (!Array.isArray(ideas)) return []
+
+  const cards: IdeaCard[] = []
+
+  for (const raw of ideas) {
+    const idea = raw as { title?: unknown; description?: unknown; signal?: unknown }
+    if (typeof idea.title !== 'string' || typeof idea.description !== 'string') continue
+
+    cards.push({
+      number: cards.length + 1,
+      title: idea.title,
+      description: idea.description,
+      signal: typeof idea.signal === 'string' ? idea.signal : 'audience signal',
+    })
+  }
+
+  return cards.slice(0, 5)
+}
+
 const TOOLS = [
   {
     name: 'search_comments',
@@ -953,6 +1035,29 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'present_content_ideas',
+    description: "Display your synthesized content ideas as visual cards. Call this AFTER suggest_content_ideas, passing the 3-5 ideas you came up with. After calling it, write only a brief conversational intro — do NOT restate the ideas in your text, the cards already show them.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        ideas: {
+          type: 'array',
+          description: '3-5 content ideas synthesized from the audience signal',
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', description: 'Short, punchy title for the video idea' },
+              description: { type: 'string', description: '1-2 sentences on what it would cover and why the audience wants it' },
+              signal: { type: 'string', description: 'The audience signal behind it, e.g. "repeated requests" or "purchase intent"' },
+            },
+            required: ['title', 'description', 'signal'],
+          },
+        },
+      },
+      required: ['ideas'],
+    },
+  },
+  {
     name: 'get_weekly_digest',
     description: "This week's numbers as structured fields: comments this week, category breakdown, top 3 topics, most active videos, pending business inquiries, and people recognized this week. Use this when the user asks for a weekly summary, recap, digest, or something they can share.",
     input_schema: { type: 'object', properties: {} },
@@ -986,6 +1091,15 @@ async function executeTool(ctx: ToolContext, name: string, input: Record<string,
         return await toolGetChannelOverview(ctx)
       case 'suggest_content_ideas':
         return await toolSuggestContentIdeas(ctx)
+      case 'present_content_ideas': {
+        // Pure display tool — touches no data, just acknowledges so the model can
+        // write its intro. The ideas themselves are captured from block.input.
+        const count = Array.isArray(input.ideas) ? input.ideas.length : 0
+        return {
+          displayed: count,
+          note: 'Idea cards rendered for the user. Write only a short intro line — do not repeat the ideas.',
+        }
+      }
       case 'detect_anomalies':
         return await toolDetectAnomalies(ctx)
       case 'get_weekly_digest':
@@ -1129,6 +1243,10 @@ export async function POST(request: NextRequest) {
     // the card should still reach the client either way.
     const videoCards: VideoCard[] = []
     const statsCards: StatsCard[] = []
+    const ideaCards: IdeaCard[] = []
+    // Singular, unlike the arrays above: repeat calls in one turn would return the
+    // same current anomaly state, so the last one simply wins.
+    let anomalyCard: AnomalyCard | null = null
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await callClaude(systemPrompt, messages, TOOLS)
@@ -1158,6 +1276,15 @@ export async function POST(request: NextRequest) {
             if (card) statsCards.push(card)
           }
 
+          if (block.name === 'detect_anomalies' && usableOutput) {
+            anomalyCard = buildAnomalyCard(output as Record<string, unknown>)
+          }
+
+          // Captured from the model's tool INPUT, not the tool's output.
+          if (block.name === 'present_content_ideas') {
+            ideaCards.push(...buildIdeaCards(block.input || {}))
+          }
+
           return {
             type: 'tool_result',
             tool_use_id: block.id,
@@ -1185,6 +1312,8 @@ export async function POST(request: NextRequest) {
       reply: finalText,
       ...(videoCards.length > 0 ? { videoCards } : {}),
       ...(statsCards.length > 0 ? { statsCards } : {}),
+      ...(ideaCards.length > 0 ? { ideaCards } : {}),
+      ...(anomalyCard ? { anomalyCard } : {}),
     })
   } catch (err) {
     console.error('Research chat error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))

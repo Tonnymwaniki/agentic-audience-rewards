@@ -18,11 +18,75 @@ type StatsCard = {
   stats: Array<{ label: string; value: string | number }>
 }
 
+type IdeaCard = {
+  number: number
+  title: string
+  description: string
+  signal: string
+}
+
+type AnomalyCard = {
+  hasAnomaly: boolean
+  findings: Array<{ description: string; severity: 'high' | 'medium' }>
+}
+
 type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
   videoCards?: VideoCard[]
   statsCards?: StatsCard[]
+  ideaCards?: IdeaCard[]
+  anomalyCard?: AnomalyCard
+}
+
+function IdeaCardDisplay({ card }: { card: IdeaCard }) {
+  return (
+    <div className="card mt-3">
+      <div className="flex items-start gap-3">
+        <span className="font-display text-lg font-semibold text-cobalt">{card.number}</span>
+        <div className="min-w-0 flex-1">
+          <p className="font-body text-sm font-semibold text-text-primary">{card.title}</p>
+          <p className="mt-1 text-sm leading-relaxed text-text-primary">{card.description}</p>
+          <p className="mt-2 font-mono text-[10px] uppercase tracking-wide text-text-muted">{card.signal}</p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function AnomalyCardDisplay({ card }: { card: AnomalyCard }) {
+  if (!card.hasAnomaly) {
+    return (
+      <div className="mb-3 rounded-lg border border-cobalt/40 bg-cobalt/10 p-4">
+        <p className="text-sm text-text-primary">
+          Nothing unusual — activity is within normal range.
+        </p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="mb-3 space-y-2">
+      {card.findings.map((finding, i) => (
+        <div
+          key={i}
+          className={`rounded-lg border-l-2 bg-surface-hover p-3 ${
+            finding.severity === 'high' ? 'border-avax-red' : 'border-avax-red/50'
+          }`}
+        >
+          <div className="flex items-start gap-2">
+            <span className="text-sm text-avax-red">▲</span>
+            <div className="min-w-0 flex-1">
+              <p className="text-sm leading-relaxed text-text-primary">{finding.description}</p>
+              <p className="mt-1 font-mono text-[10px] uppercase tracking-wide text-text-muted">
+                {finding.severity} severity
+              </p>
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  )
 }
 
 // Stat grid styled after the landing page's "Live Proof" block — font-display
@@ -256,7 +320,14 @@ export default function ResearchChat({
 
       setMessages(prev => [
         ...prev,
-        { role: 'assistant', content: data.reply, videoCards: data.videoCards, statsCards: data.statsCards },
+        {
+          role: 'assistant',
+          content: data.reply,
+          videoCards: data.videoCards,
+          statsCards: data.statsCards,
+          ideaCards: data.ideaCards,
+          anomalyCard: data.anomalyCard,
+        },
       ])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
@@ -317,7 +388,11 @@ export default function ResearchChat({
                 {message.statsCards?.map(card => (
                   <StatsCardDisplay key={card.title} card={card} />
                 ))}
+                {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
                 <MarkdownMessage content={message.content} />
+                {message.ideaCards?.map(card => (
+                  <IdeaCardDisplay key={card.number} card={card} />
+                ))}
                 {message.videoCards?.map(card => (
                   <VideoCardDisplay key={card.post_id} card={card} />
                 ))}
