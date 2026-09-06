@@ -344,14 +344,22 @@ async function toolLookupPerson(ctx: ToolContext, input: { display_name?: unknow
   }
 }
 
-async function toolGetTrending(ctx: ToolContext, input: { min_repeat_count?: unknown }) {
-  const minCount = typeof input.min_repeat_count === 'number' && input.min_repeat_count > 1
-    ? Math.floor(input.min_repeat_count)
-    : 2
+type TrendingGroup = {
+  text: string
+  count: number
+  unique_people: number
+  video_titles: string[]
+}
 
-  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
-
+// Shared repeated-comment grouping (same normalize-and-group approach as the
+// Repeated Comments page), used by get_trending and suggest_content_ideas.
+function computeTrendingGroups(
+  comments: RichCommentRow[],
+  postMap: Map<string, string>,
+  minCount: number
+): TrendingGroup[] {
   const normalizedGroups = new Map<string, Array<{ text: string; postId: string; audienceMemberId: string | null }>>()
+
   for (const c of comments) {
     const key = normalizeText(c.text)
     const existing = normalizedGroups.get(key) || []
@@ -359,7 +367,7 @@ async function toolGetTrending(ctx: ToolContext, input: { min_repeat_count?: unk
     normalizedGroups.set(key, existing)
   }
 
-  const groups: Array<{ text: string; count: number; unique_people: number; video_titles: string[] }> = []
+  const groups: TrendingGroup[] = []
   for (const entries of normalizedGroups.values()) {
     const uniqueMembers = new Set(entries.map(e => e.audienceMemberId).filter(Boolean))
     if (uniqueMembers.size < 2 || entries.length < minCount) continue
@@ -368,44 +376,74 @@ async function toolGetTrending(ctx: ToolContext, input: { min_repeat_count?: unk
       text: entries[0].text,
       count: entries.length,
       unique_people: uniqueMembers.size,
-      video_titles: Array.from(new Set(entries.map(e => ctx.postMap.get(e.postId) || 'Untitled video'))),
+      video_titles: Array.from(new Set(entries.map(e => postMap.get(e.postId) || 'Untitled video'))),
     })
   }
 
   groups.sort((a, b) => b.count - a.count)
-
-  return { count: groups.length, groups: groups.slice(0, 15) }
+  return groups
 }
 
-async function toolGetRewardHistory(ctx: ToolContext) {
+type RewardEventRow = {
+  id: string
+  post_id: string | null
+  audience_member_id: string
+  reason: string
+  status: string
+  created_at: string
+  audience_members: unknown
+}
+
+// All reward events belonging to this creator's own audience members. Scoped by
+// resolving the creator's member ids first, then querying reward_events only
+// within that set — never by a caller-supplied filter.
+async function fetchCreatorRewardEvents(ctx: ToolContext): Promise<RewardEventRow[]> {
   const { data: members, error: membersError } = await ctx.supabase
     .from('audience_members')
     .select('id')
     .eq('creator_id', ctx.creatorId)
 
   if (membersError) {
-    console.error('Research tool reward_history members error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
-    return { error: 'Failed to fetch reward history' }
+    console.error('Research tool reward events members error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
+    return []
   }
 
   const memberIds = (members || []).map(m => m.id)
-  if (memberIds.length === 0) return { count: 0, events: [] }
+  if (memberIds.length === 0) return []
 
-  type RewardEventRow = {
-    id: string
-    post_id: string | null
-    reason: string
-    status: string
-    created_at: string
-    audience_members: unknown
-  }
-
-  const events = await fetchInBatches<RewardEventRow>(ctx.supabase, {
+  return fetchInBatches<RewardEventRow>(ctx.supabase, {
     table: 'reward_events',
-    select: 'id, post_id, reason, status, created_at, audience_members ( display_name )',
+    select: 'id, post_id, audience_member_id, reason, status, created_at, audience_members ( display_name )',
     inColumn: 'audience_member_id',
     inValues: memberIds,
   })
+}
+
+function daysAgo(days: number): Date {
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+}
+
+function topEntries(counts: Record<string, number>, limit: number): Array<{ name: string; count: number }> {
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([name, count]) => ({ name, count }))
+}
+
+async function toolGetTrending(ctx: ToolContext, input: { min_repeat_count?: unknown }) {
+  const minCount = typeof input.min_repeat_count === 'number' && input.min_repeat_count > 1
+    ? Math.floor(input.min_repeat_count)
+    : 2
+
+  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
+  const groups = computeTrendingGroups(comments, ctx.postMap, minCount)
+
+  return { count: groups.length, groups: groups.slice(0, 15) }
+}
+
+async function toolGetRewardHistory(ctx: ToolContext) {
+  const events = await fetchCreatorRewardEvents(ctx)
+  if (events.length === 0) return { count: 0, events: [] }
 
   events.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
 
@@ -514,6 +552,231 @@ async function toolGetBusinessInquiries(ctx: ToolContext, input: { category?: un
       video: ctx.postMap.get(c.post_id) || 'Untitled video',
       posted_at: c.posted_at,
     })),
+  }
+}
+
+async function toolGetChannelOverview(ctx: ToolContext) {
+  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
+  const events = await fetchCreatorRewardEvents(ctx)
+
+  const categoryCounts: Record<string, number> = {}
+  const topicCounts: Record<string, number> = {}
+  let categorized = 0
+  let pendingInquiries = 0
+
+  for (const c of comments) {
+    const cat = getCatInfo(c)
+    if (!cat) continue
+
+    categorized++
+    categoryCounts[cat.category] = (categoryCounts[cat.category] || 0) + 1
+    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+    if (cat.draft_reply && !cat.draft_reply_approved_at) pendingInquiries++
+  }
+
+  const categoryPercentages: Record<string, number> = {}
+  for (const [category, count] of Object.entries(categoryCounts)) {
+    categoryPercentages[category] = categorized > 0 ? Math.round((count / categorized) * 100) : 0
+  }
+
+  return {
+    total_videos: ctx.postIds.length,
+    total_comments: comments.length,
+    total_categorized: categorized,
+    category_counts: categoryCounts,
+    category_percentages: categoryPercentages,
+    top_topics: topEntries(topicCounts, 5),
+    total_people_recognized: new Set(events.map(e => e.audience_member_id)).size,
+    total_reward_events: events.length,
+    pending_business_inquiries: pendingInquiries,
+  }
+}
+
+// Deliberately returns raw signal, not generated ideas — the conversation turn
+// does the synthesis, so suggestions stay grounded in the data below.
+async function toolSuggestContentIdeas(ctx: ToolContext) {
+  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
+  const trending = computeTrendingGroups(comments, ctx.postMap, 2)
+
+  const topicCounts: Record<string, number> = {}
+  const questions: RichCommentRow[] = []
+  const purchaseIntent: RichCommentRow[] = []
+
+  for (const c of comments) {
+    const cat = getCatInfo(c)
+    if (!cat) continue
+
+    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+    // Only business-relevant questions (they cleared the relevance check and got
+    // a drafted reply) — casual "when's the next upload" noise isn't a content signal.
+    if (cat.category === 'question' && cat.draft_reply) questions.push(c)
+    if (cat.category === 'purchase_intent') purchaseIntent.push(c)
+  }
+
+  return {
+    instruction:
+      'Synthesize 3-5 concrete content ideas from this data. Ground each idea in a specific repeated comment, question, or topic below, and say which signal it came from.',
+    trending_comments: trending.slice(0, 10),
+    audience_questions: questions.slice(0, 15).map(c => ({
+      text: c.text,
+      video: ctx.postMap.get(c.post_id) || 'Untitled video',
+    })),
+    purchase_intent_signals: purchaseIntent.slice(0, 10).map(c => ({
+      text: c.text,
+      video: ctx.postMap.get(c.post_id) || 'Untitled video',
+    })),
+    top_topics: topEntries(topicCounts, 10),
+  }
+}
+
+async function toolDetectAnomalies(ctx: ToolContext) {
+  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
+
+  const recentCutoff = daysAgo(7)
+  const baselineCutoff = daysAgo(37) // the 30 days immediately before the recent window
+
+  const recentCategories: Record<string, number> = {}
+  const baselineCategories: Record<string, number> = {}
+  const recentTopics: Record<string, number> = {}
+  const baselineTopics: Record<string, number> = {}
+  let recentTotal = 0
+  let baselineTotal = 0
+
+  for (const c of comments) {
+    const posted = new Date(c.posted_at)
+    if (isNaN(posted.getTime())) continue
+
+    const isRecent = posted >= recentCutoff
+    const isBaseline = posted >= baselineCutoff && posted < recentCutoff
+    if (!isRecent && !isBaseline) continue
+
+    if (isRecent) recentTotal++
+    else baselineTotal++
+
+    const cat = getCatInfo(c)
+    if (!cat) continue
+
+    const categoryBucket = isRecent ? recentCategories : baselineCategories
+    categoryBucket[cat.category] = (categoryBucket[cat.category] || 0) + 1
+
+    if (cat.topic) {
+      const topicBucket = isRecent ? recentTopics : baselineTopics
+      topicBucket[cat.topic] = (topicBucket[cat.topic] || 0) + 1
+    }
+  }
+
+  const anomalies: Array<{
+    kind: 'category' | 'topic' | 'volume'
+    name: string
+    direction: 'spike' | 'drop'
+    recent_per_day: number
+    baseline_per_day: number
+    ratio: number | null
+  }> = []
+
+  const MIN_VOLUME = 3 // ignore tiny numbers where ratios are meaningless
+
+  function compare(kind: 'category' | 'topic' | 'volume', name: string, recentCount: number, baselineCount: number) {
+    if (recentCount < MIN_VOLUME && baselineCount < MIN_VOLUME) return
+
+    const recentPerDay = recentCount / 7
+    const baselinePerDay = baselineCount / 30
+
+    if (baselinePerDay === 0) {
+      if (recentCount >= MIN_VOLUME) {
+        anomalies.push({
+          kind,
+          name,
+          direction: 'spike',
+          recent_per_day: Number(recentPerDay.toFixed(2)),
+          baseline_per_day: 0,
+          ratio: null, // brand new — no prior baseline to divide by
+        })
+      }
+      return
+    }
+
+    const ratio = recentPerDay / baselinePerDay
+    if (ratio >= 2 || ratio <= 0.5) {
+      anomalies.push({
+        kind,
+        name,
+        direction: ratio >= 2 ? 'spike' : 'drop',
+        recent_per_day: Number(recentPerDay.toFixed(2)),
+        baseline_per_day: Number(baselinePerDay.toFixed(2)),
+        ratio: Number(ratio.toFixed(2)),
+      })
+    }
+  }
+
+  compare('volume', 'overall comment volume', recentTotal, baselineTotal)
+
+  for (const category of new Set([...Object.keys(recentCategories), ...Object.keys(baselineCategories)])) {
+    compare('category', category, recentCategories[category] || 0, baselineCategories[category] || 0)
+  }
+
+  for (const topic of new Set([...Object.keys(recentTopics), ...Object.keys(baselineTopics)])) {
+    compare('topic', topic, recentTopics[topic] || 0, baselineTopics[topic] || 0)
+  }
+
+  anomalies.sort((a, b) => (b.ratio ?? Infinity) - (a.ratio ?? Infinity))
+
+  return {
+    window: 'last 7 days vs the prior 30-day average',
+    recent_comments: recentTotal,
+    baseline_comments: baselineTotal,
+    anomalies_found: anomalies.length,
+    anomalies: anomalies.slice(0, 10),
+    ...(anomalies.length === 0
+      ? { summary: 'No unusual spikes or drops — activity is in line with the prior 30-day average. Say so plainly rather than inventing a finding.' }
+      : {}),
+  }
+}
+
+async function toolGetWeeklyDigest(ctx: ToolContext) {
+  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
+  const events = await fetchCreatorRewardEvents(ctx)
+
+  const weekCutoff = daysAgo(7)
+
+  const categoryCounts: Record<string, number> = {}
+  const topicCounts: Record<string, number> = {}
+  const videoCounts: Record<string, number> = {}
+  let weekComments = 0
+  let pendingInquiries = 0
+
+  for (const c of comments) {
+    const cat = getCatInfo(c)
+
+    // Pending inquiries are current state, not a this-week-only measure.
+    if (cat?.draft_reply && !cat.draft_reply_approved_at) pendingInquiries++
+
+    const posted = new Date(c.posted_at)
+    if (isNaN(posted.getTime()) || posted < weekCutoff) continue
+
+    weekComments++
+    const videoTitle = ctx.postMap.get(c.post_id) || 'Untitled video'
+    videoCounts[videoTitle] = (videoCounts[videoTitle] || 0) + 1
+
+    if (!cat) continue
+    categoryCounts[cat.category] = (categoryCounts[cat.category] || 0) + 1
+    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+  }
+
+  const weekEvents = events.filter(e => {
+    const created = new Date(e.created_at)
+    return !isNaN(created.getTime()) && created >= weekCutoff
+  })
+
+  return {
+    period: 'last 7 days',
+    total_comments_this_week: weekComments,
+    category_breakdown_this_week: categoryCounts,
+    top_topics_this_week: topEntries(topicCounts, 3),
+    most_active_videos_this_week: topEntries(videoCounts, 3),
+    pending_business_inquiries: pendingInquiries,
+    people_recognized_this_week: new Set(weekEvents.map(e => e.audience_member_id)).size,
+    reward_events_this_week: weekEvents.length,
   }
 }
 
@@ -628,6 +891,26 @@ const TOOLS = [
       required: ['post_id_or_title'],
     },
   },
+  {
+    name: 'get_channel_overview',
+    description: 'One channel-wide snapshot across ALL videos: total comments, how many are categorized, category breakdown with percentages, top 5 topics, total people recognized, and pending business inquiries. Use this when the user asks how their channel is doing broadly ("how am I doing", "overview", "summary of everything") — NOT when they ask about one specific video (use get_video_breakdown for that).',
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'suggest_content_ideas',
+    description: "Returns the raw audience-demand signal behind content ideas: trending/repeated comments, real business questions being asked, purchase-intent comments, and top topics. Use this when the user asks what to make next, what to post about, or what their audience wants. The tool returns DATA, not ideas — you synthesize 3-5 concrete content ideas from it yourself, citing which signal each came from.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'detect_anomalies',
+    description: "Compares the last 7 days against the prior 30-day average and reports categories, topics, or overall comment volume that spiked or dropped significantly (roughly 2x up or half down). Use this when the user asks what changed, what's unusual, whether anything is off, or why things feel different. If it reports no anomalies, say so plainly — do not manufacture a finding.",
+    input_schema: { type: 'object', properties: {} },
+  },
+  {
+    name: 'get_weekly_digest',
+    description: "This week's numbers as structured fields: comments this week, category breakdown, top 3 topics, most active videos, pending business inquiries, and people recognized this week. Use this when the user asks for a weekly summary, recap, digest, or something they can share.",
+    input_schema: { type: 'object', properties: {} },
+  },
 ]
 
 async function executeTool(ctx: ToolContext, name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -653,6 +936,14 @@ async function executeTool(ctx: ToolContext, name: string, input: Record<string,
         return await toolGetTimingInsights(ctx, input)
       case 'get_business_inquiries':
         return await toolGetBusinessInquiries(ctx, input)
+      case 'get_channel_overview':
+        return await toolGetChannelOverview(ctx)
+      case 'suggest_content_ideas':
+        return await toolSuggestContentIdeas(ctx)
+      case 'detect_anomalies':
+        return await toolDetectAnomalies(ctx)
+      case 'get_weekly_digest':
+        return await toolGetWeeklyDigest(ctx)
       default:
         return { error: `Unknown tool: ${name}` }
     }
