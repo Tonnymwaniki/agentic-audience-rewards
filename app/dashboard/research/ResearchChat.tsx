@@ -3,7 +3,60 @@
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string }
+type VideoCard = {
+  post_id: string
+  title: string
+  thumbnail_url: string | null
+  total_comments: number
+  category_counts: Record<string, number>
+  top_topics: Array<{ topic: string; count: number }>
+}
+
+type ChatMessage = { role: 'user' | 'assistant'; content: string; videoCards?: VideoCard[] }
+
+function VideoCardDisplay({ card }: { card: VideoCard }) {
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-white/10 bg-surface-hover">
+      <div className="aspect-video w-full overflow-hidden bg-surface">
+        {card.thumbnail_url ? (
+          <img src={card.thumbnail_url} alt={card.title} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={1.5}
+              className="h-8 w-8 text-text-muted"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                d="M15.75 10.5l4.72-2.36a.75.75 0 0 1 1.08.67v8.38a.75.75 0 0 1-1.08.67l-4.72-2.36M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-7.5A2.25 2.25 0 0 0 13.5 6.75h-9A2.25 2.25 0 0 0 2.25 9v7.5a2.25 2.25 0 0 0 2.25 2.25Z"
+              />
+            </svg>
+          </div>
+        )}
+      </div>
+      <div className="p-3">
+        <p className="truncate font-body text-sm font-medium text-text-primary">{card.title}</p>
+        <p className="mt-0.5 text-xs text-text-muted">{card.total_comments} comments</p>
+        {Object.keys(card.category_counts).length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-1.5">
+            {Object.entries(card.category_counts)
+              .sort((a, b) => b[1] - a[1])
+              .map(([category, count]) => (
+                <span key={category} className={`badge badge-${category}`}>
+                  {count} {category.replace(/_/g, ' ')}
+                </span>
+              ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
 
 const SUGGESTED_QUESTIONS = [
   "What's trending?",
@@ -122,7 +175,7 @@ export default function ResearchChat({
         throw new Error(data.error || 'Failed to get a response')
       }
 
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply }])
+      setMessages(prev => [...prev, { role: 'assistant', content: data.reply, videoCards: data.videoCards }])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
@@ -180,6 +233,9 @@ export default function ResearchChat({
             ) : (
               <div key={index} className="card mr-auto max-w-[75%] rounded-tl-sm border-l-2 border-pink">
                 <p className="text-sm leading-relaxed text-text-primary">{message.content}</p>
+                {message.videoCards?.map(card => (
+                  <VideoCardDisplay key={card.post_id} card={card} />
+                ))}
               </div>
             )
           )}

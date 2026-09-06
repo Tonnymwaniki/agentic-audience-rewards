@@ -21,6 +21,16 @@ type ToolContext = {
   creatorId: string
   postIds: string[]
   postMap: Map<string, string>
+  postThumbnails: Map<string, string | null>
+}
+
+type VideoCard = {
+  post_id: string
+  title: string
+  thumbnail_url: string | null
+  total_comments: number
+  category_counts: Record<string, number>
+  top_topics: Array<{ topic: string; count: number }>
 }
 
 type RichCommentRow = {
@@ -53,16 +63,82 @@ function getAuthor(row: RichCommentRow): string {
   return (row.audience_members as { display_name: string } | null)?.display_name || 'Unknown'
 }
 
-// Resolves a post either by exact id (must belong to this creator) or by a
-// case-insensitive partial title match — never returns a post outside postMap.
+// Generic words a user (or the model) tends to tack on that never appear in an
+// actual video title — ignored so "my baby shop video" still matches.
+const TITLE_STOPWORDS = new Set([
+  'the', 'a', 'an', 'of', 'my', 'me', 'on', 'in', 'for', 'and', 'to',
+  'video', 'videos', 'vid', 'clip', 'show', 'about', 'one', 'that', 'this',
+])
+
+// Lowercase, strip punctuation to spaces, collapse runs of whitespace.
+function normalizeTitle(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function significantWords(text: string): string[] {
+  return normalizeTitle(text)
+    .split(' ')
+    .filter(word => word.length >= 2 && !TITLE_STOPWORDS.has(word))
+}
+
+// Resolves a post by exact id (must belong to this creator) or by fuzzy title
+// match — never returns a post outside postMap.
+//
+// Matching is word-based rather than a single substring check, because real
+// requests don't arrive as literal substrings: "nila babyshop" has to match
+// "Secrets Of Running A Successful Mitumba Baby Shop Business~ CEO Nila Baby
+// Shop" despite different word order and missing spaces. Each search word is
+// tested against both the normalized title AND a space-stripped ("compact")
+// version of it, so "babyshop" matches "baby shop" and vice versa.
 function resolvePostId(ctx: ToolContext, idOrTitle: string): string | null {
   if (ctx.postMap.has(idOrTitle)) return idOrTitle
 
-  const lower = idOrTitle.toLowerCase()
-  for (const [id, title] of ctx.postMap.entries()) {
-    if (title.toLowerCase().includes(lower)) return id
+  const normalizedQuery = normalizeTitle(idOrTitle)
+  if (!normalizedQuery) return null
+
+  // If the query was nothing but stopwords, fall back to using them anyway
+  // rather than matching nothing at all.
+  const filtered = significantWords(idOrTitle)
+  const words = filtered.length > 0 ? filtered : normalizedQuery.split(' ').filter(Boolean)
+  if (words.length === 0) return null
+
+  let best: { id: string; matched: number; titleLength: number } | null = null
+
+  for (const [id, rawTitle] of ctx.postMap.entries()) {
+    const normalizedTitle = normalizeTitle(rawTitle || '')
+    if (!normalizedTitle) continue
+
+    const compactTitle = normalizedTitle.replace(/ /g, '')
+
+    let matched = 0
+    for (const word of words) {
+      if (normalizedTitle.includes(word) || compactTitle.includes(word)) matched++
+    }
+
+    if (matched === 0) continue
+
+    // Most matching words wins; ties break toward the shorter (more specific) title.
+    if (
+      !best ||
+      matched > best.matched ||
+      (matched === best.matched && normalizedTitle.length < best.titleLength)
+    ) {
+      best = { id, matched, titleLength: normalizedTitle.length }
+    }
   }
-  return null
+
+  if (!best) return null
+
+  // Accept a full match, or a majority one — but not a single incidental word
+  // ("shop") dragging in an unrelated video.
+  const allMatched = best.matched === words.length
+  const majorityMatched = best.matched * 2 >= words.length
+
+  return allMatched || majorityMatched ? best.id : null
 }
 
 // Single shared, batched, creator-scoped comment fetch (with category/author
@@ -180,6 +256,33 @@ async function toolGetVideoBreakdown(ctx: ToolContext, input: { post_id_or_title
   const comments = await fetchRichComments(ctx.supabase, [postId])
 
   return { video_title: ctx.postMap.get(postId), ...videoBreakdown(comments) }
+}
+
+// Same underlying data as get_video_breakdown, reshaped specifically for a rich
+// visual card on the client (thumbnail, array-of-topics instead of an object) —
+// use this instead of get_video_breakdown when the user wants to SEE the video,
+// not just hear the numbers.
+async function toolShowVideoCard(ctx: ToolContext, input: { post_id_or_title?: unknown }): Promise<VideoCard | { error: string }> {
+  const idOrTitle = typeof input.post_id_or_title === 'string' ? input.post_id_or_title : ''
+  if (!idOrTitle) return { error: 'post_id_or_title is required' }
+
+  const postId = resolvePostId(ctx, idOrTitle)
+  if (!postId) return { error: `No video found matching "${idOrTitle}"` }
+
+  const comments = await fetchRichComments(ctx.supabase, [postId])
+  const { category_counts, top_topics } = videoBreakdown(comments)
+
+  return {
+    post_id: postId,
+    title: ctx.postMap.get(postId) || 'Untitled video',
+    thumbnail_url: ctx.postThumbnails.get(postId) || null,
+    total_comments: comments.length,
+    category_counts,
+    top_topics: Object.entries(top_topics)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .map(([topic, count]) => ({ topic, count })),
+  }
 }
 
 async function toolCompareVideos(ctx: ToolContext, input: { post_id_a?: unknown; post_id_b?: unknown }) {
@@ -511,6 +614,20 @@ const TOOLS = [
       required: ['category'],
     },
   },
+  {
+    name: 'show_video_card',
+    description: "Look up one video and return it formatted for a rich visual card (thumbnail, title, category breakdown, top topics). Use this when the user wants to SEE a specific video, not just hear numbers about it. Accepts a partial title match (like 'baby shop' or 'robotics') — you do not need the exact full title. Try calling this directly with whatever the user says, rather than asking them to confirm the exact title first. Example: if the user says 'show me my baby shop video', call this tool immediately with post_id_or_title: 'baby shop' — do not ask the user to clarify the exact title first, since this tool performs partial matching internally.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        post_id_or_title: {
+          type: 'string',
+          description: "The video's post id, or any partial/approximate title fragment the user mentioned — pass it as-is, don't ask the user to clarify first.",
+        },
+      },
+      required: ['post_id_or_title'],
+    },
+  },
 ]
 
 async function executeTool(ctx: ToolContext, name: string, input: Record<string, unknown>): Promise<unknown> {
@@ -520,6 +637,8 @@ async function executeTool(ctx: ToolContext, name: string, input: Record<string,
         return await toolSearchComments(ctx, input)
       case 'get_video_breakdown':
         return await toolGetVideoBreakdown(ctx, input)
+      case 'show_video_card':
+        return await toolShowVideoCard(ctx, input)
       case 'compare_videos':
         return await toolCompareVideos(ctx, input)
       case 'lookup_person':
@@ -632,7 +751,7 @@ export async function POST(request: NextRequest) {
 
     const { data: posts, error: postsError } = await supabase
       .from('posts')
-      .select('id, title')
+      .select('id, title, thumbnail_url')
       .eq('creator_id', creator_id)
 
     if (postsError) {
@@ -646,6 +765,7 @@ export async function POST(request: NextRequest) {
       creatorId: creator_id,
       postIds: postList.map(p => p.id),
       postMap: new Map(postList.map(p => [p.id, p.title])),
+      postThumbnails: new Map(postList.map(p => [p.id, p.thumbnail_url as string | null])),
     }
 
     const systemPrompt = `You are an audience research assistant for a content creator. You have tools that query their real, live audience data — use them whenever a question needs specific facts rather than guessing. You can call more than one tool across a conversation turn if needed (e.g. look up a video, then compare it to another). Reference specific numbers and real quotes from tool results. Keep answers concise (2-5 sentences unless the data genuinely warrants a short list), conversational, no markdown formatting.`
@@ -667,10 +787,16 @@ export async function POST(request: NextRequest) {
     ]
 
     let finalText: string | null = null
+    // Accumulated across every round of this turn, not just the last one — Claude
+    // might call show_video_card early then keep reasoning in a later round, and
+    // the card should still reach the client either way.
+    const videoCards: VideoCard[] = []
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await callClaude(systemPrompt, messages, TOOLS)
       const toolUseBlocks = result.content.filter(b => b.type === 'tool_use')
+
+      console.log("RESEARCH TOOLS CALLED THIS TURN:", toolUseBlocks.map(t => ({ name: t.name, input: t.input })))
 
       if (toolUseBlocks.length === 0) {
         finalText = result.content.find(b => b.type === 'text')?.text || null
@@ -680,11 +806,19 @@ export async function POST(request: NextRequest) {
       messages.push({ role: 'assistant', content: result.content })
 
       const toolResults = await Promise.all(
-        toolUseBlocks.map(async block => ({
-          type: 'tool_result',
-          tool_use_id: block.id,
-          content: JSON.stringify(await executeTool(ctx, block.name!, block.input || {})),
-        }))
+        toolUseBlocks.map(async block => {
+          const output = await executeTool(ctx, block.name!, block.input || {})
+
+          if (block.name === 'show_video_card' && output && typeof output === 'object' && !('error' in output)) {
+            videoCards.push(output as VideoCard)
+          }
+
+          return {
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(output),
+          }
+        })
       )
 
       messages.push({ role: 'user', content: toolResults })
@@ -701,7 +835,11 @@ export async function POST(request: NextRequest) {
       throw new Error('Empty response from Anthropic')
     }
 
-    return NextResponse.json({ success: true, reply: finalText })
+    return NextResponse.json({
+      success: true,
+      reply: finalText,
+      ...(videoCards.length > 0 ? { videoCards } : {}),
+    })
   } catch (err) {
     console.error('Research chat error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
     return NextResponse.json(
