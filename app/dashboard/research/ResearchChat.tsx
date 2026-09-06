@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
+import ReactMarkdown from 'react-markdown'
 
 type VideoCard = {
   post_id: string
@@ -13,6 +14,53 @@ type VideoCard = {
 }
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string; videoCards?: VideoCard[] }
+
+// Renders an agent message's markdown with per-element overrides so it inherits
+// the app's theme rather than react-markdown's bare browser defaults (which would
+// come out as unstyled black-on-dark headings and browser-default list indents).
+function MarkdownMessage({ content }: { content: string }) {
+  return (
+    <div className="text-sm leading-relaxed text-text-primary">
+      <ReactMarkdown
+        components={{
+          p: ({ children }) => <p className="mb-3 leading-relaxed last:mb-0">{children}</p>,
+          strong: ({ children }) => <strong className="font-semibold text-text-primary">{children}</strong>,
+          em: ({ children }) => <em className="italic">{children}</em>,
+          ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
+          ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
+          li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+          h1: ({ children }) => (
+            <h1 className="mb-2 font-display text-lg font-semibold text-text-primary">{children}</h1>
+          ),
+          h2: ({ children }) => (
+            <h2 className="mb-2 font-display text-base font-semibold text-text-primary">{children}</h2>
+          ),
+          h3: ({ children }) => (
+            <h3 className="mb-2 font-display text-sm font-semibold text-text-primary">{children}</h3>
+          ),
+          a: ({ href, children }) => (
+            <a
+              href={href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-cobalt underline hover:text-cobalt-hover"
+            >
+              {children}
+            </a>
+          ),
+          code: ({ children }) => (
+            <code className="rounded bg-surface-hover px-1 py-0.5 font-mono text-xs">{children}</code>
+          ),
+          blockquote: ({ children }) => (
+            <blockquote className="border-l-2 border-white/10 pl-3 text-text-muted">{children}</blockquote>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+}
 
 function VideoCardDisplay({ card }: { card: VideoCard }) {
   return (
@@ -232,7 +280,7 @@ export default function ResearchChat({
               </div>
             ) : (
               <div key={index} className="card mr-auto max-w-[75%] rounded-tl-sm border-l-2 border-pink">
-                <p className="text-sm leading-relaxed text-text-primary">{message.content}</p>
+                <MarkdownMessage content={message.content} />
                 {message.videoCards?.map(card => (
                   <VideoCardDisplay key={card.post_id} card={card} />
                 ))}
