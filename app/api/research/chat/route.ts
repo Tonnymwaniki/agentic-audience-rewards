@@ -50,6 +50,12 @@ type AnomalyCard = {
   findings: Array<{ description: string; severity: 'high' | 'medium' }>
 }
 
+type PersonCard = {
+  display_name: string
+  reason: string
+  comment_count: number
+}
+
 type RichCommentRow = {
   id: string
   text: string
@@ -337,9 +343,11 @@ async function toolLookupPerson(ctx: ToolContext, input: { display_name?: unknow
 
   const member = members[0]
 
-  const { data: comments, error: commentsError } = await ctx.supabase
+  // count: 'exact' gives the true total alongside the 20 rows we display, so
+  // "commented N times" isn't silently capped at the page size.
+  const { data: comments, error: commentsError, count } = await ctx.supabase
     .from('comments')
-    .select('text, post_id, posted_at')
+    .select('text, post_id, posted_at', { count: 'exact' })
     .eq('audience_member_id', member.id)
     .order('posted_at', { ascending: false })
     .limit(20)
@@ -352,6 +360,7 @@ async function toolLookupPerson(ctx: ToolContext, input: { display_name?: unknow
     found: true,
     display_name: member.display_name,
     profile_summary: member.profile_summary || 'No profile built up yet',
+    total_comments: count ?? (comments || []).length,
     recent_comments: (comments || []).map(c => ({
       text: c.text,
       video: ctx.postMap.get(c.post_id) || 'Untitled video',
@@ -908,6 +917,62 @@ function buildIdeaCards(input: Record<string, unknown>): IdeaCard[] {
   return cards.slice(0, 5)
 }
 
+function buildPersonCardFromLookup(output: Record<string, unknown>): PersonCard | null {
+  if (output.found !== true || typeof output.display_name !== 'string') return null
+
+  return {
+    display_name: output.display_name,
+    reason: typeof output.profile_summary === 'string' ? output.profile_summary : '',
+    comment_count: typeof output.total_comments === 'number' ? output.total_comments : 0,
+  }
+}
+
+// Verified server-side rather than trusting a model-supplied number — the model
+// provides who and why, we provide the actual count. Scoped to this creator.
+async function countCommentsForMember(ctx: ToolContext, displayName: string): Promise<number> {
+  const { data: members } = await ctx.supabase
+    .from('audience_members')
+    .select('id')
+    .eq('creator_id', ctx.creatorId)
+    .ilike('display_name', displayName)
+    .limit(1)
+
+  const member = members?.[0]
+  if (!member) return 0
+
+  const { count } = await ctx.supabase
+    .from('comments')
+    .select('id', { count: 'exact', head: true })
+    .eq('audience_member_id', member.id)
+
+  return count || 0
+}
+
+// present_people is a display tool: the model passes who it wants to show and why,
+// and we attach a real comment count to each before rendering.
+async function buildPersonCardsFromInput(
+  ctx: ToolContext,
+  input: Record<string, unknown>
+): Promise<PersonCard[]> {
+  const people = input.people
+  if (!Array.isArray(people)) return []
+
+  const cards: PersonCard[] = []
+
+  for (const raw of people.slice(0, 8)) {
+    const person = raw as { display_name?: unknown; reason?: unknown }
+    if (typeof person.display_name !== 'string') continue
+
+    cards.push({
+      display_name: person.display_name,
+      reason: typeof person.reason === 'string' ? person.reason : '',
+      comment_count: await countCommentsForMember(ctx, person.display_name),
+    })
+  }
+
+  return cards
+}
+
 const TOOLS = [
   {
     name: 'search_comments',
@@ -1035,6 +1100,28 @@ const TOOLS = [
     input_schema: { type: 'object', properties: {} },
   },
   {
+    name: 'present_people',
+    description: "Display specific audience members as visual person cards. Call this whenever your answer is about particular people — most loyal, most engaged, who to reward, who keeps asking about X. Gather the underlying data first (get_reward_history, search_comments, lookup_person, get_trending), then pass the people and your reason for each. Comment counts are filled in automatically — don't guess them. After calling this, write only a brief intro; the cards already list the people.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        people: {
+          type: 'array',
+          description: 'The people to show, up to 8',
+          items: {
+            type: 'object',
+            properties: {
+              display_name: { type: 'string', description: "The audience member's display name, exactly as it appears in the data" },
+              reason: { type: 'string', description: 'One sentence on why this person stands out for the question asked' },
+            },
+            required: ['display_name', 'reason'],
+          },
+        },
+      },
+      required: ['people'],
+    },
+  },
+  {
     name: 'present_content_ideas',
     description: "Display your synthesized content ideas as visual cards. Call this AFTER suggest_content_ideas, passing the 3-5 ideas you came up with. After calling it, write only a brief conversational intro — do NOT restate the ideas in your text, the cards already show them.",
     input_schema: {
@@ -1091,6 +1178,14 @@ async function executeTool(ctx: ToolContext, name: string, input: Record<string,
         return await toolGetChannelOverview(ctx)
       case 'suggest_content_ideas':
         return await toolSuggestContentIdeas(ctx)
+      case 'present_people': {
+        // Pure display tool — the cards are captured from block.input.
+        const count = Array.isArray(input.people) ? input.people.length : 0
+        return {
+          displayed: count,
+          note: 'Person cards rendered for the user. Write only a short intro line — do not re-list the people.',
+        }
+      }
       case 'present_content_ideas': {
         // Pure display tool — touches no data, just acknowledges so the model can
         // write its intro. The ideas themselves are captured from block.input.
@@ -1244,6 +1339,7 @@ export async function POST(request: NextRequest) {
     const videoCards: VideoCard[] = []
     const statsCards: StatsCard[] = []
     const ideaCards: IdeaCard[] = []
+    const personCards: PersonCard[] = []
     // Singular, unlike the arrays above: repeat calls in one turn would return the
     // same current anomaly state, so the last one simply wins.
     let anomalyCard: AnomalyCard | null = null
@@ -1285,6 +1381,15 @@ export async function POST(request: NextRequest) {
             ideaCards.push(...buildIdeaCards(block.input || {}))
           }
 
+          if (block.name === 'present_people') {
+            personCards.push(...(await buildPersonCardsFromInput(ctx, block.input || {})))
+          }
+
+          if (block.name === 'lookup_person' && usableOutput) {
+            const card = buildPersonCardFromLookup(output as Record<string, unknown>)
+            if (card) personCards.push(card)
+          }
+
           return {
             type: 'tool_result',
             tool_use_id: block.id,
@@ -1314,6 +1419,15 @@ export async function POST(request: NextRequest) {
       ...(statsCards.length > 0 ? { statsCards } : {}),
       ...(ideaCards.length > 0 ? { ideaCards } : {}),
       ...(anomalyCard ? { anomalyCard } : {}),
+      // Deduped by name — lookup_person and present_people can both fire in one
+      // turn and surface the same person twice.
+      ...(personCards.length > 0
+        ? {
+            personCards: personCards.filter(
+              (card, i) => personCards.findIndex(c => c.display_name === card.display_name) === i
+            ),
+          }
+        : {}),
     })
   } catch (err) {
     console.error('Research chat error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect } from 'react'
 import Link from 'next/link'
 import ReactMarkdown from 'react-markdown'
+import Avatar from '@/components/Avatar'
 
 type VideoCard = {
   post_id: string
@@ -30,6 +31,12 @@ type AnomalyCard = {
   findings: Array<{ description: string; severity: 'high' | 'medium' }>
 }
 
+type PersonCard = {
+  display_name: string
+  reason: string
+  comment_count: number
+}
+
 type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
@@ -37,6 +44,32 @@ type ChatMessage = {
   statsCards?: StatsCard[]
   ideaCards?: IdeaCard[]
   anomalyCard?: AnomalyCard
+  personCards?: PersonCard[]
+}
+
+// Same visual language as the person rows on Highlights/Rewards: hashed-color
+// avatar, name, supporting line, small count badge.
+function PersonCardDisplay({ card }: { card: PersonCard }) {
+  return (
+    <div className="card mt-3">
+      <div className="flex items-start gap-3">
+        <Avatar name={card.display_name} size={40} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-2">
+            <p className="truncate font-body text-sm font-medium text-text-primary">{card.display_name}</p>
+            {card.comment_count > 0 && (
+              <span className="flex-shrink-0 rounded-full border border-white/10 bg-surface-hover px-2 py-0.5 font-mono text-[10px] text-text-muted">
+                {card.comment_count} {card.comment_count === 1 ? 'comment' : 'comments'}
+              </span>
+            )}
+          </div>
+          {card.reason && (
+            <p className="mt-1 text-sm leading-relaxed text-text-muted">{card.reason}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function IdeaCardDisplay({ card }: { card: IdeaCard }) {
@@ -327,6 +360,7 @@ export default function ResearchChat({
           statsCards: data.statsCards,
           ideaCards: data.ideaCards,
           anomalyCard: data.anomalyCard,
+          personCards: data.personCards,
         },
       ])
     } catch (err) {
@@ -390,6 +424,9 @@ export default function ResearchChat({
                 ))}
                 {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
                 <MarkdownMessage content={message.content} />
+                {message.personCards?.map(card => (
+                  <PersonCardDisplay key={card.display_name} card={card} />
+                ))}
                 {message.ideaCards?.map(card => (
                   <IdeaCardDisplay key={card.number} card={card} />
                 ))}
