@@ -33,6 +33,11 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-body), system-ui, sans-serif;
+  /* Both are 0px in portrait and on every non-notched device; they only matter in
+     landscape on phones with a notch, where viewport-fit=cover would otherwise let
+     text slide underneath it. */
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
 }
 
 .card {
@@ -155,46 +160,19 @@ body {
   z-index: -1;
 }
 
-/* Calm state (after the first message): slow, gentle position-only float. */
-@keyframes ambientDrift {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
+@keyframes typingPulse {
+  0%, 60%, 100% {
+    opacity: 0.25;
+    transform: translateY(0);
   }
-  50% {
-    transform: translate(var(--drift-x, 20px), var(--drift-y, -15px)) scale(1);
-  }
-}
-
-/* Active state (before the first message): the same drift path, plus a playful
-   scale pulse — driven by a spring/overshoot easing curve instead of ease-in-out. */
-@keyframes ambientDriftBouncy {
-  0%, 100% {
-    transform: translate(0, 0) scale(1);
-  }
-  35% {
-    transform: translate(calc(var(--drift-x, 20px) * 0.6), calc(var(--drift-y, -15px) * 0.6)) scale(1.12);
-  }
-  50% {
-    transform: translate(var(--drift-x, 20px), var(--drift-y, -15px)) scale(0.94);
-  }
-  75% {
-    transform: translate(calc(var(--drift-x, 20px) * 0.8), calc(var(--drift-y, -15px) * 0.8)) scale(1.06);
+  30% {
+    opacity: 1;
+    transform: translateY(-2px);
   }
 }
 
-.ambient-fragment {
-  animation-name: ambientDrift;
-  animation-timing-function: ease-in-out;
-  animation-iteration-count: infinite;
-  /* Opacity and color are set inline per-fragment and change when the active/calm
-     state flips — this transition is what makes that change feel like settling
-     down instead of an abrupt jump. */
-  transition: opacity 1.5s ease, color 1.5s ease;
-}
-
-.ambient-fragment-active {
-  animation-name: ambientDriftBouncy;
-  animation-timing-function: cubic-bezier(0.34, 1.56, 0.64, 1);
+.typing-dot {
+  animation: typingPulse 1.2s ease-in-out infinite;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -206,8 +184,8 @@ body {
     animation: none;
     background-size: 100% 100%;
   }
-  .ambient-fragment,
-  .ambient-fragment-active {
+  .typing-dot {
     animation: none;
+    opacity: 0.6;
   }
 }

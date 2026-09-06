@@ -11,13 +11,54 @@ const DRAFT_REPLY_INSTRUCTIONS: Record<string, string> = {
     'Write a brief, empathetic, professional response acknowledging this concern, 2-3 sentences, without being defensive.',
 }
 
-export async function generateDraftReply(commentText: string, category: string): Promise<string> {
+export type BusinessProfile = {
+  business_phone: string | null
+  business_whatsapp: string | null
+  business_location: string | null
+  business_hours: string | null
+  business_website: string | null
+  delivery_info: string | null
+}
+
+export const BUSINESS_PROFILE_COLUMNS =
+  'business_phone, business_whatsapp, business_location, business_hours, business_website, delivery_info'
+
+// Categories where real business facts are likely to be what the person actually
+// wants. Complaints deliberately stay out of this — their drafted replies are
+// meant to acknowledge a concern, not quote opening hours at someone.
+const PROFILE_AWARE_CATEGORIES = new Set(['question', 'purchase_intent'])
+
+// Builds the profile context from ONLY the fields the creator has actually filled
+// in, so the model is never told about a field that's blank. Returns '' when the
+// profile is missing or entirely empty, leaving the original prompt untouched.
+function buildProfileContext(profile: BusinessProfile | null | undefined): string {
+  if (!profile) return ''
+
+  const parts: string[] = []
+  if (profile.business_phone) parts.push(`phone: ${profile.business_phone}`)
+  if (profile.business_whatsapp) parts.push(`WhatsApp: ${profile.business_whatsapp}`)
+  if (profile.business_location) parts.push(`location: ${profile.business_location}`)
+  if (profile.business_hours) parts.push(`hours: ${profile.business_hours}`)
+  if (profile.business_website) parts.push(`website: ${profile.business_website}`)
+  if (profile.delivery_info) parts.push(`delivery: ${profile.delivery_info}`)
+
+  if (parts.length === 0) return ''
+
+  return ` The business's real, verified details — ${parts.join('; ')}. If the customer's question directly matches one of these (asking for contact, location, hours, delivery), include the ACTUAL real answer in your drafted reply rather than a generic "please reach out" response. Only state details listed above — never invent, guess, or approximate any detail that isn't listed, and don't imply one exists. If the question doesn't match any of this profile data, draft a reply as before.`
+}
+
+export async function generateDraftReply(
+  commentText: string,
+  category: string,
+  profile?: BusinessProfile | null
+): Promise<string> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
 
   try {
     const instruction = DRAFT_REPLY_INSTRUCTIONS[category] ?? DRAFT_REPLY_INSTRUCTIONS.purchase_intent
-    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'. ${instruction} Respond with ONLY the reply text, no preamble.`
+    const profileContext = PROFILE_AWARE_CATEGORIES.has(category) ? buildProfileContext(profile) : ''
+    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction} Respond with ONLY the reply text, no preamble.`
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -56,7 +97,7 @@ export async function generateDraftReply(commentText: string, category: string):
 // genuine business inquiries get a reply drafted. Fails closed (treats errors as
 // "not business") since a missed draft is a much smaller cost than a wrong one, and
 // the caller's own try/catch still protects the rest of the categorization run.
-async function isBusinessRelevant(
+export async function isBusinessRelevant(
   commentText: string,
   postTitle: string,
   postDescription: string
@@ -310,11 +351,14 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
   let postTitle = ''
   let postDescription = ''
+  let businessProfile: BusinessProfile | null = null
 
-  if (draftable.some(c => relevanceCheckCategories.has(c.category))) {
+  // One post fetch covers both needs: title/description for the relevance check,
+  // and creator_id so the business profile can be looked up below.
+  if (draftable.length > 0) {
     const { data: post, error: postFetchError } = await supabase
       .from('posts')
-      .select('title, content')
+      .select('title, content, creator_id')
       .eq('id', post_id)
       .single()
 
@@ -323,6 +367,22 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     } else if (post) {
       postTitle = post.title || ''
       postDescription = post.content || ''
+
+      // Fetched once per run, not per comment — and only when there's actually a
+      // question or purchase_intent draft that could use it.
+      if (post.creator_id && draftable.some(c => PROFILE_AWARE_CATEGORIES.has(c.category))) {
+        const { data: creator, error: profileError } = await supabase
+          .from('creators')
+          .select(BUSINESS_PROFILE_COLUMNS)
+          .eq('id', post.creator_id)
+          .single()
+
+        if (profileError) {
+          console.error('Fetch business profile error:', JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2))
+        } else if (creator) {
+          businessProfile = creator as unknown as BusinessProfile
+        }
+      }
     }
   }
 
@@ -336,7 +396,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         if (!isRelevant) continue
       }
 
-      const draftReply = await generateDraftReply(text, comment.category)
+      const draftReply = await generateDraftReply(text, comment.category, businessProfile)
       await supabase
         .from('comment_categories')
         .update({ draft_reply: draftReply, draft_reply_created_at: new Date().toISOString() })

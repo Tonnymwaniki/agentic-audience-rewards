@@ -1,15 +1,25 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
-import PageHeader from '@/components/PageHeader'
-import AgentFeed, { type FeedGroup, type FeedItem } from './AgentFeed'
+import { loadHighlights } from '@/lib/highlights'
+import CategoryPrompt from './CategoryPrompt'
+import AgentSummary from './AgentFeed'
 
 export const dynamic = 'force-dynamic'
 
-const FEED_WINDOW_DAYS = 7
 const SUMMARY_WINDOW_HOURS = 24
-const PENDING_DRAFTS_LIMIT = 30
-const NOTIFICATIONS_LIMIT = 50
+// Just a preview — the full set lives on Highlights, one click away.
+const ATTENTION_PREVIEW_LIMIT = 3
+
+// Server-clock based, and the server is UTC on Vercel. No per-creator timezone is
+// stored anywhere in the schema, so this is genuinely the best available signal —
+// storing one would be the fix, not guessing from the request.
+function greetingFor(date: Date): string {
+  const hour = date.getHours()
+  if (hour < 12) return 'Good morning'
+  if (hour < 18) return 'Good afternoon'
+  return 'Good evening'
+}
 
 export default async function AgentHomePage() {
   const supabase = await createClient()
@@ -23,11 +33,20 @@ export default async function AgentHomePage() {
 
   const { data: creator, error: creatorError } = await supabase
     .from('creators')
-    .select('id, display_name')
+    .select('id, display_name, business_category')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
-  if (creatorError || !creator) {
+  if (creatorError) {
+    console.error('Agent home creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    return (
+      <div className="p-6">
+        <p className="text-red-500">Failed to load your account details.</p>
+      </div>
+    )
+  }
+
+  if (!creator) {
     redirect('/login')
   }
 
@@ -37,7 +56,7 @@ export default async function AgentHomePage() {
 
   const { data: posts, error: postsError } = await supabase
     .from('posts')
-    .select('id, title')
+    .select('id')
     .eq('creator_id', creator.id)
 
   if (postsError) {
@@ -49,22 +68,9 @@ export default async function AgentHomePage() {
     )
   }
 
-  const postList = posts || []
-  const postIds = postList.map(p => p.id)
-  const postMap = new Map(postList.map(p => [p.id, p.title]))
+  const postIds = (posts || []).map(p => p.id)
 
-  type CommentRow = {
-    id: string
-    text: string
-    posted_at: string
-    post_id: string
-    audience_member_id: string
-    audience_members: { display_name: string } | null
-  }
-
-  // Full (not time-bound) fetch, same batched pattern as the Brain/Inbox pages —
-  // pending drafts need to surface regardless of how old the underlying comment is,
-  // so we can't pre-filter this by date at the query level.
+  type CommentRow = { id: string; posted_at: string }
   const allComments: CommentRow[] = []
 
   if (postIds.length > 0) {
@@ -75,9 +81,8 @@ export default async function AgentHomePage() {
     while (hasMore) {
       const { data: batch, error: commentsError } = await supabase
         .from('comments')
-        .select('id, text, posted_at, post_id, audience_member_id, audience_members (display_name)')
+        .select('id, posted_at')
         .in('post_id', postIds)
-        .order('posted_at', { ascending: false })
         .range(offset, offset + batchSize - 1)
 
       if (commentsError) {
@@ -86,7 +91,7 @@ export default async function AgentHomePage() {
       }
 
       if (batch && batch.length > 0) {
-        allComments.push(...(batch as unknown as CommentRow[]))
+        allComments.push(...batch)
         offset += batchSize
       }
 
@@ -96,109 +101,38 @@ export default async function AgentHomePage() {
     }
   }
 
-  const commentIds = allComments.map(c => c.id)
-
   type CategoryRow = {
     comment_id: string
-    category: string
-    topic: string | null
     draft_reply: string | null
     draft_reply_approved_at: string | null
-    draft_reply_created_at: string | null
   }
 
   let categories: CategoryRow[] = []
 
-  if (commentIds.length > 0) {
+  if (allComments.length > 0) {
     categories = await fetchInBatches<CategoryRow>(supabase, {
       table: 'comment_categories',
-      select: 'comment_id, category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at',
+      select: 'comment_id, draft_reply, draft_reply_approved_at',
       inColumn: 'comment_id',
-      inValues: commentIds,
+      inValues: allComments.map(c => c.id),
     })
   }
 
   const categoriesByCommentId = new Map(categories.map(c => [c.comment_id, c]))
 
-  const now = Date.now()
-  const sevenDaysAgo = new Date(now - FEED_WINDOW_DAYS * 24 * 60 * 60 * 1000)
-  const oneDayAgo = new Date(now - SUMMARY_WINDOW_HOURS * 60 * 60 * 1000)
+  const oneDayAgo = new Date(Date.now() - SUMMARY_WINDOW_HOURS * 60 * 60 * 1000)
 
-  const recentComments = allComments.filter(c => new Date(c.posted_at) >= sevenDaysAgo)
-
-  // --- All-time totals, for the empty state — proves the agent has real history
-  // even when nothing happened in the recent-activity windows above ---
-  const totalCommentsCount = allComments.length
-  const totalDraftsCount = categories.filter(c => c.draft_reply).length
-
-  // --- Header summary stats (rolling 24h — there's no per-creator timezone stored,
-  // so this is "last 24 hours," not a calendar-aligned "today") ---
+  // --- Header stats (rolling 24h — no per-creator timezone is stored, so this is
+  // "last 24 hours", not a calendar-aligned day) ---
   const commentsToday = allComments.filter(c => new Date(c.posted_at) >= oneDayAgo)
   const commentsReadCount = commentsToday.length
   const draftsWrittenCount = commentsToday.filter(c => categoriesByCommentId.get(c.id)?.draft_reply).length
 
-  // --- Recent comment activity, grouped per video (satisfies "grouped by count") ---
-  const activityByPost = new Map<string, { count: number; categoryBreakdown: Record<string, number>; latest: string }>()
+  // --- All-time context, shown when today is quiet ---
+  const totalCommentsCount = allComments.length
+  const totalDraftsCount = categories.filter(c => c.draft_reply).length
 
-  for (const comment of recentComments) {
-    const category = categoriesByCommentId.get(comment.id)?.category || 'other'
-    const existing = activityByPost.get(comment.post_id)
-
-    if (existing) {
-      existing.count++
-      existing.categoryBreakdown[category] = (existing.categoryBreakdown[category] || 0) + 1
-      if (comment.posted_at > existing.latest) existing.latest = comment.posted_at
-    } else {
-      activityByPost.set(comment.post_id, {
-        count: 1,
-        categoryBreakdown: { [category]: 1 },
-        latest: comment.posted_at,
-      })
-    }
-  }
-
-  const commentActivityItems: FeedItem[] = Array.from(activityByPost.entries()).map(([postId, data]) => ({
-    type: 'comment_activity',
-    key: `activity-${postId}`,
-    postId,
-    videoTitle: postMap.get(postId) || 'Untitled video',
-    count: data.count,
-    categoryBreakdown: data.categoryBreakdown,
-    timestamp: data.latest,
-  }))
-
-  // --- Pending drafted replies — a backlog, so no time bound, just a UI safety cap.
-  // Sorted and timestamped by when the draft itself was generated, not the comment's
-  // original posted_at, so an old comment with a fresh draft doesn't show as "days ago."
-  const pendingDrafts = allComments
-    .filter(c => {
-      const cat = categoriesByCommentId.get(c.id)
-      return cat?.draft_reply && !cat.draft_reply_approved_at
-    })
-    .sort((a, b) => {
-      const aTime = categoriesByCommentId.get(a.id)?.draft_reply_created_at || a.posted_at
-      const bTime = categoriesByCommentId.get(b.id)?.draft_reply_created_at || b.posted_at
-      return new Date(bTime).getTime() - new Date(aTime).getTime()
-    })
-    .slice(0, PENDING_DRAFTS_LIMIT)
-
-  const pendingDraftItems: FeedItem[] = pendingDrafts.map(comment => {
-    const cat = categoriesByCommentId.get(comment.id)!
-    return {
-      type: 'pending_draft',
-      key: `draft-${comment.id}`,
-      commentId: comment.id,
-      postId: comment.post_id,
-      videoTitle: postMap.get(comment.post_id) || 'Untitled video',
-      authorName: comment.audience_members?.display_name || 'Unknown',
-      commentText: comment.text,
-      draftReply: cat.draft_reply!,
-      category: cat.category,
-      timestamp: cat.draft_reply_created_at || comment.posted_at,
-    }
-  })
-
-  // --- Recent reward events (last 7 days) ---
+  // --- Reward events: only created_at is needed here (counts, not cards) ---
   const { data: creatorAudienceMembers, error: audienceError } = await supabase
     .from('audience_members')
     .select('id')
@@ -210,136 +144,79 @@ export default async function AgentHomePage() {
 
   const memberIds = (creatorAudienceMembers || []).map(m => m.id)
 
-  let rewardEventItems: FeedItem[] = []
   let recognizedTodayCount = 0
   let totalRecognizedCount = 0
+  let latestRewardAt: string | null = null
 
   if (memberIds.length > 0) {
-    // Fetched all-time (no gte filter) so we can report a real total for the empty
-    // state, then filtered client-side for the 7-day feed and 24h header count —
-    // same full-fetch-then-filter approach already used for comments above.
-    console.log("AGENT HOME 24H WINDOW:", new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(), "to", new Date().toISOString())
-
-    type RewardEventRow = {
-      id: string
-      post_id: string | null
-      reason: string
-      status: string
-      claim_token: string
-      tx_hash: string | null
-      created_at: string
-      audience_members: { display_name: string } | null
-    }
-
-    // memberIds can be large (600+ audience members for an active creator) — a single
-    // .in() call blows past Supabase's URL length limit and fails with "Bad Request",
-    // so this batches the same way fetchInBatches already does elsewhere in this file.
-    const events = await fetchInBatches<RewardEventRow>(supabase, {
+    // Batched: a single .in() with hundreds of member ids exceeds Supabase's URL
+    // length limit and fails outright.
+    const events = await fetchInBatches<{ created_at: string }>(supabase, {
       table: 'reward_events',
-      select: 'id, post_id, reason, status, claim_token, tx_hash, created_at, audience_members (display_name)',
+      select: 'created_at',
       inColumn: 'audience_member_id',
       inValues: memberIds,
     })
 
     totalRecognizedCount = events.length
-    const rewardEventsInWindow = events.filter(e => new Date(e.created_at) >= oneDayAgo)
-    recognizedTodayCount = rewardEventsInWindow.length
-    console.log("AGENT HOME REWARD EVENTS IN WINDOW:", JSON.stringify(rewardEventsInWindow, null, 2))
-    const recentEvents = events.filter(e => new Date(e.created_at) >= sevenDaysAgo)
+    recognizedTodayCount = events.filter(e => new Date(e.created_at) >= oneDayAgo).length
 
-    rewardEventItems = recentEvents
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .map(event => ({
-        type: 'reward',
-        key: `reward-${event.id}`,
-        rewardEventId: event.id,
-        postId: event.post_id,
-        videoTitle: event.post_id ? postMap.get(event.post_id) || 'Untitled video' : 'General',
-        displayName: (event.audience_members as unknown as { display_name: string } | null)?.display_name || 'Unknown',
-        reason: event.reason,
-        status: event.status,
-        claimToken: event.claim_token,
-        txHash: event.tx_hash,
-        timestamp: event.created_at,
-      }))
+    for (const event of events) {
+      if (!latestRewardAt || event.created_at > latestRewardAt) latestRewardAt = event.created_at
+    }
   }
 
-  // --- Unread notifications ---
-  const { data: notifications, error: notificationsError } = await supabase
+  // --- Last activity: the newest timestamp across everything the agent does, so
+  // the status card reflects real work rather than page-load time ---
+  const { data: latestNotification, error: notificationError } = await supabase
     .from('notifications')
-    .select('id, type, message, created_at, comments (post_id)')
+    .select('created_at')
     .eq('creator_id', creator.id)
-    .eq('read', false)
     .order('created_at', { ascending: false })
-    .limit(NOTIFICATIONS_LIMIT)
+    .limit(1)
+    .maybeSingle()
 
-  if (notificationsError) {
-    console.error('Agent home notifications fetch error:', JSON.stringify(notificationsError, Object.getOwnPropertyNames(notificationsError), 2))
+  if (notificationError) {
+    console.error('Agent home notification fetch error:', JSON.stringify(notificationError, Object.getOwnPropertyNames(notificationError), 2))
   }
 
-  const notificationItems: FeedItem[] = (notifications || []).map(n => {
-    const postId = (n.comments as unknown as { post_id: string } | null)?.post_id || null
-    return {
-      type: 'notification',
-      key: `notification-${n.id}`,
-      notificationId: n.id,
-      postId,
-      videoTitle: postId ? postMap.get(postId) || 'Untitled video' : 'General',
-      message: n.message,
-      notifType: n.type,
-      timestamp: n.created_at,
-    }
-  })
-
-  // --- Combine everything and group by video ---
-  const allItems: FeedItem[] = [
-    ...commentActivityItems,
-    ...pendingDraftItems,
-    ...rewardEventItems,
-    ...notificationItems,
-  ]
-
-  const groupsMap = new Map<string, FeedGroup>()
-
-  for (const item of allItems) {
-    const groupKey = item.postId || 'general'
-    const existing = groupsMap.get(groupKey)
-
-    if (existing) {
-      existing.items.push(item)
-      if (item.timestamp > existing.latestTimestamp) existing.latestTimestamp = item.timestamp
-    } else {
-      groupsMap.set(groupKey, {
-        postId: groupKey,
-        videoTitle: item.videoTitle,
-        items: [item],
-        latestTimestamp: item.timestamp,
-      })
-    }
+  let latestCommentAt: string | null = null
+  for (const comment of allComments) {
+    if (!latestCommentAt || comment.posted_at > latestCommentAt) latestCommentAt = comment.posted_at
   }
 
-  const groups: FeedGroup[] = Array.from(groupsMap.values())
-    .map(group => ({
-      ...group,
-      items: group.items.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()),
-    }))
-    .sort((a, b) => new Date(b.latestTimestamp).getTime() - new Date(a.latestTimestamp).getTime())
+  // ISO-8601 UTC strings compare correctly as plain strings, so no Date parsing needed.
+  const lastActivityAt = [latestCommentAt, latestRewardAt, latestNotification?.created_at ?? null]
+    .filter((value): value is string => Boolean(value))
+    .sort()
+    .pop() ?? null
 
-  const groupByVideo = groups.length > 1
+  // --- Needs Your Attention: the same selection Highlights uses, previewed ---
+  const { draftHighlights, totalPendingDrafts } = await loadHighlights(
+    supabase,
+    creator.id,
+    ATTENTION_PREVIEW_LIMIT
+  )
 
   return (
     <div>
-      <PageHeader title="Agent Home" />
-      <AgentFeed
+      {!creator.business_category && (
+        <div className="mb-6">
+          <CategoryPrompt />
+        </div>
+      )}
+      <AgentSummary
+        greeting={greetingFor(new Date())}
         creatorDisplayName={creatorDisplayName}
+        lastActivityAt={lastActivityAt}
         commentsReadCount={commentsReadCount}
         draftsWrittenCount={draftsWrittenCount}
         recognizedCount={recognizedTodayCount}
         totalCommentsCount={totalCommentsCount}
         totalDraftsCount={totalDraftsCount}
         totalRecognizedCount={totalRecognizedCount}
-        groups={groups}
-        groupByVideo={groupByVideo}
+        pendingHighlightsCount={totalPendingDrafts}
+        attentionItems={draftHighlights}
       />
     </div>
   )

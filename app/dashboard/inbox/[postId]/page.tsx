@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
 import TrackVideoToggle from '@/components/TrackVideoToggle'
 import CommentsList from './CommentsList'
+import RegenerateDraftsButton from './RegenerateDraftsButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,9 +26,18 @@ export default async function PostInboxPage({
     .from('creators')
     .select('id')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
-  if (creatorError || !creator) {
+  if (creatorError) {
+    console.error('Video inbox creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    return (
+      <div className="p-6">
+        <p className="text-red-500">Failed to load your account details.</p>
+      </div>
+    )
+  }
+
+  if (!creator) {
     redirect('/login')
   }
 
@@ -38,9 +48,19 @@ export default async function PostInboxPage({
     .select('id, title')
     .eq('id', postId)
     .eq('creator_id', creator.id)
-    .single()
+    .maybeSingle()
 
-  if (postError || !post) {
+  if (postError) {
+    console.error('Video inbox post fetch error:', JSON.stringify(postError, Object.getOwnPropertyNames(postError), 2))
+    return (
+      <div className="p-6">
+        <p className="text-red-500">Failed to load this video.</p>
+      </div>
+    )
+  }
+
+  // Genuinely absent, or owned by another creator — bounce back to the list.
+  if (!post) {
     redirect('/dashboard/inbox')
   }
 
@@ -184,7 +204,7 @@ export default async function PostInboxPage({
     <div className="mx-auto max-w-3xl p-6">
       <PageHeader title={post.title} backHref="/dashboard/inbox" backLabel="My Videos" />
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap items-start gap-2">
         <Link
           href="/dashboard/research"
           className="btn-primary inline-flex items-center justify-center"
@@ -197,6 +217,7 @@ export default async function PostInboxPage({
         >
           Rewards
         </Link>
+        <RegenerateDraftsButton postId={postId} />
         <div className="w-48">
           <TrackVideoToggle postId={postId} />
         </div>

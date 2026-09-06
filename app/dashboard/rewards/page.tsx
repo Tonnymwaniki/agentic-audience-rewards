@@ -23,9 +23,18 @@ export default async function RewardsPage({
     .from('creators')
     .select('id')
     .eq('user_id', user.id)
-    .single()
+    .maybeSingle()
 
-  if (creatorError || !creator) {
+  if (creatorError) {
+    console.error('Rewards creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    return (
+      <div className="p-6">
+        <p className="text-red-500">Failed to load your account details.</p>
+      </div>
+    )
+  }
+
+  if (!creator) {
     redirect('/login')
   }
 

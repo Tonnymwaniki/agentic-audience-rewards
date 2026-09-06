@@ -3,18 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import Avatar from '@/components/Avatar'
-
-export type Highlight = {
-  id: string
-  text: string
-  postedAt: string
-  authorName: string
-  postId: string
-  videoTitle: string
-  reason: 'pending_draft' | 'repeated'
-  draftReply: string | null
-  repeatCount: number | null
-}
+import type { Highlight } from '@/lib/highlights'
 
 type HighlightsListProps = {
   draftHighlights: Highlight[]

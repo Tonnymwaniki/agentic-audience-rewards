@@ -3,6 +3,9 @@ import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchInBatches } from '@/lib/supabase-helpers'
+// Shared with the Research page's "Trending Topics" sidebar card, so the panel and
+// the get_trending tool can never disagree about what's trending.
+import { computeTrendingGroups } from '@/lib/trending'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
 // one invocation. Vercel Hobby caps this at 60s, Pro at 300s.
@@ -72,10 +75,6 @@ type CategoryInfo = {
   draft_reply: string | null
   draft_reply_approved_at: string | null
   draft_reply_created_at: string | null
-}
-
-function normalizeText(text: string): string {
-  return text.toLowerCase().trim().replace(/\s+/g, ' ')
 }
 
 function getCatInfo(row: RichCommentRow): CategoryInfo | null {
@@ -368,46 +367,6 @@ async function toolLookupPerson(ctx: ToolContext, input: { display_name?: unknow
     })),
     other_possible_matches: members.slice(1).map(m => m.display_name),
   }
-}
-
-type TrendingGroup = {
-  text: string
-  count: number
-  unique_people: number
-  video_titles: string[]
-}
-
-// Shared repeated-comment grouping (same normalize-and-group approach as the
-// Repeated Comments page), used by get_trending and suggest_content_ideas.
-function computeTrendingGroups(
-  comments: RichCommentRow[],
-  postMap: Map<string, string>,
-  minCount: number
-): TrendingGroup[] {
-  const normalizedGroups = new Map<string, Array<{ text: string; postId: string; audienceMemberId: string | null }>>()
-
-  for (const c of comments) {
-    const key = normalizeText(c.text)
-    const existing = normalizedGroups.get(key) || []
-    existing.push({ text: c.text, postId: c.post_id, audienceMemberId: c.audience_member_id })
-    normalizedGroups.set(key, existing)
-  }
-
-  const groups: TrendingGroup[] = []
-  for (const entries of normalizedGroups.values()) {
-    const uniqueMembers = new Set(entries.map(e => e.audienceMemberId).filter(Boolean))
-    if (uniqueMembers.size < 2 || entries.length < minCount) continue
-
-    groups.push({
-      text: entries[0].text,
-      count: entries.length,
-      unique_people: uniqueMembers.size,
-      video_titles: Array.from(new Set(entries.map(e => postMap.get(e.postId) || 'Untitled video'))),
-    })
-  }
-
-  groups.sort((a, b) => b.count - a.count)
-  return groups
 }
 
 type RewardEventRow = {

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useAnalyze } from '@/lib/hooks/useAnalyze'
+import { BUSINESS_CATEGORIES } from '@/lib/business-categories'
 
 export default function ConnectPage() {
   const [channel, setChannel] = useState('')
@@ -11,6 +12,8 @@ export default function ConnectPage() {
   const [loading, setLoading] = useState(true)
   const [creatorId, setCreatorId] = useState<string | null>(null)
   const [autoAnalyze, setAutoAnalyze] = useState(false)
+  const [category, setCategory] = useState<string | null>(null)
+  const [alreadyCategorized, setAlreadyCategorized] = useState(false)
   const router = useRouter()
 
   const {
@@ -34,7 +37,7 @@ export default function ConnectPage() {
 
       const { data: creator } = await supabase
         .from('creators')
-        .select('id, channel_url')
+        .select('id, channel_url, business_category')
         .eq('user_id', user.id)
         .single()
 
@@ -43,6 +46,10 @@ export default function ConnectPage() {
         if (creator.channel_url) {
           setSavedChannel(creator.channel_url)
           setChannel(creator.channel_url)
+        }
+        if (creator.business_category) {
+          setCategory(creator.business_category)
+          setAlreadyCategorized(true)
         }
       }
 
@@ -70,6 +77,24 @@ export default function ConnectPage() {
       }
     } catch (err) {
       console.error('Save channel error:', err)
+    }
+
+    // Saved separately so a category failure can't block the channel connect flow.
+    if (category) {
+      try {
+        const response = await fetch('/api/creator/category', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ business_category: category }),
+        })
+
+        if (!response.ok) {
+          const data = await response.json()
+          console.error('Failed to save business category:', data.error)
+        }
+      } catch (err) {
+        console.error('Save business category error:', err)
+      }
     }
 
     navigateToPick(trimmed)
@@ -128,6 +153,30 @@ export default function ConnectPage() {
               className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
             />
           </div>
+
+          {!alreadyCategorized && (
+            <div>
+              <p className="mb-2 block text-sm font-medium text-text-muted">
+                What best describes your channel? <span className="text-xs">(optional)</span>
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {BUSINESS_CATEGORIES.map(option => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => setCategory(category === option ? null : option)}
+                    className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
+                      category === option
+                        ? 'border-cobalt bg-cobalt text-white'
+                        : 'border-white/10 bg-surface text-text-muted hover:text-text-primary'
+                    }`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div className="flex items-center gap-2">
             <input

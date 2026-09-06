@@ -1,76 +1,22 @@
-'use client'
-
-import { useState } from 'react'
 import Link from 'next/link'
-import CopyLinkButton from '@/app/dashboard/rewards/CopyLinkButton'
+import type { Highlight } from '@/lib/highlights'
+import AttentionList from './AttentionList'
 
-export type CommentActivityItem = {
-  type: 'comment_activity'
-  key: string
-  postId: string
-  videoTitle: string
-  count: number
-  categoryBreakdown: Record<string, number>
-  timestamp: string
-}
-
-export type PendingDraftItem = {
-  type: 'pending_draft'
-  key: string
-  commentId: string
-  postId: string
-  videoTitle: string
-  authorName: string
-  commentText: string
-  draftReply: string
-  category: string
-  timestamp: string
-}
-
-export type RewardItem = {
-  type: 'reward'
-  key: string
-  rewardEventId: string
-  postId: string | null
-  videoTitle: string
-  displayName: string
-  reason: string
-  status: string
-  claimToken: string
-  txHash: string | null
-  timestamp: string
-}
-
-export type NotificationItem = {
-  type: 'notification'
-  key: string
-  notificationId: string
-  postId: string | null
-  videoTitle: string
-  message: string
-  notifType: string
-  timestamp: string
-}
-
-export type FeedItem = CommentActivityItem | PendingDraftItem | RewardItem | NotificationItem
-
-export type FeedGroup = {
-  postId: string
-  videoTitle: string
-  items: FeedItem[]
-  latestTimestamp: string
-}
-
-type AgentFeedProps = {
+// Note: no 'use client'. Only the attention cards need interactivity (Approve /
+// Copy), and those live in AttentionList — everything else here is server-rendered
+// and ships no JS.
+type AgentSummaryProps = {
+  greeting: string
   creatorDisplayName: string
+  lastActivityAt: string | null
   commentsReadCount: number
   draftsWrittenCount: number
   recognizedCount: number
   totalCommentsCount: number
   totalDraftsCount: number
   totalRecognizedCount: number
-  groups: FeedGroup[]
-  groupByVideo: boolean
+  pendingHighlightsCount: number
+  attentionItems: Highlight[]
 }
 
 function timeAgo(dateString: string): string {
@@ -82,319 +28,238 @@ function timeAgo(dateString: string): string {
   if (diffMin < 1) return 'just now'
   if (diffMin < 60) return `${diffMin}m ago`
   if (diffHour < 24) return `${diffHour}h ago`
-  return `${diffDay}d ago`
+  if (diffDay < 30) return `${diffDay}d ago`
+  return `${Math.floor(diffDay / 30)}mo ago`
 }
 
-export default function AgentFeed({
+// --- Icons ---------------------------------------------------------------
+
+function IconWrapper({ children, tint }: { children: React.ReactNode; tint: string }) {
+  return (
+    <span
+      className="mb-3 inline-flex h-9 w-9 items-center justify-center rounded-lg"
+      style={{ background: tint }}
+      aria-hidden="true"
+    >
+      {children}
+    </span>
+  )
+}
+
+const iconProps = {
+  xmlns: 'http://www.w3.org/2000/svg',
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.75,
+  className: 'h-5 w-5',
+} as const
+
+function CommentIcon() {
+  return (
+    <svg {...iconProps}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm3.75 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0ZM21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z"
+      />
+    </svg>
+  )
+}
+
+function DraftIcon() {
+  return (
+    <svg {...iconProps}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10"
+      />
+    </svg>
+  )
+}
+
+function RecognizedIcon() {
+  return (
+    <svg {...iconProps}>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M16.5 18.75h-9m9 0a3 3 0 0 1 3 3h-15a3 3 0 0 1 3-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 0 1-.982-3.172M9.497 14.25a7.454 7.454 0 0 0 .981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 0 0 7.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 0 0 2.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 0 1 2.916.52 6.003 6.003 0 0 1-5.395 4.972m0 0a6.726 6.726 0 0 1-2.749 1.35m0 0a6.772 6.772 0 0 1-3.044 0"
+      />
+    </svg>
+  )
+}
+
+// --- Sections ------------------------------------------------------------
+
+function StatCard({
+  icon,
+  value,
+  label,
+  accent,
+  tint,
+}: {
+  icon: React.ReactNode
+  value: number
+  label: string
+  accent: string
+  tint: string
+}) {
+  return (
+    <div className="card" style={{ borderColor: tint }}>
+      <span style={{ color: accent }}>
+        <IconWrapper tint={tint}>{icon}</IconWrapper>
+      </span>
+      <p className="font-display text-3xl font-semibold" style={{ color: accent }}>
+        {value.toLocaleString()}
+      </p>
+      <p className="mt-0.5 text-xs text-text-muted">{label}</p>
+    </div>
+  )
+}
+
+const QUICK_ACTIONS = [
+  {
+    href: '/dashboard/highlights',
+    label: 'Review replies',
+    description: 'Approve the drafts waiting on you',
+  },
+  {
+    href: '/dashboard/research',
+    label: 'Ask research question',
+    description: 'Chat with your audience data',
+  },
+  {
+    href: '/dashboard/brain',
+    label: 'View audience insights',
+    description: 'Themes, timing and who keeps showing up',
+  },
+]
+
+export default function AgentSummary({
+  greeting,
   creatorDisplayName,
+  lastActivityAt,
   commentsReadCount,
   draftsWrittenCount,
   recognizedCount,
   totalCommentsCount,
   totalDraftsCount,
   totalRecognizedCount,
-  groups,
-  groupByVideo,
-}: AgentFeedProps) {
-  const [dismissedDraftIds, setDismissedDraftIds] = useState<Set<string>>(new Set())
-  const [readNotificationIds, setReadNotificationIds] = useState<Set<string>>(new Set())
-
-  const hasAnyActivity = groups.some(group =>
-    group.items.some(item => {
-      if (item.type === 'pending_draft') return !dismissedDraftIds.has(item.commentId)
-      if (item.type === 'notification') return !readNotificationIds.has(item.notificationId)
-      return true
-    })
-  )
-
+  pendingHighlightsCount,
+  attentionItems,
+}: AgentSummaryProps) {
   const quietDay = commentsReadCount === 0 && draftsWrittenCount === 0 && recognizedCount === 0
-
-  async function approveDraft(commentId: string) {
-    setDismissedDraftIds(prev => new Set(prev).add(commentId))
-
-    try {
-      const res = await fetch('/api/draft-reply/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment_id: commentId }),
-      })
-      if (!res.ok) {
-        setDismissedDraftIds(prev => {
-          const next = new Set(prev)
-          next.delete(commentId)
-          return next
-        })
-      }
-    } catch {
-      setDismissedDraftIds(prev => {
-        const next = new Set(prev)
-        next.delete(commentId)
-        return next
-      })
-    }
-  }
-
-  async function markNotificationRead(notificationId: string) {
-    setReadNotificationIds(prev => new Set(prev).add(notificationId))
-
-    try {
-      await fetch(`/api/notifications/${notificationId}`, { method: 'PATCH' })
-    } catch {
-      // non-fatal — worst case it shows as unread again next visit
-    }
-  }
 
   return (
     <div className="space-y-6">
-      <section className="card">
-        {quietDay ? (
-          <p className="text-sm leading-relaxed text-text-primary">
-            Hello, {creatorDisplayName} — nothing new in the last 24 hours. Since you started, your agent
-            has read <span className="font-body font-semibold text-cobalt">{totalCommentsCount}</span>{' '}
-            comment{totalCommentsCount === 1 ? '' : 's'}, drafted{' '}
-            <span className="font-body font-semibold text-cobalt">{totalDraftsCount}</span> repl
-            {totalDraftsCount === 1 ? 'y' : 'ies'}, and recognized{' '}
-            <span className="font-body font-semibold text-pink">{totalRecognizedCount}</span>{' '}
-            {totalRecognizedCount === 1 ? 'person' : 'people'}. It&apos;s still watching your connected
-            channels and will let you know the moment something comes in.
+      {/* --- Greeting + agent status --- */}
+      <section className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
+          <h1 className="font-display text-2xl font-semibold text-text-primary">
+            {greeting}, {creatorDisplayName}
+          </h1>
+          <p className="mt-1 text-sm leading-relaxed text-text-muted">
+            {quietDay ? (
+              <>
+                Nothing new in the last 24 hours. Since you started, your agent has read{' '}
+                <span className="font-medium text-text-primary">{totalCommentsCount.toLocaleString()}</span>{' '}
+                comment{totalCommentsCount === 1 ? '' : 's'}, drafted{' '}
+                <span className="font-medium text-text-primary">{totalDraftsCount.toLocaleString()}</span> repl
+                {totalDraftsCount === 1 ? 'y' : 'ies'}, and recognized{' '}
+                <span className="font-medium text-text-primary">{totalRecognizedCount.toLocaleString()}</span>{' '}
+                {totalRecognizedCount === 1 ? 'person' : 'people'}.
+              </>
+            ) : (
+              <>Your agent has been reading comments, drafting replies and spotting people worth recognizing.</>
+            )}
           </p>
-        ) : (
-          <p className="text-sm leading-relaxed text-text-primary">
-            Hello, {creatorDisplayName} — today your agent read{' '}
-            <span className="font-body font-semibold text-cobalt">{commentsReadCount}</span>{' '}
-            comment{commentsReadCount === 1 ? '' : 's'}, drafted{' '}
-            <span className="font-body font-semibold text-cobalt">{draftsWrittenCount}</span>{' '}
-            repl{draftsWrittenCount === 1 ? 'y' : 'ies'}, and recognized{' '}
-            <span className="font-body font-semibold text-pink">{recognizedCount}</span>{' '}
-            {recognizedCount === 1 ? 'person' : 'people'}.
-          </p>
-        )}
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="rounded-lg bg-surface-hover p-3 text-center">
-            <p className="text-xl font-display font-semibold text-text-primary">{commentsReadCount}</p>
-            <p className="text-xs text-text-muted">comments read</p>
-          </div>
-          <div className="rounded-lg bg-surface-hover p-3 text-center">
-            <p className="text-xl font-display font-semibold text-text-primary">{draftsWrittenCount}</p>
-            <p className="text-xs text-text-muted">replies drafted</p>
-          </div>
-          <div className="rounded-lg bg-surface-hover p-3 text-center">
-            <p className="text-xl font-display font-semibold text-text-primary">{recognizedCount}</p>
-            <p className="text-xs text-text-muted">people recognized</p>
-          </div>
         </div>
 
-        <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2">
-          <Link href="/dashboard/highlights" className="btn-primary inline-flex items-center justify-center">
-            View Highlights
-          </Link>
-          <Link
-            href="/dashboard/research"
-            className="inline-flex items-center justify-center rounded-lg border border-pink/40 bg-pink-dim px-4 py-2 font-medium text-pink transition-colors hover:bg-pink-dim/70"
-          >
-            Ask Research →
-          </Link>
+        <div className="card flex-shrink-0 sm:w-56">
+          <p className="font-mono text-[10px] uppercase tracking-widest text-text-muted">Your Agent</p>
+          <div className="mt-2 flex items-center gap-2">
+            <span aria-hidden="true" className="h-2 w-2 rounded-full bg-green-400" />
+            <span className="font-body text-sm font-medium text-text-primary">Active</span>
+          </div>
+          <p className="mt-1.5 text-xs text-text-muted">
+            {lastActivityAt ? `Last activity ${timeAgo(lastActivityAt)}` : 'No activity recorded yet'}
+          </p>
         </div>
       </section>
 
-      {!hasAnyActivity ? (
-        <div className="card p-8 text-center">
-          <p className="text-sm text-text-primary">No new activity in the last 7 days.</p>
-          <p className="mt-2 text-sm text-text-muted">
-            Since you started:{' '}
-            <span className="font-body font-medium text-text-primary">{totalCommentsCount}</span> comment
-            {totalCommentsCount === 1 ? '' : 's'} understood,{' '}
-            <span className="font-body font-medium text-text-primary">{totalRecognizedCount}</span>{' '}
-            {totalRecognizedCount === 1 ? 'person' : 'people'} recognized,{' '}
-            <span className="font-body font-medium text-text-primary">{totalDraftsCount}</span> repl
-            {totalDraftsCount === 1 ? 'y' : 'ies'} drafted.
-          </p>
+      {/* --- Stats (rolling 24h) --- */}
+      <section>
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <StatCard
+            icon={<CommentIcon />}
+            value={commentsReadCount}
+            label="comments read"
+            accent="var(--cobalt)"
+            tint="rgba(0, 56, 255, 0.18)"
+          />
+          <StatCard
+            icon={<DraftIcon />}
+            value={draftsWrittenCount}
+            label="replies drafted"
+            accent="var(--pink)"
+            tint="var(--pink-dim)"
+          />
+          <StatCard
+            icon={<RecognizedIcon />}
+            value={recognizedCount}
+            label="people recognized"
+            accent="#F59E0B"
+            tint="rgba(245, 158, 11, 0.18)"
+          />
         </div>
-      ) : (
-        <div className="space-y-6">
-          {groups.map(group => {
-            const visibleItems = group.items.filter(item => {
-              if (item.type === 'pending_draft') return !dismissedDraftIds.has(item.commentId)
-              return true
-            })
+        <p className="mt-2 font-mono text-[10px] uppercase tracking-wide text-text-muted">
+          Last 24 hours
+        </p>
+      </section>
 
-            if (visibleItems.length === 0) return null
-
-            return (
-              <div key={group.postId} className="space-y-3">
-                {groupByVideo && (
-                  <div className="flex items-center justify-between gap-2 px-1">
-                    <h2 className="truncate text-sm font-medium text-text-muted">{group.videoTitle}</h2>
-                    {group.postId !== 'general' && (
-                      <Link
-                        href={`/dashboard/inbox/${group.postId}`}
-                        className="flex-shrink-0 text-xs text-cobalt hover:text-cobalt-hover"
-                      >
-                        Open in Inbox →
-                      </Link>
-                    )}
-                  </div>
-                )}
-
-                <div className="space-y-3">
-                  {visibleItems.map(item => {
-                    if (item.type === 'comment_activity') {
-                      return (
-                        <div key={item.key} className="card">
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm text-text-primary">
-                                <span className="font-body font-semibold">{item.count}</span> new comment
-                                {item.count === 1 ? '' : 's'} on{' '}
-                                <span className="font-body font-medium">{item.videoTitle}</span>
-                              </p>
-                              <div className="mt-2 flex flex-wrap gap-1.5">
-                                {Object.entries(item.categoryBreakdown)
-                                  .sort((a, b) => b[1] - a[1])
-                                  .map(([category, count]) => (
-                                    <span key={category} className={`badge badge-${category}`}>
-                                      {count} {category.replace(/_/g, ' ')}
-                                    </span>
-                                  ))}
-                              </div>
-                            </div>
-                            <span className="flex-shrink-0 text-xs text-text-muted">{timeAgo(item.timestamp)}</span>
-                          </div>
-                          <Link
-                            href={`/dashboard/inbox/${item.postId}`}
-                            className="mt-3 inline-block text-xs text-cobalt underline hover:text-cobalt-hover"
-                          >
-                            View comments →
-                          </Link>
-                        </div>
-                      )
-                    }
-
-                    if (item.type === 'pending_draft') {
-                      return (
-                        <div key={item.key} className="card !bg-pink-dim/30">
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="min-w-0 flex-1 text-sm font-body font-medium text-text-primary">
-                              New comment needs a reply — {item.authorName}
-                            </p>
-                            <span className="flex-shrink-0 text-xs text-text-muted">{timeAgo(item.timestamp)}</span>
-                          </div>
-                          <p className="mt-1 text-sm text-text-primary">
-                            <span className="highlight">{item.commentText}</span>
-                          </p>
-                          <div className="mt-3 rounded-md bg-surface-hover p-3">
-                            <p className="mb-1 text-xs font-medium text-text-muted">Drafted reply</p>
-                            <p className="text-sm text-text-primary">{item.draftReply}</p>
-                          </div>
-                          <div className="mt-3 flex flex-wrap gap-3">
-                            <button
-                              onClick={() => approveDraft(item.commentId)}
-                              className="btn-primary text-xs"
-                            >
-                              Approve
-                            </button>
-                            <CopyReplyButton text={item.draftReply} />
-                            <Link
-                              href={`/dashboard/inbox/${item.postId}`}
-                              className="text-xs text-text-muted underline hover:text-text-primary"
-                            >
-                              View in Inbox
-                            </Link>
-                          </div>
-                        </div>
-                      )
-                    }
-
-                    if (item.type === 'reward') {
-                      return (
-                        <div key={item.key} className="card">
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="min-w-0 flex-1 text-sm font-body font-medium text-text-primary">
-                              Someone was recognized — {item.displayName}
-                            </p>
-                            <span className="flex-shrink-0 text-xs text-text-muted">{timeAgo(item.timestamp)}</span>
-                          </div>
-                          <p className="mt-1 text-sm text-text-primary">
-                            <span className="highlight">{item.reason}</span>
-                          </p>
-                          <div className="mt-3 flex flex-wrap items-center gap-3">
-                            <span className="inline-flex rounded-full bg-yellow-100 px-2 py-0.5 text-xs font-medium text-yellow-800">
-                              {item.status}
-                            </span>
-                            <CopyLinkButton claimToken={item.claimToken} status={item.status} txHash={item.txHash} />
-                          </div>
-                        </div>
-                      )
-                    }
-
-                    if (item.type === 'notification') {
-                      const isRead = readNotificationIds.has(item.notificationId)
-
-                      const body = (
-                        <div className={`card transition-colors ${isRead ? 'opacity-60' : ''}`}>
-                          <div className="flex items-start justify-between gap-2">
-                            <p className="min-w-0 flex-1 text-sm text-text-primary">{item.message}</p>
-                            <span className="flex-shrink-0 text-xs text-text-muted">{timeAgo(item.timestamp)}</span>
-                          </div>
-                        </div>
-                      )
-
-                      return item.postId ? (
-                        <Link
-                          key={item.key}
-                          href={`/dashboard/inbox/${item.postId}`}
-                          onClick={() => {
-                            if (!isRead) markNotificationRead(item.notificationId)
-                          }}
-                          className="block"
-                        >
-                          {body}
-                        </Link>
-                      ) : (
-                        <button
-                          key={item.key}
-                          type="button"
-                          onClick={() => {
-                            if (!isRead) markNotificationRead(item.notificationId)
-                          }}
-                          className="block w-full text-left"
-                        >
-                          {body}
-                        </button>
-                      )
-                    }
-
-                    return null
-                  })}
-                </div>
-              </div>
-            )
-          })}
+      {/* --- Quick actions --- */}
+      <section className="card">
+        <h2 className="mb-3 font-display text-base font-semibold text-text-primary">Quick Actions</h2>
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+          {QUICK_ACTIONS.map(action => (
+            <Link
+              key={action.href}
+              href={action.href}
+              className="group rounded-lg border border-white/10 bg-surface-hover p-3 transition-colors hover:border-cobalt/50"
+            >
+              <span className="flex items-center justify-between gap-2 font-body text-sm font-medium text-text-primary">
+                {action.label}
+                <span aria-hidden="true" className="text-text-muted transition-colors group-hover:text-cobalt">
+                  →
+                </span>
+              </span>
+              <span className="mt-0.5 block text-xs leading-relaxed text-text-muted">
+                {action.description}
+              </span>
+            </Link>
+          ))}
         </div>
-      )}
+      </section>
+
+      {/* --- Needs your attention (preview of Highlights) --- */}
+      <section className="card">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <h2 className="font-display text-base font-semibold text-text-primary">
+            Needs Your Attention
+            {pendingHighlightsCount > 0 && (
+              <span className="ml-2 rounded-full bg-cobalt px-2 py-0.5 font-mono text-[10px] text-white">
+                {pendingHighlightsCount}
+              </span>
+            )}
+          </h2>
+          <Link href="/dashboard/highlights" className="flex-shrink-0 text-xs text-cobalt hover:underline">
+            View all →
+          </Link>
+        </div>
+        <AttentionList items={attentionItems} />
+      </section>
     </div>
-  )
-}
-
-function CopyReplyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // clipboard unavailable
-    }
-  }
-
-  return (
-    <button
-      onClick={handleCopy}
-      className="text-xs text-text-muted underline hover:text-text-primary"
-    >
-      {copied ? 'Copied!' : 'Copy Reply'}
-    </button>
   )
 }

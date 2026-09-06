@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateDraftReply } from '@/lib/categorize'
+import { generateDraftReply, BUSINESS_PROFILE_COLUMNS, type BusinessProfile } from '@/lib/categorize'
 
 export async function POST(request: NextRequest) {
   try {
@@ -17,7 +17,7 @@ export async function POST(request: NextRequest) {
 
     const { data: comment } = await supabase
       .from('comments')
-      .select('text, comment_categories (category)')
+      .select('text, comment_categories (category), posts (creator_id)')
       .eq('id', comment_id)
       .single()
 
@@ -29,7 +29,28 @@ export async function POST(request: NextRequest) {
     }
 
     const category = (comment.comment_categories as unknown as { category: string } | null)?.category || 'purchase_intent'
-    const draftReply = await generateDraftReply(comment.text, category)
+
+    // Regenerated replies get the same business-profile grounding as the ones
+    // drafted during categorization — otherwise hitting "Regenerate" would quietly
+    // downgrade a reply containing real contact details into a generic one.
+    const creatorId = (comment.posts as unknown as { creator_id: string } | null)?.creator_id
+    let businessProfile: BusinessProfile | null = null
+
+    if (creatorId) {
+      const { data: creator, error: profileError } = await supabase
+        .from('creators')
+        .select(BUSINESS_PROFILE_COLUMNS)
+        .eq('id', creatorId)
+        .single()
+
+      if (profileError) {
+        console.error('Fetch business profile error:', JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2))
+      } else if (creator) {
+        businessProfile = creator as unknown as BusinessProfile
+      }
+    }
+
+    const draftReply = await generateDraftReply(comment.text, category, businessProfile)
 
     await supabase
       .from('comment_categories')
