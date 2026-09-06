@@ -13,7 +13,38 @@ type VideoCard = {
   top_topics: Array<{ topic: string; count: number }>
 }
 
-type ChatMessage = { role: 'user' | 'assistant'; content: string; videoCards?: VideoCard[] }
+type StatsCard = {
+  title: string
+  stats: Array<{ label: string; value: string | number }>
+}
+
+type ChatMessage = {
+  role: 'user' | 'assistant'
+  content: string
+  videoCards?: VideoCard[]
+  statsCards?: StatsCard[]
+}
+
+// Stat grid styled after the landing page's "Live Proof" block — font-display
+// numerals in cobalt over uppercase mono labels — scaled down to sit inside a
+// chat bubble rather than a full-width marketing section.
+function StatsCardDisplay({ card }: { card: StatsCard }) {
+  return (
+    <div className="mb-3 rounded-lg border border-white/10 bg-surface-hover p-4">
+      <p className="mb-3 font-display text-sm font-semibold text-text-primary">{card.title}</p>
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        {card.stats.map(stat => (
+          <div key={stat.label} className="text-center">
+            <p className="font-display text-2xl font-semibold text-cobalt">
+              {typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}
+            </p>
+            <p className="mt-1 font-mono text-[10px] leading-tight text-text-muted">{stat.label}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 // Renders an agent message's markdown with per-element overrides so it inherits
 // the app's theme rather than react-markdown's bare browser defaults (which would
@@ -223,7 +254,10 @@ export default function ResearchChat({
         throw new Error(data.error || 'Failed to get a response')
       }
 
-      setMessages(prev => [...prev, { role: 'assistant', content: data.reply, videoCards: data.videoCards }])
+      setMessages(prev => [
+        ...prev,
+        { role: 'assistant', content: data.reply, videoCards: data.videoCards, statsCards: data.statsCards },
+      ])
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
     } finally {
@@ -280,6 +314,9 @@ export default function ResearchChat({
               </div>
             ) : (
               <div key={index} className="card mr-auto max-w-[75%] rounded-tl-sm border-l-2 border-pink">
+                {message.statsCards?.map(card => (
+                  <StatsCardDisplay key={card.title} card={card} />
+                ))}
                 <MarkdownMessage content={message.content} />
                 {message.videoCards?.map(card => (
                   <VideoCardDisplay key={card.post_id} card={card} />

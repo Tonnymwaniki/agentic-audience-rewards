@@ -33,6 +33,11 @@ type VideoCard = {
   top_topics: Array<{ topic: string; count: number }>
 }
 
+type StatsCard = {
+  title: string
+  stats: Array<{ label: string; value: string | number }>
+}
+
 type RichCommentRow = {
   id: string
   text: string
@@ -780,6 +785,47 @@ async function toolGetWeeklyDigest(ctx: ToolContext) {
   }
 }
 
+// Maps a channel-overview / weekly-digest tool result into the stat-grid shape the
+// client renders. Only the headline numbers make it in — the full tool payload
+// still goes back to Claude for its text answer, this is purely the visual layer.
+function buildStatsCard(toolName: string, output: Record<string, unknown>): StatsCard | null {
+  const num = (key: string): number | null => (typeof output[key] === 'number' ? (output[key] as number) : null)
+
+  const stats: Array<{ label: string; value: string | number }> = []
+  const push = (label: string, value: number | null) => {
+    if (value !== null) stats.push({ label, value })
+  }
+
+  if (toolName === 'get_channel_overview') {
+    push('VIDEOS', num('total_videos'))
+    push('COMMENTS UNDERSTOOD', num('total_comments'))
+    push('CATEGORIES ASSIGNED', num('total_categorized'))
+    push('PEOPLE RECOGNIZED', num('total_people_recognized'))
+    push('PENDING REPLIES', num('pending_business_inquiries'))
+
+    return stats.length > 0 ? { title: 'Channel Overview', stats } : null
+  }
+
+  if (toolName === 'get_weekly_digest') {
+    push('COMMENTS THIS WEEK', num('total_comments_this_week'))
+    push('PEOPLE RECOGNIZED', num('people_recognized_this_week'))
+    push('REWARDS ISSUED', num('reward_events_this_week'))
+    push('PENDING REPLIES', num('pending_business_inquiries'))
+
+    const topTopics = output.top_topics_this_week
+    if (Array.isArray(topTopics) && topTopics.length > 0) {
+      const top = topTopics[0] as { name?: unknown }
+      if (typeof top?.name === 'string') {
+        stats.push({ label: 'TOP TOPIC', value: top.name })
+      }
+    }
+
+    return stats.length > 0 ? { title: 'This Week', stats } : null
+  }
+
+  return null
+}
+
 const TOOLS = [
   {
     name: 'search_comments',
@@ -1082,6 +1128,7 @@ export async function POST(request: NextRequest) {
     // might call show_video_card early then keep reasoning in a later round, and
     // the card should still reach the client either way.
     const videoCards: VideoCard[] = []
+    const statsCards: StatsCard[] = []
 
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
       const result = await callClaude(systemPrompt, messages, TOOLS)
@@ -1100,8 +1147,15 @@ export async function POST(request: NextRequest) {
         toolUseBlocks.map(async block => {
           const output = await executeTool(ctx, block.name!, block.input || {})
 
-          if (block.name === 'show_video_card' && output && typeof output === 'object' && !('error' in output)) {
+          const usableOutput = output && typeof output === 'object' && !('error' in output)
+
+          if (block.name === 'show_video_card' && usableOutput) {
             videoCards.push(output as VideoCard)
+          }
+
+          if ((block.name === 'get_channel_overview' || block.name === 'get_weekly_digest') && usableOutput) {
+            const card = buildStatsCard(block.name, output as Record<string, unknown>)
+            if (card) statsCards.push(card)
           }
 
           return {
@@ -1130,6 +1184,7 @@ export async function POST(request: NextRequest) {
       success: true,
       reply: finalText,
       ...(videoCards.length > 0 ? { videoCards } : {}),
+      ...(statsCards.length > 0 ? { statsCards } : {}),
     })
   } catch (err) {
     console.error('Research chat error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
