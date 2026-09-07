@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import type { Highlight } from '@/lib/highlights'
 import type { ActivityItem } from '@/lib/activity'
+import MascotIcon from '@/components/MascotIcon'
 import AttentionList from './AttentionList'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
@@ -238,6 +239,13 @@ export default function AgentSummary({
 
   return (
     <div className="space-y-5">
+      {/* --- Mobile hero. Desktop already leads with the "Your Agent" card beside
+              the greeting, so the mascot would be a third robot up there. --- */}
+      <div className="flex flex-col items-center pt-2 text-center md:hidden">
+        <MascotIcon type="agent" />
+        <p className="mt-3 text-sm text-text-muted">Your AI agent is working for you</p>
+      </div>
+
       {/* --- Greeting --- */}
       <header>
         {/* break-words matters here because creatorDisplayName falls back to the
@@ -269,8 +277,10 @@ export default function AgentSummary({
 
       {/* --- Agent status: full width and prominent on mobile --- */}
       <section className="card glow-card flex items-center gap-4">
+        {/* Hidden below md: the mascot hero above already shows the agent there,
+            and two robot faces on one phone screen reads as a duplicate. */}
         <span
-          className="gradient-primary flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl text-white"
+          className="gradient-primary hidden h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl text-white md:flex"
           aria-hidden="true"
         >
           <RobotIcon />

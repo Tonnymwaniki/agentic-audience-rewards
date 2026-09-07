@@ -42,7 +42,14 @@
 
   --avax-red: #E84142;
 
+  /* Warm accent, used for reward/recognition surfaces where the purple-pink brand
+     gradient would read as "AI" rather than "earned". */
+  --gold: #F59E0B;
+  --gold-light: #FBBF24;
+  --gold-dim: rgba(245, 158, 11, 0.18);
+
   --gradient-primary: linear-gradient(135deg, var(--purple) 0%, var(--pink) 100%);
+  --gradient-gold: linear-gradient(135deg, var(--gold-light) 0%, var(--gold) 100%);
 }
 
 @theme inline {
@@ -72,6 +79,9 @@
   --color-teal-dim: var(--teal-dim);
   --color-green: var(--green);
   --color-green-dim: var(--green-dim);
+  --color-gold: var(--gold);
+  --color-gold-light: var(--gold-light);
+  --color-gold-dim: var(--gold-dim);
   --color-avax-red: var(--avax-red);
 
   --font-display: var(--font-display);
@@ -109,6 +119,31 @@ body {
 
 .gradient-primary {
   background-image: var(--gradient-primary);
+}
+
+.gradient-gold {
+  background-image: var(--gradient-gold);
+}
+
+/* --- Mascot ---------------------------------------------------------------- */
+
+/* Slow breathing so the mascot reads as alive rather than as a loading spinner.
+   Scale only — no opacity change, which at this size would flicker. */
+@keyframes mascotBreathe {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.03);
+  }
+}
+
+.mascot-breathe {
+  animation: mascotBreathe 3.6s ease-in-out infinite;
+  /* The glow ring behind it is a separate, blurred layer; promoting this to its
+     own layer stops the repaint from smearing that blur every frame. */
+  will-change: transform;
 }
 
 /* Same gradient painted through the glyphs. Needs a transparent text colour, so
@@ -169,6 +204,11 @@ body {
 .icon-badge-green {
   background: var(--green-dim);
   color: var(--green);
+}
+
+.icon-badge-gold {
+  background: var(--gold-dim);
+  color: var(--gold-light);
 }
 
 .badge {
@@ -339,5 +379,10 @@ body {
   .typing-dot {
     animation: none;
     opacity: 0.6;
+  }
+  /* Mascot stays fully visible, just stops breathing. */
+  .mascot-breathe {
+    animation: none;
+    will-change: auto;
   }
 }
