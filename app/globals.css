@@ -145,6 +145,10 @@ body {
   height: 2.25rem;
   border-radius: 0.625rem;
   flex-shrink: 0;
+  /* Without this an inline-flex box sits on the text baseline, so its vertical
+     position depends on the surrounding font's metrics — which shift if a webfont
+     hasn't loaded yet. `middle` makes placement font-independent. */
+  vertical-align: middle;
 }
 
 .icon-badge-purple {

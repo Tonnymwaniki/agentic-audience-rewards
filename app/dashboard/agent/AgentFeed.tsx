@@ -240,7 +240,11 @@ export default function AgentSummary({
     <div className="space-y-5">
       {/* --- Greeting --- */}
       <header>
-        <h1 className="font-display text-2xl leading-tight font-semibold text-text-primary sm:text-3xl">
+        {/* break-words matters here because creatorDisplayName falls back to the
+            signup email when display_name is unset, and an address like
+            "someone@example.com" is a single unbreakable token — at this font size
+            it overran a 320px viewport and forced the page to scroll sideways. */}
+        <h1 className="font-display text-2xl leading-tight font-semibold break-words text-text-primary sm:text-3xl">
           {greeting}, {creatorDisplayName}{' '}
           <span aria-hidden="true" className="inline-block">
             👋

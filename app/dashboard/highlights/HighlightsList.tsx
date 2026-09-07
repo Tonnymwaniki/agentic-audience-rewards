@@ -104,7 +104,10 @@ function HighlightCard({
       <div className="flex items-center justify-between gap-2">
         <Link
           href={`/dashboard/inbox/${highlight.postId}`}
-          className="truncate text-xs text-text-muted underline hover:text-text-primary"
+          // min-w-0: `truncate` implies white-space:nowrap, and a flex item's
+          // default min-width:auto would let a long title force the page wider than
+          // the viewport instead of ellipsising.
+          className="min-w-0 truncate text-xs text-text-muted underline hover:text-text-primary"
         >
           {highlight.videoTitle}
         </Link>

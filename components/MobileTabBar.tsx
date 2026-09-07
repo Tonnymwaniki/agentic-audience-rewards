@@ -6,8 +6,11 @@ import { usePathname } from 'next/navigation'
 // Fixed bottom tab bar for narrow viewports. The dashboard's top nav hides its link
 // row at the same `md` breakpoint, so exactly one navigation is visible at a time.
 //
-// Five items is the practical maximum at 320px: at that width each tab gets ~64px,
-// which fits a 24px icon over a 10px label without the labels truncating.
+// Four tabs split 2 | gap | 2, with Research promoted out of the row into a floating
+// action button that sits in the gap. The gap is a real flex child rather than the
+// FAB being laid over a tab, so the FAB can never cover another tab's tap target.
+
+const FAB_HREF = '/dashboard/research'
 
 type TabItem = {
   href: string
@@ -52,19 +55,6 @@ const TABS: TabItem[] = [
     ),
   },
   {
-    href: '/dashboard/research',
-    label: 'Research',
-    icon: (
-      <svg {...iconProps}>
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
-        />
-      </svg>
-    ),
-  },
-  {
     href: '/dashboard/rewards',
     label: 'Rewards',
     icon: (
@@ -92,8 +82,62 @@ const TABS: TabItem[] = [
   },
 ]
 
+// Sparkles — deliberately unlike the single-weight outline glyphs in the bar, so
+// the FAB reads as a different kind of thing rather than a fifth tab.
+function SparkleIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={1.7}
+      className="h-7 w-7"
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456ZM16.894 20.567 16.5 21.75l-.394-1.183a2.25 2.25 0 0 0-1.423-1.423L13.5 18.75l1.183-.394a2.25 2.25 0 0 0 1.423-1.423l.394-1.183.394 1.183a2.25 2.25 0 0 0 1.423 1.423l1.183.394-1.183.394a2.25 2.25 0 0 0-1.423 1.423Z"
+      />
+    </svg>
+  )
+}
+
 export default function MobileTabBar() {
   const pathname = usePathname()
+  const fabActive = pathname === FAB_HREF || pathname?.startsWith(FAB_HREF + '/')
+
+  // Split 2 | gap | 2 so the FAB occupies its own column.
+  const left = TABS.slice(0, 2)
+  const right = TABS.slice(2)
+
+  function renderTab(tab: TabItem) {
+    const isActive = pathname === tab.href || pathname?.startsWith(tab.href + '/')
+
+    return (
+      <li key={tab.href} className="flex-1">
+        <Link
+          href={tab.href}
+          aria-current={isActive ? 'page' : undefined}
+          // min-h-14 keeps every tap target comfortably past the 44px minimum
+          // even though the label text is small.
+          className={`flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-2 transition-colors ${
+            isActive ? 'text-purple-text' : 'text-text-muted active:text-text-primary'
+          }`}
+        >
+          <span
+            className={`flex h-8 w-12 items-center justify-center rounded-full transition-colors ${
+              isActive ? 'bg-purple/15' : ''
+            }`}
+          >
+            {tab.icon}
+          </span>
+          <span className="text-[10px] leading-none font-medium">{tab.label}</span>
+        </Link>
+      </li>
+    )
+  }
 
   return (
     <nav
@@ -101,36 +145,49 @@ export default function MobileTabBar() {
       // The bar itself carries the safe-area inset as bottom padding, so the row of
       // tabs sits above the home indicator rather than behind it. The value is 0px
       // on every device without one, which leaves the bar flush to the edge.
+      //
+      // No overflow clipping here: the FAB is absolutely positioned so that its top
+      // half rises above the bar's top edge, and clipping would cut it in half.
       className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-surface/95 backdrop-blur md:hidden"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
-      <ul className="flex items-stretch">
-        {TABS.map(tab => {
-          const isActive = pathname === tab.href || pathname?.startsWith(tab.href + '/')
+      {/* Sits above the bar's own background and border (z-10), and above page
+          content (the nav's z-40), so the lifted half is never clipped or covered. */}
+      <Link
+        href={FAB_HREF}
+        aria-label="Research"
+        aria-current={fabActive ? 'page' : undefined}
+        className="gradient-primary absolute -top-6 left-1/2 z-10 flex h-15 w-15 -translate-x-1/2 items-center justify-center rounded-full text-white ring-4 ring-background transition-transform active:scale-95"
+        style={{
+          // Not .glow-card: that class's first layer is a 1px purple ring shadow
+          // sized for a rectangular card, which reads as a hard edge on a circle.
+          // Same colours, tuned for a round, lifted control.
+          boxShadow:
+            '0 6px 20px -4px rgba(139, 92, 246, 0.65), 0 3px 12px -2px rgba(236, 72, 153, 0.45)',
+        }}
+      >
+        <SparkleIcon />
+      </Link>
 
-          return (
-            <li key={tab.href} className="flex-1">
-              <Link
-                href={tab.href}
-                aria-current={isActive ? 'page' : undefined}
-                // min-h-14 keeps every tap target comfortably past the 44px minimum
-                // even though the label text is small.
-                className={`flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-2 transition-colors ${
-                  isActive ? 'text-purple-text' : 'text-text-muted active:text-text-primary'
-                }`}
-              >
-                <span
-                  className={`flex h-8 w-12 items-center justify-center rounded-full transition-colors ${
-                    isActive ? 'bg-purple/15' : ''
-                  }`}
-                >
-                  {tab.icon}
-                </span>
-                <span className="text-[10px] leading-none font-medium">{tab.label}</span>
-              </Link>
-            </li>
-          )
-        })}
+      <ul className="flex items-stretch">
+        {left.map(renderTab)}
+
+        {/* Reserved column under the FAB. Holds the label so Research still reads as
+            a named destination like its neighbours, and keeps the flex maths even so
+            the four tabs stay equally spaced. */}
+        <li aria-hidden="true" className="w-16 flex-shrink-0">
+          <div className="flex min-h-14 flex-col items-center justify-end px-1 py-2">
+            <span
+              className={`text-[10px] leading-none font-medium ${
+                fabActive ? 'text-purple-text' : 'text-text-muted'
+              }`}
+            >
+              Research
+            </span>
+          </div>
+        </li>
+
+        {right.map(renderTab)}
       </ul>
     </nav>
   )

@@ -39,7 +39,9 @@ export default function Avatar({ name, size = 40, className = '' }: AvatarProps)
 
   return (
     <div
-      className={`flex items-center justify-center rounded-full font-body font-medium text-white select-none ${className}`}
+      // flex-shrink-0: this is almost always a flex item next to text. Without it
+      // a long neighbour squashes the fixed-width circle into an oval.
+      className={`flex flex-shrink-0 items-center justify-center rounded-full font-body font-medium text-white select-none ${className}`}
       style={{
         width: size,
         height: size,

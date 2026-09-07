@@ -81,7 +81,12 @@ function AttentionCard({
             {item.draftReply && <CopyReplyButton text={item.draftReply} />}
             <Link
               href={`/dashboard/inbox/${item.postId}`}
-              className="truncate text-xs text-text-muted underline transition-colors hover:text-text-primary"
+              // min-w-0 is load-bearing, not decorative. `truncate` sets
+              // white-space:nowrap, and a flex item defaults to min-width:auto —
+              // its content-based minimum. A long video title therefore refused to
+              // shrink and forced the whole page wider than the viewport. min-w-0
+              // lets it shrink so the ellipsis actually engages.
+              className="min-w-0 flex-1 truncate text-xs text-text-muted underline transition-colors hover:text-text-primary"
             >
               {item.videoTitle}
             </Link>
