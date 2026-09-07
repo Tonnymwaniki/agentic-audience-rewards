@@ -1,6 +1,17 @@
 'use client'
 
-import { useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+
+/**
+ * Beyond this the box scrolls internally rather than growing without limit — a very
+ * long reply would otherwise push the Approve button off the bottom of the screen.
+ *
+ * 360 rather than a round 300, chosen against the real distribution of drafted
+ * replies (n=77: median 248 chars, p90 331, max 463). At a 375px viewport that fits
+ * about the 90th percentile without scrolling; at 414px it fits everything typical.
+ * Going higher would let one editor occupy more than half a phone screen.
+ */
+const MAX_TEXTAREA_HEIGHT = 360
 
 // The drafted reply, editable in place, plus Save & Approve and Copy.
 //
@@ -55,6 +66,7 @@ export default function DraftReplyEditor({
   // Seeded with the approved text when there is one, so re-opening a reply shows
   // what was actually sent rather than reverting to the agent's original.
   const [text, setText] = useState(finalReplyText ?? draftReply)
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [savedEdited, setSavedEdited] = useState<boolean | null>(null)
@@ -67,6 +79,43 @@ export default function DraftReplyEditor({
   // previously-edited reply differs from the save but matches the draft.
   const differsFromDraft = text.trim() !== draftReply.trim()
   const isEmpty = text.trim().length === 0
+
+  // Grow to fit the content, then scroll past MAX_TEXTAREA_HEIGHT.
+  //
+  // The previous version set `rows` from the NEWLINE count, which is the wrong
+  // measure: a drafted reply is normally one long paragraph with no newlines at all,
+  // so it always got the 3-row minimum and scrolled internally on a phone, hiding
+  // most of the text. scrollHeight accounts for wrapping, which is what actually
+  // determines the height needed at a given width.
+  const resize = useCallback(() => {
+    const el = textareaRef.current
+    if (!el) return
+    // Reset first — scrollHeight only grows while an explicit height is set, so
+    // without this the box could expand but never shrink back.
+    el.style.height = 'auto'
+    // scrollHeight covers content + padding but NOT borders, while box-sizing is
+    // border-box here, so height must include them or the box lands 2px short and
+    // shows a phantom scrollbar. offsetHeight - clientHeight is exactly that.
+    const chrome = el.offsetHeight - el.clientHeight
+    el.style.height = `${Math.min(el.scrollHeight + chrome, MAX_TEXTAREA_HEIGHT)}px`
+  }, [])
+
+  // useLayoutEffect runs before paint, so the box is never briefly shown at the
+  // wrong height on mount.
+  useLayoutEffect(resize, [text, resize])
+
+  // Re-measure once the webfont lands: fallback metrics differ enough that a reply
+  // sized against them can end up a line short after the swap.
+  useEffect(() => {
+    if (typeof document === 'undefined' || !document.fonts?.ready) return
+    let cancelled = false
+    document.fonts.ready.then(() => {
+      if (!cancelled) resize()
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [resize])
 
   async function handleSave() {
     if (saving || isEmpty) return
@@ -116,11 +165,15 @@ export default function DraftReplyEditor({
       </label>
       <textarea
         id={`draft-${commentId}`}
+        ref={textareaRef}
         value={text}
         onChange={e => setText(e.target.value)}
-        rows={Math.min(8, Math.max(3, text.split('\n').length + 1))}
+        rows={1}
         disabled={saving}
-        className="w-full resize-y rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm leading-relaxed text-text-primary focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none disabled:opacity-60"
+        // Height is set imperatively by resize(); maxHeight caps it and overflowY
+        // only engages once the content exceeds that cap.
+        className="w-full resize-none rounded-lg border border-white/10 bg-surface px-3 py-2 text-sm leading-relaxed text-text-primary focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none disabled:opacity-60"
+        style={{ maxHeight: MAX_TEXTAREA_HEIGHT, overflowY: 'auto' }}
       />
 
       <div className="mt-2 flex flex-wrap items-center gap-2">

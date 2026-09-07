@@ -46,7 +46,12 @@ export default async function HighlightsPage() {
   )
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
+    // No p-6 here: app/dashboard/layout.tsx already supplies the page padding AND
+    // the bottom clearance for the floating action button. Nesting a second p-6
+    // inside it halved the usable width — at a 320px viewport the drafted-reply
+    // editor was left roughly 160px wide, which is what made replies wrap to ~20
+    // lines. max-w-3xl still keeps this page narrower than the layout's max-w-5xl.
+    <div className="mx-auto max-w-3xl">
       <PageHeader title="Highlights" backHref="/dashboard/agent" backLabel="Agent Home" />
       <HighlightsList draftHighlights={draftHighlights} repeatedHighlights={repeatedHighlights} />
     </div>
