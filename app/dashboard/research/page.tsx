@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { computeTrendingGroups, type TrendingComment } from '@/lib/trending'
 import ResearchChat from './ResearchChat'
+import ResearchHero from './ResearchHero'
 import ResearchSidebar, {
   type ResearchSidebarData,
   type SidebarInsight,
@@ -280,7 +281,7 @@ export default async function ResearchPage() {
 
   const { data: creator, error: creatorError } = await supabase
     .from('creators')
-    .select('id')
+    .select('id, display_name')
     .eq('user_id', user.id)
     .maybeSingle()
 
@@ -299,18 +300,27 @@ export default async function ResearchPage() {
 
   const sidebarData = await loadSidebarData(supabase, creator.id)
 
+  // Same fallback chain as Agent Home: an email display name is shown as-is.
+  const creatorDisplayName = creator.display_name || user.email || 'there'
+
   return (
-    // Below lg the sidebar is hidden entirely rather than stacked underneath: its
-    // content is surfaced inside ResearchChat's own mobile landing view instead, so
-    // stacking it too would repeat every card twice on a phone.
-    <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <ResearchChat
-        creatorId={creator.id}
-        interests={sidebarData.interests}
-        trending={sidebarData.trending}
-      />
-      <div className="hidden lg:block">
-        <ResearchSidebar data={sidebarData} />
+    <div className="space-y-6">
+      {/* Full width, above the two-column area — the hero introduces the whole page,
+          not just the chat column. */}
+      <ResearchHero creatorName={creatorDisplayName} />
+
+      {/* Below lg the sidebar is hidden entirely rather than stacked underneath: its
+          content is surfaced inside ResearchChat's own mobile landing view instead,
+          so stacking it too would repeat every card twice on a phone. */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
+        <ResearchChat
+          creatorId={creator.id}
+          interests={sidebarData.interests}
+          trending={sidebarData.trending}
+        />
+        <div className="hidden lg:block">
+          <ResearchSidebar data={sidebarData} />
+        </div>
       </div>
     </div>
   )

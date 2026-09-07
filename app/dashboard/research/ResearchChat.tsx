@@ -403,16 +403,9 @@ function MobileResearchLanding({
   error: string | null
 }) {
   return (
+    // The page-level ResearchHero now carries the welcome heading, so this view
+    // opens straight into the ask field rather than repeating a greeting.
     <div className="space-y-5">
-      <header>
-        <h1 className="font-display text-2xl leading-tight font-semibold text-text-primary">
-          Understand your audience
-        </h1>
-        <p className="mt-1.5 text-sm leading-relaxed text-text-muted">
-          Ask anything about your comments, your people, or what to make next.
-        </p>
-      </header>
-
       <form onSubmit={onSubmit}>
         <div className="relative">
           <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-text-muted">
@@ -647,7 +640,9 @@ export default function ResearchChat({
       )}
 
       <div
-        className={`h-[70vh] min-h-[480px] flex-col overflow-hidden rounded-xl border border-white/10 bg-background lg:h-[calc(100vh-11rem)] ${
+        // lg height leaves room for the hero + feature pills that now sit above it,
+        // so the panel still ends near the fold instead of pushing off-screen.
+        className={`h-[70vh] min-h-[480px] flex-col overflow-hidden rounded-xl border border-white/10 bg-background lg:h-[calc(100vh-27rem)] lg:min-h-[420px] ${
           // While the mobile landing is showing, the panel is desktop-only.
           showMobileLanding ? 'hidden lg:flex' : 'flex'
         }`}

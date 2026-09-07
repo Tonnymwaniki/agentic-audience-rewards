@@ -146,6 +146,39 @@ body {
   will-change: transform;
 }
 
+/* Sparkle particles around the Research hero mascot. Two nested motions: the ring
+   they sit on rotates slowly, and each one twinkles on its own offset — so they
+   never pulse in unison, which would read as a loading state. Both are transform
+   and opacity only, so neither can affect layout or page width. */
+@keyframes sparkleOrbit {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes sparkleTwinkle {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+.sparkle-orbit {
+  animation: sparkleOrbit 26s linear infinite;
+}
+
+.sparkle-twinkle {
+  animation: sparkleTwinkle 3.2s ease-in-out infinite;
+}
+
 /* Same gradient painted through the glyphs. Needs a transparent text colour, so
    it will override any `text-*` utility on the same element — that's intended. */
 .gradient-primary-text {
@@ -384,5 +417,15 @@ body {
   .mascot-breathe {
     animation: none;
     will-change: auto;
+  }
+  /* Sparkles hold their position and stay fully opaque rather than vanishing —
+     the twinkle keyframes bottom out at 0.3 opacity, so leaving them mid-animation
+     would dim them permanently. */
+  .sparkle-orbit {
+    animation: none;
+  }
+  .sparkle-twinkle {
+    animation: none;
+    opacity: 1;
   }
 }
