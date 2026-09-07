@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 
 export type ProgressCallback = (count: number) => void
@@ -47,10 +48,88 @@ function buildProfileContext(profile: BusinessProfile | null | undefined): strin
   return ` The business's real, verified details — ${parts.join('; ')}. If the customer's question directly matches one of these (asking for contact, location, hours, delivery), include the ACTUAL real answer in your drafted reply rather than a generic "please reach out" response. Only state details listed above — never invent, guess, or approximate any detail that isn't listed, and don't imply one exists. If the question doesn't match any of this profile data, draft a reply as before.`
 }
 
+/** One past correction: what the agent drafted, and what the creator actually sent. */
+export type StyleExample = {
+  draft: string
+  final: string
+}
+
+export const MAX_STYLE_EXAMPLES = 5
+/** Long edits are usually a rewrite of the substance, not a style signal; and five
+ *  of them would crowd out the actual comment being replied to. */
+const STYLE_EXAMPLE_MAX_CHARS = 400
+
+/**
+ * The creator's most recent edited replies, newest first, for use as few-shot style
+ * examples.
+ *
+ * Scoped through the join chain comment_categories → comments → posts.creator_id
+ * with `!inner`, so the database returns only this creator's rows — another
+ * creator's edit history is never fetched, not merely filtered out afterwards.
+ *
+ * Returns [] on any error: style calibration is a nice-to-have, and a failure here
+ * must not stop a draft from being written.
+ */
+export async function loadStyleExamples(
+  supabase: SupabaseClient,
+  creatorId: string,
+  limit: number = MAX_STYLE_EXAMPLES
+): Promise<StyleExample[]> {
+  const { data, error } = await supabase
+    .from('comment_categories')
+    .select('draft_reply, final_reply_text, draft_reply_approved_at, comments!inner ( posts!inner ( creator_id ) )')
+    .eq('comments.posts.creator_id', creatorId)
+    .eq('reply_was_edited', true)
+    .not('final_reply_text', 'is', null)
+    .not('draft_reply', 'is', null)
+    .order('draft_reply_approved_at', { ascending: false })
+    .limit(limit)
+
+  if (error) {
+    console.error('Style examples fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    return []
+  }
+
+  type Row = { draft_reply: string | null; final_reply_text: string | null }
+
+  return ((data || []) as unknown as Row[])
+    .map((row): StyleExample => ({
+      draft: row.draft_reply?.trim() || '',
+      final: row.final_reply_text?.trim() || '',
+    }))
+    .filter(
+      (example: StyleExample) =>
+        example.draft.length > 0 &&
+        example.final.length > 0 &&
+        // A row where the two are identical carries no signal about anything the
+        // creator changed, whatever the stored flag says.
+        example.draft !== example.final &&
+        example.draft.length <= STYLE_EXAMPLE_MAX_CHARS &&
+        example.final.length <= STYLE_EXAMPLE_MAX_CHARS
+    )
+}
+
+// Few-shot block showing how this creator has previously rewritten drafts. Returns
+// '' when there are no examples, so a new creator's prompt is byte-for-byte what it
+// was before this feature existed — no "0 examples", no empty heading.
+function buildStyleContext(examples: StyleExample[] | null | undefined): string {
+  if (!examples || examples.length === 0) return ''
+
+  const rendered = examples
+    .map(
+      (example, i) =>
+        `Example ${i + 1} — AI drafted: '${example.draft}' → Creator actually sent: '${example.final}'`
+    )
+    .join('\n')
+
+  return `\n\nHere's how this creator has previously adjusted AI-drafted replies to better match their voice — learn from the pattern of changes:\n${rendered}\nMatch this creator's tone, phrasing style, and any consistent adjustments they tend to make, based on these examples. Do not copy the specific facts from these examples — only the voice.`
+}
+
 export async function generateDraftReply(
   commentText: string,
   category: string,
-  profile?: BusinessProfile | null
+  profile?: BusinessProfile | null,
+  styleExamples?: StyleExample[] | null
 ): Promise<string> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
@@ -58,7 +137,10 @@ export async function generateDraftReply(
   try {
     const instruction = DRAFT_REPLY_INSTRUCTIONS[category] ?? DRAFT_REPLY_INSTRUCTIONS.purchase_intent
     const profileContext = PROFILE_AWARE_CATEGORIES.has(category) ? buildProfileContext(profile) : ''
-    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction} Respond with ONLY the reply text, no preamble.`
+    // Style applies to every category: how someone signs off or phrases things is
+    // not specific to questions or purchase intent the way business facts are.
+    const styleContext = buildStyleContext(styleExamples)
+    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction} Respond with ONLY the reply text, no preamble.${styleContext}`
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -352,6 +434,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   let postTitle = ''
   let postDescription = ''
   let businessProfile: BusinessProfile | null = null
+  let styleExamples: StyleExample[] = []
 
   // One post fetch covers both needs: title/description for the relevance check,
   // and creator_id so the business profile can be looked up below.
@@ -367,6 +450,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     } else if (post) {
       postTitle = post.title || ''
       postDescription = post.content || ''
+
+      // Once per post, not per comment. Unlike the business profile this applies to
+      // every draftable category, since voice isn't category-specific.
+      if (post.creator_id) {
+        styleExamples = await loadStyleExamples(supabase, post.creator_id)
+        if (styleExamples.length > 0) {
+          console.log(`Categorize: applying ${styleExamples.length} style example(s) from past edits.`)
+        }
+      }
 
       // Fetched once per run, not per comment — and only when there's actually a
       // question or purchase_intent draft that could use it.
@@ -396,7 +488,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         if (!isRelevant) continue
       }
 
-      const draftReply = await generateDraftReply(text, comment.category, businessProfile)
+      const draftReply = await generateDraftReply(text, comment.category, businessProfile, styleExamples)
       await supabase
         .from('comment_categories')
         .update({ draft_reply: draftReply, draft_reply_created_at: new Date().toISOString() })

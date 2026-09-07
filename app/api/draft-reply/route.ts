@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateDraftReply, BUSINESS_PROFILE_COLUMNS, type BusinessProfile } from '@/lib/categorize'
+import {
+  generateDraftReply,
+  loadStyleExamples,
+  BUSINESS_PROFILE_COLUMNS,
+  type BusinessProfile,
+} from '@/lib/categorize'
 
 export async function POST(request: NextRequest) {
   try {
@@ -50,7 +55,11 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    const draftReply = await generateDraftReply(comment.text, category, businessProfile)
+    // Same reasoning as the profile above: without this, "Regenerate" would strip
+    // the creator's learned voice back out of an otherwise calibrated reply.
+    const styleExamples = creatorId ? await loadStyleExamples(supabase, creatorId) : []
+
+    const draftReply = await generateDraftReply(comment.text, category, businessProfile, styleExamples)
 
     await supabase
       .from('comment_categories')

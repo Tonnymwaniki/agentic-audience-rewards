@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import {
   generateDraftReply,
+  loadStyleExamples,
   isBusinessRelevant,
   BUSINESS_PROFILE_COLUMNS,
   type BusinessProfile,
@@ -102,6 +103,14 @@ export async function regenerateDraftsForCreator(
     console.error('Draft regeneration profile fetch error:', JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2))
   } else if (creator) {
     businessProfile = creator as unknown as BusinessProfile
+  }
+
+  // Also once per run, not per comment: a 25-comment sweep would otherwise issue 25
+  // identical style queries. Empty for a creator who has never edited a draft, in
+  // which case the prompt is unchanged from before this feature.
+  const styleExamples = await loadStyleExamples(supabase, creator_id)
+  if (styleExamples.length > 0) {
+    console.log(`Draft regeneration: applying ${styleExamples.length} style example(s) from past edits.`)
   }
 
   const comments: CommentRow[] = []
@@ -231,7 +240,7 @@ export async function regenerateDraftsForCreator(
         }
       }
 
-      const draftReply = await generateDraftReply(comment.text, category.category, businessProfile)
+      const draftReply = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples)
 
       const stamped = await markChecked(comment.id, {
         draft_reply: draftReply,
