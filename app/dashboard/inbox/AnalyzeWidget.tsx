@@ -33,7 +33,7 @@ export default function AnalyzeWidget({ creatorId }: AnalyzeWidgetProps) {
             onChange={e => setUrl(e.target.value)}
             placeholder="https://www.youtube.com/watch?v=..."
             disabled={status === 'running'}
-            className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
+            className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
           />
         </div>
 
@@ -51,7 +51,7 @@ export default function AnalyzeWidget({ creatorId }: AnalyzeWidgetProps) {
           <div className="space-y-3">
             <div className="h-2 overflow-hidden rounded-full bg-surface-hover">
               <div
-                className="h-full rounded-full bg-cobalt transition-all duration-500"
+                className="h-full rounded-full bg-purple transition-all duration-500"
                 style={{ width: `${progressPercent}%` }}
               />
             </div>

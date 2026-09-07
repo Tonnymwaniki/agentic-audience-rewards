@@ -207,7 +207,7 @@ export default async function HomePage() {
               { value: stats.events, label: 'PEOPLE RECOGNIZED' },
             ].map((stat) => (
               <div key={stat.label} className="text-center">
-                <p className="font-display text-5xl font-semibold text-cobalt md:text-6xl">
+                <p className="font-display text-5xl font-semibold text-purple-text md:text-6xl">
                   {stat.value.toLocaleString()}
                 </p>
                 <p className="mt-2 font-mono text-xs text-text-muted">{stat.label}</p>
@@ -232,7 +232,7 @@ export default async function HomePage() {
           )}
 
           <p className="mt-8 text-center">
-            <Link href="/recognized" className="text-sm text-cobalt underline hover:text-cobalt-hover">
+            <Link href="/recognized" className="text-sm text-purple-text underline hover:text-purple-hover">
               See everyone recognized →
             </Link>
           </p>

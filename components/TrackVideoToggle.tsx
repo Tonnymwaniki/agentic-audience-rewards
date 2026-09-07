@@ -56,11 +56,11 @@ export default function TrackVideoToggle({ postId }: { postId: string }) {
       disabled={saving}
       className={`inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm transition-colors disabled:opacity-50 ${
         enabled
-          ? 'border-cobalt bg-cobalt/10 text-cobalt'
+          ? 'border-purple bg-purple/10 text-purple-text'
           : 'border-white/10 bg-surface text-text-muted hover:text-text-primary'
       }`}
     >
-      <span className={`h-2 w-2 rounded-full ${enabled ? 'bg-cobalt' : 'bg-text-muted'}`} />
+      <span className={`h-2 w-2 rounded-full ${enabled ? 'bg-purple' : 'bg-text-muted'}`} />
       {enabled ? 'Tracking new comments' : 'Track this video'}
     </button>
   )

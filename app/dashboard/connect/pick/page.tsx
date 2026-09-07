@@ -197,7 +197,7 @@ function PickPageInner() {
           </p>
           <div className="mt-2 h-2 overflow-hidden rounded-full bg-surface-hover">
             <div
-              className="h-full rounded-full bg-cobalt transition-all duration-500"
+              className="h-full rounded-full bg-purple transition-all duration-500"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -215,7 +215,7 @@ function PickPageInner() {
           ) : (
             <p className="text-sm text-text-primary">
               Analyzed {autoQueue.length} video{autoQueue.length === 1 ? '' : 's'} —{' '}
-              <span className="font-body font-semibold text-cobalt">{autoSummary.commentsIngested}</span>{' '}
+              <span className="font-body font-semibold text-purple-text">{autoSummary.commentsIngested}</span>{' '}
               comment{autoSummary.commentsIngested === 1 ? '' : 's'} understood,{' '}
               <span className="font-body font-semibold text-pink">{autoSummary.qualified}</span>{' '}
               {autoSummary.qualified === 1 ? 'person' : 'people'} recognized.
@@ -264,7 +264,7 @@ function PickPageInner() {
                 key={video.videoId}
                 className={`card relative overflow-hidden transition-all duration-300 ${
                   isRunning && !isAnalyzing ? 'opacity-40 blur-[1px]' : ''
-                } ${isAnalyzing ? 'ring-2 ring-cobalt' : ''}`}
+                } ${isAnalyzing ? 'ring-2 ring-purple' : ''}`}
               >
                 <div className="aspect-video w-full overflow-hidden rounded-t-lg bg-surface">
                   <img
@@ -318,7 +318,7 @@ function PickPageInner() {
                     <div className="w-full space-y-3">
                       <div className="h-2 overflow-hidden rounded-full bg-surface-hover">
                         <div
-                          className="h-full rounded-full bg-cobalt transition-all duration-500"
+                          className="h-full rounded-full bg-purple transition-all duration-500"
                           style={{ width: `${progressPercent}%` }}
                         />
                       </div>

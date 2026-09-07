@@ -3,6 +3,8 @@
 import { useState, useRef, useEffect } from 'react'
 import ReactMarkdown from 'react-markdown'
 import Avatar from '@/components/Avatar'
+import { InterestBars, TrendingList } from './AudienceInsights'
+import type { SidebarInterest, SidebarTrendingTopic } from './ResearchSidebar'
 
 type VideoCard = {
   post_id: string
@@ -172,7 +174,7 @@ function IdeaCardDisplay({ card }: { card: IdeaCard }) {
   return (
     <div className="card mt-3">
       <div className="flex items-start gap-3">
-        <span className="font-display text-lg font-semibold text-cobalt">{card.number}</span>
+        <span className="font-display text-lg font-semibold text-purple-text">{card.number}</span>
         <div className="min-w-0 flex-1">
           <p className="font-body text-sm font-semibold text-text-primary">{card.title}</p>
           <p className="mt-1 text-sm leading-relaxed text-text-primary">{card.description}</p>
@@ -186,7 +188,7 @@ function IdeaCardDisplay({ card }: { card: IdeaCard }) {
 function AnomalyCardDisplay({ card }: { card: AnomalyCard }) {
   if (!card.hasAnomaly) {
     return (
-      <div className="mb-3 rounded-lg border border-cobalt/40 bg-cobalt/10 p-4">
+      <div className="mb-3 rounded-lg border border-purple/40 bg-purple/10 p-4">
         <p className="text-sm text-text-primary">
           Nothing unusual — activity is within normal range.
         </p>
@@ -219,7 +221,7 @@ function AnomalyCardDisplay({ card }: { card: AnomalyCard }) {
 }
 
 // Stat grid styled after the landing page's "Live Proof" block — font-display
-// numerals in cobalt over uppercase mono labels — scaled down to sit inside a
+// numerals in purple over uppercase mono labels — scaled down to sit inside a
 // chat bubble rather than a full-width marketing section.
 function StatsCardDisplay({ card }: { card: StatsCard }) {
   return (
@@ -228,7 +230,7 @@ function StatsCardDisplay({ card }: { card: StatsCard }) {
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3">
         {card.stats.map(stat => (
           <div key={stat.label} className="text-center">
-            <p className="font-display text-2xl font-semibold text-cobalt">
+            <p className="font-display text-2xl font-semibold text-purple-text">
               {typeof stat.value === 'number' ? stat.value.toLocaleString() : stat.value}
             </p>
             <p className="mt-1 font-mono text-[10px] leading-tight text-text-muted">{stat.label}</p>
@@ -267,7 +269,7 @@ function MarkdownMessage({ content }: { content: string }) {
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-cobalt underline hover:text-cobalt-hover"
+              className="text-purple-text underline hover:text-purple-hover"
             >
               {children}
             </a>
@@ -340,7 +342,160 @@ const SUGGESTED_QUESTIONS = [
   'Show me repeated comments',
 ]
 
-export default function ResearchChat({ creatorId }: { creatorId: string }) {
+function ArrowRightIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 4.5 21 12m0 0-7.5 7.5M21 12H3" />
+    </svg>
+  )
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      className="h-5 w-5"
+      aria-hidden="true"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+      />
+    </svg>
+  )
+}
+
+/**
+ * The phone-first Research landing view, shown below lg before anything is asked.
+ *
+ * Uses a single-line <input> rather than reusing the chat's auto-growing
+ * <textarea>: the mockup's element is a search field, and — more practically — two
+ * textareas bound to the same `input` state would fight over one autogrow ref.
+ */
+function MobileResearchLanding({
+  input,
+  onInputChange,
+  onSubmit,
+  onAsk,
+  interests,
+  trending,
+  error,
+}: {
+  input: string
+  onInputChange: (value: string) => void
+  onSubmit: (e: React.FormEvent) => void
+  onAsk: (question: string) => void
+  interests: SidebarInterest[]
+  trending: SidebarTrendingTopic[]
+  error: string | null
+}) {
+  return (
+    <div className="space-y-5">
+      <header>
+        <h1 className="font-display text-2xl leading-tight font-semibold text-text-primary">
+          Understand your audience
+        </h1>
+        <p className="mt-1.5 text-sm leading-relaxed text-text-muted">
+          Ask anything about your comments, your people, or what to make next.
+        </p>
+      </header>
+
+      <form onSubmit={onSubmit}>
+        <div className="relative">
+          <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-text-muted">
+            <SearchIcon />
+          </span>
+          <input
+            type="text"
+            value={input}
+            onChange={e => onInputChange(e.target.value)}
+            placeholder="Ask about your audience..."
+            aria-label="Ask about your audience"
+            // pr leaves room for the submit button sitting inside the field.
+            className="h-14 w-full rounded-2xl border border-white/10 bg-surface pr-14 pl-12 text-base text-text-primary placeholder:text-text-muted focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none"
+          />
+          {/* Only mounted once there's something to send. A full-width gradient
+              button sitting permanently at 40% opacity read as a broken/dead
+              element on an otherwise empty landing screen. */}
+          {input.trim() && (
+            <button
+              type="submit"
+              aria-label="Ask"
+              className="gradient-primary absolute top-1/2 right-2.5 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-xl text-white"
+            >
+              <ArrowRightIcon />
+            </button>
+          )}
+        </div>
+        {error && <p className="mt-2 text-sm text-avax-red">{error}</p>}
+      </form>
+
+      <div className="flex flex-wrap gap-2">
+        {SUGGESTED_QUESTIONS.map(question => (
+          <button
+            key={question}
+            onClick={() => onAsk(question)}
+            className="rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
+          >
+            {question}
+          </button>
+        ))}
+      </div>
+
+      <section className="card">
+        <h2 className="mb-3 font-display text-base font-semibold text-text-primary">
+          Audience Insights
+        </h2>
+        <InterestBars interests={interests} />
+      </section>
+
+      <section className="card">
+        <h2 className="mb-3 font-display text-base font-semibold text-text-primary">
+          Trending topics
+        </h2>
+        <TrendingList topics={trending} />
+      </section>
+
+      <section className="gradient-primary rounded-xl p-5">
+        <p className="font-display text-lg leading-snug font-semibold text-white">
+          Want to know what your audience really thinks?
+        </p>
+        <p className="mt-1.5 text-sm leading-relaxed text-white/85">
+          Your agent has read every comment. Ask it anything.
+        </p>
+        <button
+          onClick={() => onAsk('What does my audience really think?')}
+          className="mt-4 w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-[#151530] transition-colors active:bg-white/90"
+        >
+          Start Chat
+        </button>
+      </section>
+    </div>
+  )
+}
+
+export default function ResearchChat({
+  creatorId,
+  interests = [],
+  trending = [],
+}: {
+  creatorId: string
+  interests?: SidebarInterest[]
+  trending?: SidebarTrendingTopic[]
+}) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
@@ -463,11 +618,40 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
     }
   }
 
+  // Two shells for one conversation.
+  //
+  // Below lg with nothing asked yet, Research is a browsable landing page: header,
+  // a prominent ask field, suggestion pills, and the audience cards the desktop
+  // sidebar carries. It scrolls with the page rather than trapping a fixed-height
+  // panel inside a phone screen.
+  //
+  // Once a message exists — or at lg and up — the bounded chat panel takes over.
+  // State, handlers and every card renderer are shared between the two, so this is
+  // a layout switch rather than a second implementation.
+  const showMobileLanding = !hasMessages
+
   return (
-    // A bounded panel rather than a full-viewport shell: the page now also carries
-    // the dashboard nav and a persistent sidebar, so the chat scrolls internally
-    // instead of owning the whole screen. min-h keeps it usable on short windows.
-    <div className="flex h-[70vh] min-h-[480px] flex-col overflow-hidden rounded-xl border border-white/10 bg-background lg:h-[calc(100vh-11rem)]">
+    <>
+      {showMobileLanding && (
+        <div className="lg:hidden">
+          <MobileResearchLanding
+            input={input}
+            onInputChange={setInput}
+            onSubmit={handleSubmit}
+            onAsk={sendMessage}
+            interests={interests}
+            trending={trending}
+            error={error}
+          />
+        </div>
+      )}
+
+      <div
+        className={`h-[70vh] min-h-[480px] flex-col overflow-hidden rounded-xl border border-white/10 bg-background lg:h-[calc(100vh-11rem)] ${
+          // While the mobile landing is showing, the panel is desktop-only.
+          showMobileLanding ? 'hidden lg:flex' : 'flex'
+        }`}
+      >
       <header className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-3">
         <h2 className="font-display text-base font-semibold text-text-primary">Research</h2>
         {hasMessages && (
@@ -482,7 +666,7 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5">
         {!hasMessages && (
-          // The opening state lives inside the scroll area now — the composer stays
+          // The opening state lives inside the scroll area — the composer stays
           // bottom-anchored in the panel, so the old collapsing-spacer trick that
           // floated it to screen-centre no longer applies.
           <div className="flex h-full flex-col items-center justify-center gap-5 py-8 text-center">
@@ -509,7 +693,7 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
           {messages.map((message, index) =>
             message.role === 'user' ? (
               <div key={index} className="flex flex-col items-end gap-1">
-                <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-cobalt px-4 py-3 text-sm whitespace-pre-wrap text-white">
+                <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-purple px-4 py-3 text-sm whitespace-pre-wrap text-white">
                   {message.content}
                 </div>
                 <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
@@ -561,7 +745,7 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
               onKeyDown={handleKeyDown}
               placeholder="Ask about your audience..."
               disabled={loading}
-              className="flex-1 resize-none overflow-y-auto rounded-2xl border border-white/10 bg-surface px-5 py-3 text-sm leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
+              className="flex-1 resize-none overflow-y-auto rounded-2xl border border-white/10 bg-surface px-5 py-3 text-sm leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
               style={{ maxHeight: MAX_TEXTAREA_HEIGHT }}
             />
             <button
@@ -574,7 +758,7 @@ export default function ResearchChat({ creatorId }: { creatorId: string }) {
           </form>
         </div>
       </div>
-
-    </div>
+      </div>
+    </>
   )
 }

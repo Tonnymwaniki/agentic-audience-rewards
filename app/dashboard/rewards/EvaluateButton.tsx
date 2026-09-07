@@ -116,7 +116,7 @@ export default function EvaluateButton({ creatorId, postId }: EvaluateButtonProp
         <div className="mt-3 w-full max-w-md">
           <div className="h-2 overflow-hidden rounded-full bg-surface-hover">
             <div
-              className="h-full rounded-full bg-cobalt transition-all duration-500"
+              className="h-full rounded-full bg-purple transition-all duration-500"
               style={{ width: `${progressPercent}%` }}
             />
           </div>

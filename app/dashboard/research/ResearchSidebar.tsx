@@ -1,9 +1,18 @@
 import Link from 'next/link'
+import { InterestBars, TrendingList } from './AudienceInsights'
 
 export type SidebarTrendingTopic = {
   text: string
   count: number
   unique_people: number
+  percentage: number
+}
+
+export type SidebarInterest = {
+  category: string
+  label: string
+  count: number
+  percentage: number
 }
 
 export type SidebarInsight = {
@@ -29,9 +38,20 @@ export type SidebarSentiment = {
 export type ResearchSidebarData = {
   overview: SidebarOverview
   trending: SidebarTrendingTopic[]
+  interests: SidebarInterest[]
   sentiment: SidebarSentiment
   insights: SidebarInsight[]
 }
+
+// One accent per rank, reused by the sidebar and the mobile insights card so a
+// given row is the same colour in both places.
+export const INTEREST_COLORS = [
+  'var(--purple)',
+  'var(--pink)',
+  'var(--teal)',
+  'var(--green)',
+  '#F59E0B',
+] as const
 
 function relativeTime(iso: string | null): string {
   if (!iso) return ''
@@ -105,7 +125,7 @@ function OverviewCard({ overview }: { overview: SidebarOverview }) {
       <div className="grid grid-cols-3 gap-3">
         {stats.map(stat => (
           <div key={stat.label}>
-            <p className="font-display text-xl font-semibold text-cobalt">
+            <p className="font-display text-xl font-semibold text-purple-text">
               {stat.value.toLocaleString()}
             </p>
             <p className="mt-0.5 font-mono text-[10px] leading-tight text-text-muted">{stat.label}</p>
@@ -119,28 +139,15 @@ function OverviewCard({ overview }: { overview: SidebarOverview }) {
 function TrendingCard({ topics }: { topics: SidebarTrendingTopic[] }) {
   return (
     <SidebarCard title="Trending topics">
-      {topics.length === 0 ? (
-        <EmptyLine>
-          Nothing repeated yet — a topic shows up here once two or more different people say
-          the same thing.
-        </EmptyLine>
-      ) : (
-        <ul className="space-y-2.5">
-          {topics.map((topic, i) => (
-            <li key={i} className="flex items-start gap-2.5">
-              <span className="mt-0.5 flex-shrink-0 rounded-full border border-white/10 bg-surface-hover px-1.5 py-0.5 font-mono text-[10px] text-cobalt">
-                {topic.count}×
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs leading-relaxed text-text-primary">{truncate(topic.text, 90)}</p>
-                <p className="mt-0.5 font-mono text-[10px] text-text-muted">
-                  {topic.unique_people} {topic.unique_people === 1 ? 'person' : 'people'}
-                </p>
-              </div>
-            </li>
-          ))}
-        </ul>
-      )}
+      <TrendingList topics={topics} />
+    </SidebarCard>
+  )
+}
+
+function InterestsCard({ interests }: { interests: SidebarInterest[] }) {
+  return (
+    <SidebarCard title="Audience insights">
+      <InterestBars interests={interests} />
     </SidebarCard>
   )
 }
@@ -149,7 +156,7 @@ function TrendingCard({ topics }: { topics: SidebarTrendingTopic[] }) {
 // middle. Avoids pulling a charting library in for one small graphic.
 function SentimentCard({ sentiment }: { sentiment: SidebarSentiment }) {
   const segments = [
-    { label: 'Positive', value: sentiment.positive, color: 'var(--cobalt)' },
+    { label: 'Positive', value: sentiment.positive, color: 'var(--purple)' },
     { label: 'Neutral', value: sentiment.neutral, color: 'var(--text-muted)' },
     { label: 'Negative', value: sentiment.negative, color: 'var(--avax-red)' },
   ]
@@ -200,7 +207,7 @@ function SentimentCard({ sentiment }: { sentiment: SidebarSentiment }) {
 
 const INSIGHT_ACCENT: Record<SidebarInsight['kind'], string> = {
   notification: 'border-pink',
-  pending_draft: 'border-cobalt',
+  pending_draft: 'border-purple',
   reward: 'border-avax-red',
 }
 
@@ -209,7 +216,7 @@ function InsightsCard({ insights }: { insights: SidebarInsight[] }) {
     <SidebarCard
       title="Recent insights"
       action={
-        <Link href="/dashboard/highlights" className="text-[10px] text-cobalt hover:underline">
+        <Link href="/dashboard/highlights" className="text-[10px] text-purple-text hover:underline">
           Highlights
         </Link>
       }
@@ -243,6 +250,7 @@ export default function ResearchSidebar({ data }: { data: ResearchSidebarData })
   return (
     <aside className="space-y-4" aria-label="Audience context">
       <OverviewCard overview={data.overview} />
+      <InterestsCard interests={data.interests} />
       <TrendingCard topics={data.trending} />
       <SentimentCard sentiment={data.sentiment} />
       <InsightsCard insights={data.insights} />

@@ -3,12 +3,27 @@ import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { computeTrendingGroups, type TrendingComment } from '@/lib/trending'
 import ResearchChat from './ResearchChat'
-import ResearchSidebar, { type ResearchSidebarData, type SidebarInsight } from './ResearchSidebar'
+import ResearchSidebar, {
+  type ResearchSidebarData,
+  type SidebarInsight,
+  type SidebarInterest,
+} from './ResearchSidebar'
 
 export const dynamic = 'force-dynamic'
 
 const SIDEBAR_TRENDING_LIMIT = 5
 const SIDEBAR_INSIGHTS_LIMIT = 6
+const SIDEBAR_INTEREST_LIMIT = 5
+
+// Creator-facing wording for the raw category values.
+const INTEREST_LABELS: Record<string, string> = {
+  praise: 'Praise & appreciation',
+  question: 'Questions',
+  complaint: 'Complaints',
+  purchase_intent: 'Buying interest',
+  spam: 'Spam',
+  other: 'Everything else',
+}
 
 // TODO: replace with real aggregates. These are placeholder figures so the panel's
 // layout can be finished; wire them to counts over audience_members / comments
@@ -54,6 +69,7 @@ async function loadSidebarData(
   const base: ResearchSidebarData = {
     overview: PLACEHOLDER_OVERVIEW,
     trending: [],
+    interests: [],
     sentiment: PLACEHOLDER_SENTIMENT,
     insights: [],
   }
@@ -108,14 +124,21 @@ async function loadSidebarData(
     audience_member_id: c.audience_member_id,
   }))
 
-  const trending = computeTrendingGroups(trendingSource, postMap, 2)
-    .slice(0, SIDEBAR_TRENDING_LIMIT)
-    .map(group => ({
-      text: group.text,
-      count: group.count,
-      unique_people: group.unique_people,
-    }))
+  const allTrending = computeTrendingGroups(trendingSource, postMap, 2)
 
+  // Share of all repeated mentions, not of all comments — a group that is 4 of the
+  // 30 repeated mentions reads as 13%, where "4 of 652 total comments" would read
+  // as 0.6% and make every trending row look insignificant.
+  const totalTrendingMentions = allTrending.reduce((sum, g) => sum + g.count, 0) || 1
+
+  const trending = allTrending.slice(0, SIDEBAR_TRENDING_LIMIT).map(group => ({
+    text: group.text,
+    count: group.count,
+    unique_people: group.unique_people,
+    percentage: Math.round((group.count / totalTrendingMentions) * 100),
+  }))
+
+  let interests: SidebarInterest[] = []
   const insights: SidebarInsight[] = []
 
   const { data: notifications, error: notificationsError } = await supabase
@@ -148,6 +171,32 @@ async function loadSidebarData(
       inColumn: 'comment_id',
       inValues: comments.map(c => c.id),
     })
+
+    // --- "What your audience talks about", from the category mix.
+    //
+    // Deliberately NOT built from comment_categories.topic: that column is fully
+    // populated, but it holds 482 distinct values across 652 rows, with the most
+    // common ("content_quality") appearing 10 times. Bars from that would all read
+    // ~1% and tell the creator nothing. The category split is coarser but real and
+    // meaningfully sized.
+    const categoryCounts = new Map<string, number>()
+    for (const row of categories) {
+      if (!row.category) continue
+      categoryCounts.set(row.category, (categoryCounts.get(row.category) || 0) + 1)
+    }
+
+    const categorized = Array.from(categoryCounts.values()).reduce((a, b) => a + b, 0)
+    if (categorized > 0) {
+      interests = Array.from(categoryCounts.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, SIDEBAR_INTEREST_LIMIT)
+        .map(([category, count]) => ({
+          category,
+          label: INTEREST_LABELS[category] || category.replace(/_/g, ' '),
+          count,
+          percentage: Math.round((count / categorized) * 100),
+        }))
+    }
 
     const commentById = new Map(comments.map(c => [c.id, c]))
 
@@ -214,6 +263,7 @@ async function loadSidebarData(
   return {
     ...base,
     trending,
+    interests,
     insights: insights.slice(0, SIDEBAR_INSIGHTS_LIMIT),
   }
 }
@@ -250,11 +300,18 @@ export default async function ResearchPage() {
   const sidebarData = await loadSidebarData(supabase, creator.id)
 
   return (
-    // Sidebar stacks below the chat on narrow screens and moves alongside it from
-    // lg up, where there's room for both without squeezing the conversation.
+    // Below lg the sidebar is hidden entirely rather than stacked underneath: its
+    // content is surfaced inside ResearchChat's own mobile landing view instead, so
+    // stacking it too would repeat every card twice on a phone.
     <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
-      <ResearchChat creatorId={creator.id} />
-      <ResearchSidebar data={sidebarData} />
+      <ResearchChat
+        creatorId={creator.id}
+        interests={sidebarData.interests}
+        trending={sidebarData.trending}
+      />
+      <div className="hidden lg:block">
+        <ResearchSidebar data={sidebarData} />
+      </div>
     </div>
   )
 }

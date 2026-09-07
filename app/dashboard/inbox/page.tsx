@@ -197,7 +197,7 @@ export default async function InboxPage() {
                       {total > 0 ? `${categorized}/${total} categorized` : '0 comments'}
                     </p>
                     {isTracked && (
-                      <span className="inline-flex flex-shrink-0 items-center rounded-full border border-cobalt/40 bg-cobalt/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cobalt">
+                      <span className="inline-flex flex-shrink-0 items-center rounded-full border border-purple/40 bg-purple/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide text-purple-text">
                         Tracked
                       </span>
                     )}

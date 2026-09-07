@@ -110,7 +110,7 @@ function HighlightCard({
         </Link>
         <span
           className={`flex-shrink-0 text-xs font-medium ${
-            highlight.reason === 'pending_draft' ? 'text-cobalt' : 'text-avax-red'
+            highlight.reason === 'pending_draft' ? 'text-purple-text' : 'text-avax-red'
           }`}
         >
           {reasonLabel(highlight)}

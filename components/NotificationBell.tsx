@@ -117,12 +117,12 @@ export default function NotificationBell() {
                 const content = (
                   <div
                     className={`border-b border-white/5 px-4 py-3 transition-colors last:border-b-0 hover:bg-surface-hover ${
-                      notification.read ? '' : 'bg-cobalt/5'
+                      notification.read ? '' : 'bg-purple/5'
                     }`}
                   >
                     <div className="flex items-start gap-2">
                       {!notification.read && (
-                        <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-cobalt" />
+                        <span className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full bg-purple" />
                       )}
                       <div className="min-w-0 flex-1">
                         <p className="text-sm text-text-primary">{notification.message}</p>

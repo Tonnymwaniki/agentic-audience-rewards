@@ -1,16 +1,48 @@
 @import "tailwindcss";
 
+/* ===========================================================================
+   Palette — deep indigo ground with a purple→pink accent range.
+
+   Contrast was measured, not eyeballed. Every ratio below is WCAG 2.1 against
+   the surface it actually sits on:
+
+     foreground   #ECEEF1  on bg 16.79 : surface 15.29 : surface-hover 14.01
+     text-muted   #8A94A6  on bg  6.38 : surface  5.81 : surface-hover  5.33
+     pink         #EC4899  on bg  5.53 : surface  5.04 : surface-hover  4.62
+     purple-text  #A78BFA  on bg  7.17 : surface  6.53 : surface-hover  5.98
+     purple       #8B5CF6  on bg  4.61 : surface  4.20 : surface-hover  3.85
+
+   That last row is why --purple-text exists. --purple is the brand/gradient
+   hue and is fine for fills, borders, rings and large numerals, but at 4.20 on
+   a card it misses AA (4.5) for small text — so body-sized purple text should
+   use --purple-text instead. Tailwind: `text-purple-text`, not `text-purple`.
+   =========================================================================== */
 :root {
-  --background: #0E1116;
+  --background: #0A0A1F;
+  --surface: #151530;
+  --surface-hover: #1C1C40;
   --foreground: #ECEEF1;
-  --surface: #171B22;
-  --surface-hover: #1E232C;
-  --cobalt: #0038FF;
-  --cobalt-hover: #002fd4;
-  --pink: #FF7FEC;
-  --pink-dim: rgba(255, 127, 236, 0.2);
   --text-muted: #8A94A6;
+
+  --purple: #8B5CF6;
+  --purple-text: #A78BFA;
+  /* Links/labels brighten on hover. On a dark ground going lighter reads as
+     "active" where the old palette's darker hover shade read as "pressed". */
+  --purple-hover: #C4B5FD;
+  --purple-dim: rgba(139, 92, 246, 0.18);
+
+  --pink: #EC4899;
+  --pink-dim: rgba(236, 72, 153, 0.18);
+
+  --teal: #2DD4BF;
+  --teal-dim: rgba(45, 212, 191, 0.18);
+
+  --green: #34D399;
+  --green-dim: rgba(52, 211, 153, 0.18);
+
   --avax-red: #E84142;
+
+  --gradient-primary: linear-gradient(135deg, var(--purple) 0%, var(--pink) 100%);
 }
 
 @theme inline {
@@ -18,12 +50,30 @@
   --color-foreground: var(--foreground);
   --color-surface: var(--surface);
   --color-surface-hover: var(--surface-hover);
-  --color-cobalt: var(--cobalt);
-  --color-cobalt-hover: var(--cobalt-hover);
+
+  /* `ink` is an alias for the page ground. It exists because ~9 focus styles
+     across the app already say `ring-offset-ink`, which silently did nothing
+     before this token was defined. */
+  --color-ink: var(--background);
+
+  /* Likewise `text-primary`: ~128 elements were using `text-text-primary`,
+     which resolved to no rule at all and merely inherited the body colour.
+     Defining it makes those existing classes real. */
+  --color-text-primary: var(--foreground);
+  --color-text-muted: var(--text-muted);
+
+  --color-purple: var(--purple);
+  --color-purple-text: var(--purple-text);
+  --color-purple-hover: var(--purple-hover);
+  --color-purple-dim: var(--purple-dim);
   --color-pink: var(--pink);
   --color-pink-dim: var(--pink-dim);
-  --color-text-muted: var(--text-muted);
+  --color-teal: var(--teal);
+  --color-teal-dim: var(--teal-dim);
+  --color-green: var(--green);
+  --color-green-dim: var(--green-dim);
   --color-avax-red: var(--avax-red);
+
   --font-display: var(--font-display);
   --font-body: var(--font-body);
   --font-mono: var(--font-mono);
@@ -43,8 +93,70 @@ body {
 .card {
   background: var(--surface);
   border-radius: 0.75rem;
-  border: 1px solid rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.07);
   padding: 1.25rem;
+}
+
+/* --- Brand gradient ------------------------------------------------------ */
+
+.gradient-primary {
+  background-image: var(--gradient-primary);
+}
+
+/* Same gradient painted through the glyphs. Needs a transparent text colour, so
+   it will override any `text-*` utility on the same element — that's intended. */
+.gradient-primary-text {
+  background-image: var(--gradient-primary);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* --- Soft glow for key cards --------------------------------------------- */
+
+/* Two stacked shadows: a wide purple bloom and a tighter pink one, both at low
+   alpha, plus a faint inner top highlight so the card still reads as a raised
+   surface rather than only a colour wash. Layered on top of .card. */
+.glow-card {
+  box-shadow:
+    0 0 0 1px rgba(139, 92, 246, 0.22),
+    0 8px 32px -12px rgba(139, 92, 246, 0.45),
+    0 4px 20px -8px rgba(236, 72, 153, 0.3),
+    inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+/* --- Icon badges ---------------------------------------------------------- */
+
+/* Small rounded square holding an icon, tinted by colour variant. Size is set
+   here so every badge lines up; the icon inside should be h-5 w-5. */
+.icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  border-radius: 0.625rem;
+  flex-shrink: 0;
+}
+
+.icon-badge-purple {
+  background: var(--purple-dim);
+  color: var(--purple-text);
+}
+
+.icon-badge-pink {
+  background: var(--pink-dim);
+  color: var(--pink);
+}
+
+.icon-badge-teal {
+  background: var(--teal-dim);
+  color: var(--teal);
+}
+
+.icon-badge-green {
+  background: var(--green-dim);
+  color: var(--green);
 }
 
 .badge {
@@ -76,7 +188,7 @@ body {
 
 .badge-purchase_intent {
   background: var(--pink-dim);
-  color: var(--pink);
+  color: #F9A8D4;
 }
 
 .badge-spam {
@@ -90,16 +202,44 @@ body {
 }
 
 .btn-primary {
-  background: var(--cobalt);
+  background-image: var(--gradient-primary);
   color: white;
   font-weight: 500;
   border-radius: 0.5rem;
   padding: 0.5rem 1rem;
-  transition: background 0.2s ease;
+  /* A gradient can't be tweened, so hover brightens the whole fill instead of
+     transitioning between two background-images. */
+  transition: filter 0.2s ease, box-shadow 0.2s ease;
 }
 
 .btn-primary:hover {
-  background: var(--cobalt-hover);
+  filter: brightness(1.12);
+  box-shadow: 0 4px 16px -6px rgba(139, 92, 246, 0.6);
+}
+
+.btn-primary:disabled:hover {
+  filter: none;
+  box-shadow: none;
+}
+
+/* Secondary: the gradient as a 1px border rather than a fill. Two backgrounds
+   clipped to different boxes — the surface fill to the padding box, the gradient
+   to the border box — which is what leaves the gradient visible only in the
+   border area. */
+.btn-secondary {
+  background-image: linear-gradient(var(--surface), var(--surface)), var(--gradient-primary);
+  background-origin: border-box;
+  background-clip: padding-box, border-box;
+  border: 1px solid transparent;
+  color: var(--foreground);
+  font-weight: 500;
+  border-radius: 0.5rem;
+  padding: 0.5rem 1rem;
+  transition: filter 0.2s ease;
+}
+
+.btn-secondary:hover {
+  filter: brightness(1.25);
 }
 
 .highlight {

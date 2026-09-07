@@ -25,7 +25,7 @@ export default function PasteVideoLink({ creatorId }: { creatorId: string }) {
       <button
         type="button"
         onClick={() => setOpen(true)}
-        className="mb-4 text-sm text-cobalt underline hover:text-cobalt-hover"
+        className="mb-4 text-sm text-purple-text underline hover:text-purple-hover"
       >
         + Paste a video link instead
       </button>
@@ -73,14 +73,14 @@ export default function PasteVideoLink({ creatorId }: { creatorId: string }) {
             onChange={e => setUrl(e.target.value)}
             placeholder="https://www.youtube.com/watch?v=..."
             disabled={status === 'running'}
-            className="flex h-10 w-full rounded-md border border-white/10 bg-surface px-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
+            className="flex h-10 w-full rounded-md border border-white/10 bg-surface px-3 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
           />
 
           {status === 'running' && (
             <div className="space-y-2">
               <div className="h-2 overflow-hidden rounded-full bg-surface-hover">
                 <div
-                  className="h-full rounded-full bg-cobalt transition-all duration-500"
+                  className="h-full rounded-full bg-purple transition-all duration-500"
                   style={{ width: `${progressPercent}%` }}
                 />
               </div>

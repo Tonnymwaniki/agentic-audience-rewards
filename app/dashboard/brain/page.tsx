@@ -265,7 +265,7 @@ export default async function BrainPage({
                     </div>
                     <div className="h-2 overflow-hidden rounded-full bg-surface-hover">
                       <div
-                        className="h-full rounded-full bg-cobalt transition-all"
+                        className="h-full rounded-full bg-purple transition-all"
                         style={{ width: `${percentage}%` }}
                       />
                     </div>

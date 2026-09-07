@@ -55,7 +55,7 @@ export default function DashboardLayout({
                 href={item.href}
                 className={`rounded-md px-3 py-2 text-sm font-medium transition-colors ${
                   isActive
-                    ? 'text-cobalt'
+                    ? 'text-purple-text'
                     : 'text-text-muted hover:text-text-primary'
                 }`}
               >
@@ -74,7 +74,7 @@ export default function DashboardLayout({
             title="Business Profile"
             className={`hidden rounded-md p-2 transition-colors md:block ${
               pathname.startsWith('/dashboard/profile')
-                ? 'text-cobalt'
+                ? 'text-purple-text'
                 : 'text-text-muted hover:text-text-primary'
             }`}
           >

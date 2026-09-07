@@ -66,7 +66,7 @@ function AttentionCard({
           <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-text-primary">{item.text}</p>
 
           {item.draftReply && (
-            <p className="mt-2 line-clamp-2 border-l-2 border-cobalt pl-2.5 text-sm leading-relaxed text-text-muted">
+            <p className="mt-2 line-clamp-2 border-l-2 border-purple pl-2.5 text-sm leading-relaxed text-text-muted">
               {item.draftReply}
             </p>
           )}

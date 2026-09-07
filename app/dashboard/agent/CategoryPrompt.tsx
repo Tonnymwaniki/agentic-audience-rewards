@@ -56,7 +56,7 @@ export default function CategoryPrompt() {
 
   if (saved) {
     return (
-      <div className="mb-6 rounded-lg border border-cobalt/40 bg-cobalt/10 px-4 py-3">
+      <div className="mb-6 rounded-lg border border-purple/40 bg-purple/10 px-4 py-3">
         <p className="text-sm text-text-primary">Thanks — that helps.</p>
       </div>
     )

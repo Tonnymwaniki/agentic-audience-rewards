@@ -57,7 +57,7 @@ export default function AskAudience({ creatorId, postId }: AskAudienceProps) {
           value={question}
           onChange={e => setQuestion(e.target.value)}
           placeholder="Ask your audience anything..."
-          className="flex h-10 w-full rounded-md border border-white/10 bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
+          className="flex h-10 w-full rounded-md border border-white/10 bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
           disabled={loading}
         />
         <button

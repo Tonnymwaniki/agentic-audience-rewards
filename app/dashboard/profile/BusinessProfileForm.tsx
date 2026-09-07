@@ -103,7 +103,7 @@ export default function BusinessProfileForm({ initial }: { initial: ProfileField
             value={values[field.key]}
             onChange={e => update(field.key, e.target.value)}
             placeholder={field.placeholder}
-            className="flex h-11 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
+            className="flex h-11 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
           />
           {field.hint && <p className="mt-1 text-xs text-text-muted">{field.hint}</p>}
         </div>
@@ -119,7 +119,7 @@ export default function BusinessProfileForm({ initial }: { initial: ProfileField
           value={values.delivery_info}
           onChange={e => update('delivery_info', e.target.value)}
           placeholder="e.g. Free delivery within Nairobi CBD. Countrywide via G4S, 2–3 days, paid by customer."
-          className="w-full resize-none rounded-lg border border-white/10 bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
+          className="w-full resize-none rounded-lg border border-white/10 bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
         />
         <p className="mt-1 text-xs text-text-muted">
           Free text — describe it however it actually works for you.

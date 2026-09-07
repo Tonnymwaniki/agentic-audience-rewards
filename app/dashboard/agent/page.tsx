@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { loadHighlights } from '@/lib/highlights'
+import { buildActivityFeed } from '@/lib/activity'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
 
@@ -10,6 +11,7 @@ export const dynamic = 'force-dynamic'
 const SUMMARY_WINDOW_HOURS = 24
 // Just a preview — the full set lives on Highlights, one click away.
 const ATTENTION_PREVIEW_LIMIT = 3
+const ACTIVITY_LIMIT = 5
 
 // Server-clock based, and the server is UTC on Vercel. No per-creator timezone is
 // stored anywhere in the schema, so this is genuinely the best available signal —
@@ -103,6 +105,7 @@ export default async function AgentHomePage() {
 
   type CategoryRow = {
     comment_id: string
+    category: string
     draft_reply: string | null
     draft_reply_approved_at: string | null
   }
@@ -112,7 +115,7 @@ export default async function AgentHomePage() {
   if (allComments.length > 0) {
     categories = await fetchInBatches<CategoryRow>(supabase, {
       table: 'comment_categories',
-      select: 'comment_id, draft_reply, draft_reply_approved_at',
+      select: 'comment_id, category, draft_reply, draft_reply_approved_at',
       inColumn: 'comment_id',
       inValues: allComments.map(c => c.id),
     })
@@ -132,6 +135,12 @@ export default async function AgentHomePage() {
   const totalCommentsCount = allComments.length
   const totalDraftsCount = categories.filter(c => c.draft_reply).length
 
+  // --- Replies waiting on the creator. purchase_intent is split out because those
+  // are the ones with money attached — they drive the "opportunities" banner. ---
+  const pendingDraftRows = categories.filter(c => c.draft_reply && !c.draft_reply_approved_at)
+  const repliesReadyCount = pendingDraftRows.length
+  const purchaseIntentReadyCount = pendingDraftRows.filter(c => c.category === 'purchase_intent').length
+
   // --- Reward events: only created_at is needed here (counts, not cards) ---
   const { data: creatorAudienceMembers, error: audienceError } = await supabase
     .from('audience_members')
@@ -147,13 +156,18 @@ export default async function AgentHomePage() {
   let recognizedTodayCount = 0
   let totalRecognizedCount = 0
   let latestRewardAt: string | null = null
+  let recentRewards: Array<{ personName: string; reason: string; at: string | null }> = []
 
   if (memberIds.length > 0) {
     // Batched: a single .in() with hundreds of member ids exceeds Supabase's URL
     // length limit and fails outright.
-    const events = await fetchInBatches<{ created_at: string }>(supabase, {
+    const events = await fetchInBatches<{
+      created_at: string
+      reason: string
+      audience_members: unknown
+    }>(supabase, {
       table: 'reward_events',
-      select: 'created_at',
+      select: 'created_at, reason, audience_members ( display_name )',
       inColumn: 'audience_member_id',
       inValues: memberIds,
     })
@@ -164,17 +178,23 @@ export default async function AgentHomePage() {
     for (const event of events) {
       if (!latestRewardAt || event.created_at > latestRewardAt) latestRewardAt = event.created_at
     }
+
+    recentRewards = [...events]
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+      .slice(0, ACTIVITY_LIMIT)
+      .map(event => ({
+        personName: (event.audience_members as { display_name: string } | null)?.display_name || 'Someone',
+        reason: event.reason,
+        at: event.created_at,
+      }))
   }
 
-  // --- Last activity: the newest timestamp across everything the agent does, so
-  // the status card reflects real work rather than page-load time ---
-  const { data: latestNotification, error: notificationError } = await supabase
+  const { data: recentNotifications, error: notificationError } = await supabase
     .from('notifications')
-    .select('created_at')
+    .select('message, created_at')
     .eq('creator_id', creator.id)
     .order('created_at', { ascending: false })
-    .limit(1)
-    .maybeSingle()
+    .limit(ACTIVITY_LIMIT)
 
   if (notificationError) {
     console.error('Agent home notification fetch error:', JSON.stringify(notificationError, Object.getOwnPropertyNames(notificationError), 2))
@@ -185,8 +205,10 @@ export default async function AgentHomePage() {
     if (!latestCommentAt || comment.posted_at > latestCommentAt) latestCommentAt = comment.posted_at
   }
 
-  // ISO-8601 UTC strings compare correctly as plain strings, so no Date parsing needed.
-  const lastActivityAt = [latestCommentAt, latestRewardAt, latestNotification?.created_at ?? null]
+  // --- Last activity: the newest timestamp across everything the agent does, so
+  // the status card reflects real work rather than page-load time.
+  // ISO-8601 UTC strings compare correctly as plain strings, so no Date parsing needed. ---
+  const lastActivityAt = [latestCommentAt, latestRewardAt, recentNotifications?.[0]?.created_at ?? null]
     .filter((value): value is string => Boolean(value))
     .sort()
     .pop() ?? null
@@ -196,6 +218,21 @@ export default async function AgentHomePage() {
     supabase,
     creator.id,
     ATTENTION_PREVIEW_LIMIT
+  )
+
+  // --- Recent Activity. Built from data already loaded above rather than
+  // re-querying: draftHighlights doubles as the pending-draft stream. ---
+  const activity = buildActivityFeed(
+    {
+      notifications: (recentNotifications || []).map(n => ({ message: n.message, at: n.created_at })),
+      pendingDrafts: draftHighlights.map(h => ({
+        category: h.category || 'comment',
+        videoTitle: h.videoTitle,
+        at: h.postedAt,
+      })),
+      rewards: recentRewards,
+    },
+    ACTIVITY_LIMIT
   )
 
   return (
@@ -216,7 +253,10 @@ export default async function AgentHomePage() {
         totalDraftsCount={totalDraftsCount}
         totalRecognizedCount={totalRecognizedCount}
         pendingHighlightsCount={totalPendingDrafts}
+        repliesReadyCount={repliesReadyCount}
+        purchaseIntentReadyCount={purchaseIntentReadyCount}
         attentionItems={draftHighlights}
+        activity={activity}
       />
     </div>
   )

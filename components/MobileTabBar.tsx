@@ -116,12 +116,12 @@ export default function MobileTabBar() {
                 // min-h-14 keeps every tap target comfortably past the 44px minimum
                 // even though the label text is small.
                 className={`flex min-h-14 flex-col items-center justify-center gap-1 px-1 py-2 transition-colors ${
-                  isActive ? 'text-cobalt' : 'text-text-muted active:text-text-primary'
+                  isActive ? 'text-purple-text' : 'text-text-muted active:text-text-primary'
                 }`}
               >
                 <span
                   className={`flex h-8 w-12 items-center justify-center rounded-full transition-colors ${
-                    isActive ? 'bg-cobalt/15' : ''
+                    isActive ? 'bg-purple/15' : ''
                   }`}
                 >
                   {tab.icon}

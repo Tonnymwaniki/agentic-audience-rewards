@@ -150,7 +150,7 @@ export default function ConnectPage() {
               value={channel}
               onChange={e => setChannel(e.target.value)}
               placeholder="https://www.youtube.com/@yourchannel"
-              className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
+              className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
             />
           </div>
 
@@ -167,7 +167,7 @@ export default function ConnectPage() {
                     onClick={() => setCategory(category === option ? null : option)}
                     className={`rounded-full border px-3 py-1.5 text-xs transition-colors ${
                       category === option
-                        ? 'border-cobalt bg-cobalt text-white'
+                        ? 'border-purple bg-purple text-white'
                         : 'border-white/10 bg-surface text-text-muted hover:text-text-primary'
                     }`}
                   >
@@ -184,7 +184,7 @@ export default function ConnectPage() {
               type="checkbox"
               checked={autoAnalyze}
               onChange={e => setAutoAnalyze(e.target.checked)}
-              className="h-4 w-4 rounded border-white/10 bg-surface text-cobalt focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink"
+              className="h-4 w-4 rounded border-white/10 bg-surface text-purple-text focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
             />
             <label htmlFor="auto-analyze" className="text-sm text-text-muted">
               Automatically analyze my 5 most recent videos
@@ -290,14 +290,14 @@ function SingleVideoAnalyze({
         onChange={e => setUrl(e.target.value)}
         placeholder="https://www.youtube.com/watch?v=..."
         disabled={status === 'running'}
-        className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-cobalt focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
+        className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink disabled:opacity-50"
       />
 
       {status === 'running' && (
         <div className="space-y-2">
           <div className="h-2 overflow-hidden rounded-full bg-surface-hover">
             <div
-              className="h-full rounded-full bg-cobalt transition-all duration-500"
+              className="h-full rounded-full bg-purple transition-all duration-500"
               style={{ width: `${progressPercent}%` }}
             />
           </div>

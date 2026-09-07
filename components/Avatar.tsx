@@ -1,11 +1,15 @@
+// Hashed per-person identity colours. Deliberately a wider range than the brand
+// palette — these exist to tell people apart at a glance, so they need to stay
+// distinguishable from each other rather than all reading as "brand purple". The
+// first two now match the theme's purple/pink so the common cases feel on-brand.
 const AVATAR_COLORS = [
-  '#0038FF',
-  '#FF7FEC',
-  '#6366F1',
-  '#EC4899',
   '#8B5CF6',
+  '#EC4899',
+  '#6366F1',
+  '#2DD4BF',
+  '#A78BFA',
   '#06B6D4',
-  '#10B981',
+  '#34D399',
   '#F59E0B',
 ] as const
 
