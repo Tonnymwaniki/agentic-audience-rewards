@@ -83,9 +83,17 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-body), system-ui, sans-serif;
-  /* Both are 0px in portrait and on every non-notched device; they only matter in
-     landscape on phones with a notch, where viewport-fit=cover would otherwise let
-     text slide underneath it. */
+  /* Left/right are 0px in portrait and on every non-notched device; they only
+     matter in landscape on phones with a notch, where viewport-fit=cover would
+     otherwise let text slide underneath it.
+
+     Top matters when the app is INSTALLED. With display:standalone plus
+     apple-mobile-web-app-status-bar-style=black-translucent, iOS hands the web
+     view the full screen including the status bar area, so without this the first
+     heading on every page renders under the clock and battery. In an ordinary
+     browser tab this resolves to 0px (the browser's own chrome occupies that
+     space), so it changes nothing outside the installed app. */
+  padding-top: env(safe-area-inset-top);
   padding-left: env(safe-area-inset-left);
   padding-right: env(safe-area-inset-right);
 }

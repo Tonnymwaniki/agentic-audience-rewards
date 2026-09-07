@@ -1,0 +1,13 @@
+{
+  "name": "Notice",
+  "short_name": "Notice",
+  "description": "Agentic audience intelligence, rewarded on-chain.",
+  "start_url": "/dashboard/agent",
+  "display": "standalone",
+  "background_color": "#0A0A1F",
+  "theme_color": "#0A0A1F",
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}
