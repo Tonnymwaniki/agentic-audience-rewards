@@ -30,11 +30,11 @@ export default function DashboardLayout({
     // once the bar is gone. It has to be a responsive utility rather than an inline
     // style, since an inline style would apply the extra padding at desktop too.
     //
-    // 6.5rem (104px) = the 63px bar + the 23px the floating action button rises
-    // above its top edge + ~18px so the button's glow doesn't bleed onto the last
+    // 8.5rem (136px) = the 63px bar + the 54px the floating action button now rises
+    // above its top edge + ~19px so the button's glow doesn't bleed onto the last
     // card, then the device's home-indicator inset on top. Measured, not estimated.
-    // The FAB is why this isn't 4.5rem — at that value the last element cleared the
-    // bar but sat underneath the button.
+    // This grew from 6.5rem when the FAB was lifted from -24px to -54px to clear the
+    // middle tab; without the matching increase the last card sits under the button.
     //
     // Note: don't write bracketed utility names in these comments — Tailwind scans
     // comment text too, and emits a junk rule for anything that parses as a class.
@@ -46,7 +46,7 @@ export default function DashboardLayout({
       // the entire page wider than the screen (measured 657px at a 320px viewport).
       // w-full pins it back to the viewport; max-w-* still caps it on desktop and
       // mx-auto still centres it there.
-      className={`mx-auto w-full p-6 pb-[calc(6.5rem+env(safe-area-inset-bottom))] md:pb-6 ${
+      className={`mx-auto w-full p-6 pb-[calc(8.5rem+env(safe-area-inset-bottom))] md:pb-6 ${
         isWide ? 'max-w-7xl' : 'max-w-5xl'
       }`}
     >

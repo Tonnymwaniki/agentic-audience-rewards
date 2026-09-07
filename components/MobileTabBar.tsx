@@ -6,14 +6,14 @@ import { usePathname } from 'next/navigation'
 // Fixed bottom tab bar for narrow viewports. The dashboard's top nav hides its link
 // row at the same `md` breakpoint, so exactly one navigation is visible at a time.
 //
-// Three tabs plus the Research floating action button, which sits in a reserved gap
-// rather than being laid over a tab — so it can never cover a tap target.
+// Three evenly-spaced tabs, plus a Research floating action button that is NOT part
+// of the tab row: it is absolutely positioned against the bar and floats above it.
 //
-// The gap must stay at the horizontal centre, because the FAB is centred on the
-// VIEWPORT (left-1/2), not on the flex row. With an even 1|1|gap|1 split the gap
-// would land off-centre and the FAB would overlap the second tab. Weighting the
-// trailing tab x2 restores symmetry: 1 + 1 on the left, gap, 2 on the right, so the
-// gap's midpoint is the viewport's midpoint. Verified by measurement, not by eye.
+// An earlier version reserved a spacer column in the row for the FAB and weighted
+// the trailing tab x2 to keep that column centred. That kept the FAB clear of the
+// tabs but made the tab widths uneven, and the spacer's "Research" caption sat at
+// the same height as the real tab labels, so the button read as an in-row item.
+// Now the row contains only real tabs and the FAB is lifted clear instead.
 
 const FAB_HREF = '/dashboard/research'
 
@@ -100,16 +100,11 @@ export default function MobileTabBar() {
   const pathname = usePathname()
   const fabActive = pathname === FAB_HREF || pathname?.startsWith(FAB_HREF + '/')
 
-  // Two tabs before the gap, one after. The trailing tab carries double weight so
-  // the gap — and therefore the FAB — lands dead centre; see the note at the top.
-  const left = TABS.slice(0, 2)
-  const right = TABS.slice(2)
-
-  function renderTab(tab: TabItem, grow = 'flex-1') {
+  function renderTab(tab: TabItem) {
     const isActive = pathname === tab.href || pathname?.startsWith(tab.href + '/')
 
     return (
-      <li key={tab.href} className={grow}>
+      <li key={tab.href} className="flex-1">
         <Link
           href={tab.href}
           aria-current={isActive ? 'page' : undefined}
@@ -144,13 +139,22 @@ export default function MobileTabBar() {
       className="fixed inset-x-0 bottom-0 z-40 border-t border-white/10 bg-surface/95 backdrop-blur md:hidden"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
     >
-      {/* Sits above the bar's own background and border (z-10), and above page
-          content (the nav's z-40), so the lifted half is never clipped or covered. */}
+      {/* Absolutely positioned, so it is not part of the tab row's layout at all:
+          left-1/2 + -translate-x-1/2 centres it on the BAR's full width, which is the
+          viewport width (inset-x-0), independent of where the tabs happen to fall.
+          z-10 lifts it over the bar's own background and border.
+
+          The -54px offset is load-bearing. With three evenly-spaced tabs the middle
+          one ("My Videos") sits at dead centre, directly beneath this button. At the
+          previous -24px the FAB covered that tab's icon and stole its tap target.
+          A 60px button offset -54px leaves its bottom edge just 6px inside the bar —
+          enough to read as docked and elevated, while clearing the tab icons, which
+          begin ~12px below the bar's top edge. */}
       <Link
         href={FAB_HREF}
         aria-label="Research"
         aria-current={fabActive ? 'page' : undefined}
-        className="gradient-primary absolute -top-6 left-1/2 z-10 flex h-15 w-15 -translate-x-1/2 items-center justify-center rounded-full text-white ring-4 ring-background transition-transform active:scale-95"
+        className="gradient-primary absolute -top-[54px] left-1/2 z-10 flex h-15 w-15 -translate-x-1/2 items-center justify-center rounded-full text-white ring-4 ring-background transition-transform active:scale-95"
         style={{
           // Not .glow-card: that class's first layer is a 1px purple ring shadow
           // sized for a rectangular card, which reads as a hard edge on a circle.
@@ -162,28 +166,10 @@ export default function MobileTabBar() {
         <SparkleIcon />
       </Link>
 
-      {/* Not `left.map(renderTab)` — map passes the index as the second argument,
-          which would land in `grow` and emit className="0". */}
-      <ul className="flex items-stretch">
-        {left.map(tab => renderTab(tab))}
-
-        {/* Reserved column under the FAB. Holds the label so Research still reads as
-            a named destination like its neighbours, and keeps a tab from sitting
-            beneath the button. */}
-        <li aria-hidden="true" className="w-16 flex-shrink-0">
-          <div className="flex min-h-14 flex-col items-center justify-end px-1 py-2">
-            <span
-              className={`text-[10px] leading-none font-medium ${
-                fabActive ? 'text-purple-text' : 'text-text-muted'
-              }`}
-            >
-              Research
-            </span>
-          </div>
-        </li>
-
-        {right.map(tab => renderTab(tab, 'flex-[2]'))}
-      </ul>
+      {/* Exactly the three real tabs, each flex-1 — equal thirds, so their centres
+          fall at 1/6, 1/2 and 5/6 of the bar. The FAB is NOT in this row; it has no
+          spacer column here either, which is what previously skewed the widths. */}
+      <ul className="flex items-stretch">{TABS.map(renderTab)}</ul>
     </nav>
   )
 }
