@@ -313,7 +313,6 @@ export default async function ResearchPage() {
           so stacking it too would repeat every card twice on a phone. */}
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_320px]">
         <ResearchChat
-          creatorId={creator.id}
           interests={sidebarData.interests}
           trending={sidebarData.trending}
         />

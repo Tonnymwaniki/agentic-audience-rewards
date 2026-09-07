@@ -1,53 +1,13 @@
 'use client'
 
-import { useState, useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { useResearchChat, type ChatMessage, type VideoCard, type StatsCard, type IdeaCard, type AnomalyCard, type PersonCard } from './ResearchChatContext'
 import ReactMarkdown from 'react-markdown'
 import Avatar from '@/components/Avatar'
 import { InterestBars, TrendingList } from './AudienceInsights'
 import type { SidebarInterest, SidebarTrendingTopic } from './ResearchSidebar'
-
-type VideoCard = {
-  post_id: string
-  title: string
-  thumbnail_url: string | null
-  total_comments: number
-  category_counts: Record<string, number>
-  top_topics: Array<{ topic: string; count: number }>
-}
-
-type StatsCard = {
-  title: string
-  stats: Array<{ label: string; value: string | number }>
-}
-
-type IdeaCard = {
-  number: number
-  title: string
-  description: string
-  signal: string
-}
-
-type AnomalyCard = {
-  hasAnomaly: boolean
-  findings: Array<{ description: string; severity: 'high' | 'medium' }>
-}
-
-type PersonCard = {
-  display_name: string
-  reason: string
-  comment_count: number
-}
-
-type ChatMessage = {
-  role: 'user' | 'assistant'
-  content: string
-  createdAt: string
-  videoCards?: VideoCard[]
-  statsCards?: StatsCard[]
-  ideaCards?: IdeaCard[]
-  anomalyCard?: AnomalyCard
-  personCards?: PersonCard[]
-}
 
 // Messages are only ever created client-side (the list starts empty on both
 // server and client), so formatting a local time here can't cause a hydration
@@ -358,26 +318,6 @@ function ArrowRightIcon() {
   )
 }
 
-function SearchIcon() {
-  return (
-    <svg
-      xmlns="http://www.w3.org/2000/svg"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth={2}
-      className="h-5 w-5"
-      aria-hidden="true"
-    >
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
-      />
-    </svg>
-  )
-}
-
 /**
  * The phone-first Research landing view, shown below lg before anything is asked.
  *
@@ -386,55 +326,32 @@ function SearchIcon() {
  * textareas bound to the same `input` state would fight over one autogrow ref.
  */
 function MobileResearchLanding({
-  input,
-  onInputChange,
-  onSubmit,
   onAsk,
   interests,
   trending,
   error,
+  hasMessages,
 }: {
-  input: string
-  onInputChange: (value: string) => void
-  onSubmit: (e: React.FormEvent) => void
   onAsk: (question: string) => void
   interests: SidebarInterest[]
   trending: SidebarTrendingTopic[]
   error: string | null
+  hasMessages: boolean
 }) {
   return (
     // The page-level ResearchHero now carries the welcome heading, so this view
     // opens straight into the ask field rather than repeating a greeting.
     <div className="space-y-5">
-      <form onSubmit={onSubmit}>
-        <div className="relative">
-          <span className="pointer-events-none absolute inset-y-0 left-4 flex items-center text-text-muted">
-            <SearchIcon />
-          </span>
-          <input
-            type="text"
-            value={input}
-            onChange={e => onInputChange(e.target.value)}
-            placeholder="Ask about your audience..."
-            aria-label="Ask about your audience"
-            // pr leaves room for the submit button sitting inside the field.
-            className="h-14 w-full rounded-2xl border border-white/10 bg-surface pr-14 pl-12 text-base text-text-primary placeholder:text-text-muted focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none"
-          />
-          {/* Only mounted once there's something to send. A full-width gradient
-              button sitting permanently at 40% opacity read as a broken/dead
-              element on an otherwise empty landing screen. */}
-          {input.trim() && (
-            <button
-              type="submit"
-              aria-label="Ask"
-              className="gradient-primary absolute top-1/2 right-2.5 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-xl text-white"
-            >
-              <ArrowRightIcon />
-            </button>
-          )}
-        </div>
-        {error && <p className="mt-2 text-sm text-avax-red">{error}</p>}
-      </form>
+      {/* The inline composer moved to the full-screen chat route. This screen is now
+          an overview whose single job is to get you into the conversation. */}
+      <Link
+        href="/dashboard/research/chat"
+        className="btn-primary flex w-full items-center justify-center gap-2 py-3.5 text-base"
+      >
+        {hasMessages ? 'Continue chat' : 'Start Chat'}
+        <ArrowRightIcon />
+      </Link>
+      {error && <p className="text-sm text-avax-red">{error}</p>}
 
       <div className="flex flex-wrap gap-2">
         {SUGGESTED_QUESTIONS.map(question => (
@@ -473,31 +390,103 @@ function MobileResearchLanding({
           onClick={() => onAsk('What does my audience really think?')}
           className="mt-4 w-full rounded-lg bg-white px-4 py-2.5 text-sm font-semibold text-[#151530] transition-colors active:bg-white/90"
         >
-          Start Chat
+          Ask this
         </button>
       </section>
     </div>
   )
 }
 
+// The message list itself — every card renderer, the typing indicator and the
+// inline error. Shared verbatim by the desktop panel and the full-screen mobile
+// view so there is exactly ONE rendering of a conversation in the app.
+function ChatThread({
+  messages,
+  loading,
+  error,
+  lastAssistantIndex,
+  onRegenerate,
+}: {
+  messages: ChatMessage[]
+  loading: boolean
+  error: string | null
+  lastAssistantIndex: number
+  onRegenerate: () => void
+}) {
+  return (
+    <>
+          {messages.map((message, index) =>
+        message.role === 'user' ? (
+          <div key={index} className="flex flex-col items-end gap-1">
+            <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-purple px-4 py-3 text-sm whitespace-pre-wrap text-white">
+              {message.content}
+            </div>
+            <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
+          </div>
+        ) : (
+          <div key={index} className="flex flex-col items-start gap-1">
+            <div className="card max-w-[75%] rounded-tl-sm border-l-2 border-pink">
+              {message.statsCards?.map(card => (
+                <StatsCardDisplay key={card.title} card={card} />
+              ))}
+              {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
+              <MarkdownMessage content={message.content} />
+              {message.personCards?.map(card => (
+                <PersonCardDisplay key={card.display_name} card={card} />
+              ))}
+              {message.ideaCards?.map(card => (
+                <IdeaCardDisplay key={card.number} card={card} />
+              ))}
+              {message.videoCards?.map(card => (
+                <VideoCardDisplay key={card.post_id} card={card} />
+              ))}
+            </div>
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
+              <CopyResponseButton text={message.content} />
+              {index === lastAssistantIndex && (
+                <RegenerateButton onClick={onRegenerate} disabled={loading} />
+              )}
+            </div>
+          </div>
+        )
+      )}
+
+      {loading && <TypingIndicator />}
+
+      {error && <p className="mr-auto text-sm text-avax-red">{error}</p>}
+    </>
+  )
+}
+
 export default function ResearchChat({
-  creatorId,
+  variant = 'page',
   interests = [],
   trending = [],
 }: {
-  creatorId: string
+  /** 'page' = the mobile landing + desktop panel. 'fullscreen' = the mobile chat route. */
+  variant?: 'page' | 'fullscreen'
   interests?: SidebarInterest[]
   trending?: SidebarTrendingTopic[]
 }) {
-  const [messages, setMessages] = useState<ChatMessage[]>([])
-  const [input, setInput] = useState('')
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  // All conversation state comes from the provider in the research layout, so it
+  // survives navigating between the landing screen and the full-screen chat.
+  const {
+    messages,
+    input,
+    loading,
+    error,
+    hasMessages,
+    lastAssistantIndex,
+    setInput,
+    sendMessage,
+    regenerate,
+    startNewChat,
+  } = useResearchChat()
+
+  const router = useRouter()
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  const hasMessages = messages.length > 0
-  const lastAssistantIndex = messages.map(m => m.role).lastIndexOf('assistant')
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
@@ -513,91 +502,6 @@ export default function ResearchChat({
     el.style.height = `${Math.min(el.scrollHeight, MAX_TEXTAREA_HEIGHT)}px`
   }, [input])
 
-  // Shared by sendMessage and regenerate — both need "post a user turn's text and
-  // append whatever the assistant returns", they just differ in what history and
-  // message they start from.
-  async function requestAssistant(history: ChatMessage[], userText: string) {
-    setLoading(true)
-    setError(null)
-
-    try {
-      const res = await fetch('/api/research/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          creator_id: creatorId,
-          message: userText,
-          conversation_history: history,
-        }),
-      })
-
-      const data = await res.json()
-
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to get a response')
-      }
-
-      setMessages(prev => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: data.reply,
-          createdAt: new Date().toISOString(),
-          videoCards: data.videoCards,
-          statsCards: data.statsCards,
-          ideaCards: data.ideaCards,
-          anomalyCard: data.anomalyCard,
-          personCards: data.personCards,
-        },
-      ])
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Something went wrong')
-    } finally {
-      setLoading(false)
-    }
-  }
-
-  async function sendMessage(text: string) {
-    const trimmed = text.trim()
-    if (!trimmed || loading) return
-
-    // conversation_history is everything before this new message — the server
-    // appends `message` itself as the final turn.
-    const history = messages
-    setMessages(prev => [...prev, { role: 'user', content: trimmed, createdAt: new Date().toISOString() }])
-    setInput('')
-
-    await requestAssistant(history, trimmed)
-  }
-
-  // Drops the latest assistant reply and re-asks the user message that produced
-  // it, so the replacement is generated from identical context.
-  async function regenerate() {
-    if (loading || lastAssistantIndex < 1) return
-
-    let userIndex = -1
-    for (let i = lastAssistantIndex - 1; i >= 0; i--) {
-      if (messages[i].role === 'user') {
-        userIndex = i
-        break
-      }
-    }
-    if (userIndex === -1) return
-
-    const userText = messages[userIndex].content
-    const history = messages.slice(0, userIndex)
-
-    setMessages(messages.slice(0, lastAssistantIndex))
-    await requestAssistant(history, userText)
-  }
-
-  function startNewChat() {
-    setMessages([])
-    setInput('')
-    setError(null)
-    setLoading(false)
-  }
-
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     sendMessage(input)
@@ -611,41 +515,141 @@ export default function ResearchChat({
     }
   }
 
-  // Two shells for one conversation.
+  // A suggestion pill on the landing screen has to do two things: open the
+  // full-screen view and ask the question. Navigating first means the reply streams
+  // in where the creator is already looking, rather than behind them on a screen
+  // that no longer renders messages.
+  function handleAskFromLanding(question: string) {
+    router.push('/dashboard/research/chat')
+    sendMessage(question)
+  }
+
+  // Three shells, one conversation.
   //
-  // Below lg with nothing asked yet, Research is a browsable landing page: header,
-  // a prominent ask field, suggestion pills, and the audience cards the desktop
-  // sidebar carries. It scrolls with the page rather than trapping a fixed-height
-  // panel inside a phone screen.
+  //  variant="fullscreen"  the mobile chat route: fixed to the viewport, its own
+  //                        header with Back, nothing else on screen.
+  //  variant="page" <lg    the landing/overview: audience cards and a Start Chat
+  //                        button. Renders NO messages — the conversation lives on
+  //                        the chat route now, so this stays an overview even mid-
+  //                        conversation.
+  //  variant="page" >=lg   the desktop hybrid panel, unchanged.
   //
-  // Once a message exists — or at lg and up — the bounded chat panel takes over.
-  // State, handlers and every card renderer are shared between the two, so this is
-  // a layout switch rather than a second implementation.
-  const showMobileLanding = !hasMessages
+  // State, handlers and every card renderer are shared, so this is a layout switch
+  // rather than a second chat implementation.
+  const isFullscreen = variant === 'fullscreen'
+
+  if (isFullscreen) {
+    return (
+      // Fixed rather than h-screen: on mobile browsers h-screen tracks the LARGE
+      // viewport, so the composer would sit under the address bar. inset-0 pins it
+      // to the visible area instead. z-50 clears the tab bar's z-40 in case any
+      // chrome is still mounted.
+      <div className="fixed inset-0 z-50 flex flex-col bg-background">
+        <header
+          className="flex flex-shrink-0 items-center justify-between gap-3 border-b border-white/10 px-4 py-3"
+          // The chat route renders outside the dashboard shell, so it carries its
+          // own top inset for notched phones.
+          style={{ paddingTop: 'calc(0.75rem + env(safe-area-inset-top))' }}
+        >
+          <Link
+            href="/dashboard/research"
+            aria-label="Back to Research"
+            className="-ml-1 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-sm text-text-muted transition-colors active:bg-surface-hover"
+          >
+            <span aria-hidden="true" className="text-base leading-none">←</span>
+            Back
+          </Link>
+          <h1 className="font-display text-base font-semibold text-text-primary">Research</h1>
+          {hasMessages ? (
+            <button
+              onClick={startNewChat}
+              className="rounded-full border border-white/10 bg-surface px-3 py-1.5 text-xs text-text-muted transition-colors active:bg-surface-hover"
+            >
+              + New
+            </button>
+          ) : (
+            // Keeps the title optically centred when there's no button yet.
+            <span aria-hidden="true" className="w-14" />
+          )}
+        </header>
+
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-4">
+          {!hasMessages && (
+            <div className="flex h-full flex-col items-center justify-center gap-5 py-8 text-center">
+              <p className="font-display text-lg font-semibold text-text-primary">
+                Ask anything about your audience.
+              </p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {SUGGESTED_QUESTIONS.map(question => (
+                  <button
+                    key={question}
+                    onClick={() => sendMessage(question)}
+                    className="rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
+                  >
+                    {question}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className={`mx-auto max-w-2xl flex-col gap-5 py-5 ${hasMessages || loading || error ? 'flex' : 'hidden'}`}>
+            <ChatThread
+              messages={messages}
+              loading={loading}
+              error={error}
+              lastAssistantIndex={lastAssistantIndex}
+              onRegenerate={regenerate}
+            />
+          </div>
+        </div>
+
+        <div
+          className="flex-shrink-0 border-t border-white/10 px-4 py-3"
+          style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
+        >
+          <form onSubmit={handleSubmit} className="mx-auto flex max-w-2xl items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              rows={1}
+              value={input}
+              onChange={e => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask about your audience..."
+              disabled={loading}
+              className="flex-1 resize-none overflow-y-auto rounded-2xl border border-white/10 bg-surface px-4 py-3 text-base leading-relaxed text-text-primary placeholder:text-text-muted focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none disabled:opacity-50"
+              style={{ maxHeight: MAX_TEXTAREA_HEIGHT }}
+            />
+            <button
+              type="submit"
+              disabled={!input.trim() || loading}
+              aria-label="Send"
+              className="btn-primary h-11 w-11 flex-shrink-0 rounded-full p-0 disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              <span className="flex items-center justify-center"><ArrowRightIcon /></span>
+            </button>
+          </form>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <>
-      {showMobileLanding && (
-        <div className="lg:hidden">
-          <MobileResearchLanding
-            input={input}
-            onInputChange={setInput}
-            onSubmit={handleSubmit}
-            onAsk={sendMessage}
-            interests={interests}
-            trending={trending}
-            error={error}
-          />
-        </div>
-      )}
+      <div className="lg:hidden">
+        <MobileResearchLanding
+          onAsk={handleAskFromLanding}
+          interests={interests}
+          trending={trending}
+          error={error}
+          hasMessages={hasMessages}
+        />
+      </div>
 
       <div
-        // lg height leaves room for the hero + feature pills that now sit above it,
-        // so the panel still ends near the fold instead of pushing off-screen.
-        className={`h-[70vh] min-h-[480px] flex-col overflow-hidden rounded-xl border border-white/10 bg-background lg:h-[calc(100vh-27rem)] lg:min-h-[420px] ${
-          // While the mobile landing is showing, the panel is desktop-only.
-          showMobileLanding ? 'hidden lg:flex' : 'flex'
-        }`}
+        // Desktop only now: below lg the landing above owns the screen and the
+        // conversation lives on its own route.
+        className="hidden h-[70vh] min-h-[480px] flex-col overflow-hidden rounded-xl border border-white/10 bg-background lg:flex lg:h-[calc(100vh-27rem)] lg:min-h-[420px]"
       >
       <header className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-3">
         <h2 className="font-display text-base font-semibold text-text-primary">Research</h2>
@@ -685,46 +689,13 @@ export default function ResearchChat({
         {/* Collapsed while empty so its vertical padding can't push the h-full opening
             state above into a stray scrollbar. */}
         <div className={`mx-auto max-w-2xl flex-col gap-5 py-6 ${hasMessages || loading || error ? 'flex' : 'hidden'}`}>
-          {messages.map((message, index) =>
-            message.role === 'user' ? (
-              <div key={index} className="flex flex-col items-end gap-1">
-                <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-purple px-4 py-3 text-sm whitespace-pre-wrap text-white">
-                  {message.content}
-                </div>
-                <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
-              </div>
-            ) : (
-              <div key={index} className="flex flex-col items-start gap-1">
-                <div className="card max-w-[75%] rounded-tl-sm border-l-2 border-pink">
-                  {message.statsCards?.map(card => (
-                    <StatsCardDisplay key={card.title} card={card} />
-                  ))}
-                  {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
-                  <MarkdownMessage content={message.content} />
-                  {message.personCards?.map(card => (
-                    <PersonCardDisplay key={card.display_name} card={card} />
-                  ))}
-                  {message.ideaCards?.map(card => (
-                    <IdeaCardDisplay key={card.number} card={card} />
-                  ))}
-                  {message.videoCards?.map(card => (
-                    <VideoCardDisplay key={card.post_id} card={card} />
-                  ))}
-                </div>
-                <div className="flex items-center gap-3">
-                  <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
-                  <CopyResponseButton text={message.content} />
-                  {index === lastAssistantIndex && (
-                    <RegenerateButton onClick={regenerate} disabled={loading} />
-                  )}
-                </div>
-              </div>
-            )
-          )}
-
-          {loading && <TypingIndicator />}
-
-          {error && <p className="mr-auto text-sm text-avax-red">{error}</p>}
+          <ChatThread
+            messages={messages}
+            loading={loading}
+            error={error}
+            lastAssistantIndex={lastAssistantIndex}
+            onRegenerate={regenerate}
+          />
         </div>
       </div>
 

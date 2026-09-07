@@ -24,6 +24,19 @@ export default function DashboardLayout({
   // inside the standard nav chrome like everything else.
   const isWide = pathname?.startsWith('/dashboard/research')
 
+  // The full-screen chat is the one route that owns the whole viewport: no top nav,
+  // no page padding, no bottom tab bar, no Research FAB. Each is conditionally
+  // rendered below rather than hidden with CSS, so they are genuinely not mounted
+  // and nothing can overlay the composer or steal a tap near the bottom edge.
+  //
+  // Deliberately NOT an early `return <>{children}</>`. That renders a structurally
+  // different tree for this route, so React unmounts the whole subtree when moving
+  // between /dashboard/research and /dashboard/research/chat — taking the nested
+  // research layout, and with it the in-progress conversation, down with it.
+  // Verified: the early-return version lost the conversation on Back; keeping one
+  // stable wrapper with {children} in a fixed position preserves it.
+  const isFullscreenRoute = pathname === '/dashboard/research/chat'
+
   return (
     // The bottom padding below reserves room for the fixed tab bar so the last
     // element of every page isn't hidden underneath it, and returns to normal at md
@@ -46,10 +59,15 @@ export default function DashboardLayout({
       // the entire page wider than the screen (measured 657px at a 320px viewport).
       // w-full pins it back to the viewport; max-w-* still caps it on desktop and
       // mx-auto still centres it there.
-      className={`mx-auto w-full p-6 pb-[calc(9rem+env(safe-area-inset-bottom))] md:pb-6 ${
-        isWide ? 'max-w-7xl' : 'max-w-5xl'
-      }`}
+      className={
+        isFullscreenRoute
+          ? ''
+          : `mx-auto w-full p-6 pb-[calc(9rem+env(safe-area-inset-bottom))] md:pb-6 ${
+              isWide ? 'max-w-7xl' : 'max-w-5xl'
+            }`
+      }
     >
+      {!isFullscreenRoute && (
       <nav className="mb-6 flex flex-wrap items-center justify-between gap-y-2 border-b border-white/10 pb-4">
         <Link href="/dashboard/agent" className="block">
           <h1 className="text-xl font-bold font-display text-text-primary">Creator Dashboard</h1>
@@ -110,8 +128,9 @@ export default function DashboardLayout({
           </Link>
         </div>
       </nav>
+      )}
       {children}
-      <MobileTabBar />
+      {!isFullscreenRoute && <MobileTabBar />}
     </div>
   )
 }
