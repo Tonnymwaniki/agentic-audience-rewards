@@ -1,8 +1,19 @@
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3'
 
+// Same defensive parsing as the channel stats: YouTube sends counts as strings and
+// omits likeCount entirely when a video has likes hidden. null means "not published
+// by YouTube", which is not the same fact as zero.
+function parseCount(raw: unknown): number | null {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
 export async function fetchVideoMeta(videoId: string) {
   const url = new URL(`${YOUTUBE_API_BASE}/videos`)
-  url.searchParams.set('part', 'snippet')
+  // snippet and statistics in ONE request — videos.list accepts multiple parts, so
+  // asking separately would double the quota cost for the same data.
+  url.searchParams.set('part', 'snippet,statistics')
   url.searchParams.set('id', videoId)
   url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
 
@@ -24,10 +35,14 @@ export async function fetchVideoMeta(videoId: string) {
     snippet.thumbnails?.default?.url ||
     null
 
+  const statistics = item.statistics ?? {}
+
   return {
     title: snippet.title,
     description: snippet.description,
     thumbnailUrl,
+    likeCount: parseCount(statistics.likeCount),
+    viewCount: parseCount(statistics.viewCount),
   }
 }
 

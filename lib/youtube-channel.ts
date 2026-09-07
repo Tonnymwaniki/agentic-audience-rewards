@@ -1,5 +1,11 @@
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3'
 
+export type ChannelStats = {
+  subscriberCount: number | null
+  viewCount: number | null
+  videoCount: number | null
+}
+
 export type ChannelVideo = {
   videoId: string
   title: string
@@ -120,4 +126,60 @@ export async function fetchChannelVideos(channelUrlOrHandle: string): Promise<Ch
       publishedAt: snippet.publishedAt,
     }
   })
+}
+
+/**
+ * YouTube returns every statistic as a STRING ("1234"), and omits fields entirely
+ * when a channel hides them — subscriberCount is absent whenever the creator has
+ * turned off the public subscriber count. Number(undefined) is NaN, which would be
+ * written to a bigint column as null-or-garbage, so parse defensively and return
+ * null for anything missing or non-numeric rather than coercing it to 0. A real
+ * zero and "not published" are different facts and must not collapse together.
+ */
+function parseCount(raw: unknown): number | null {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null
+  const n = Number(raw)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * Public channel statistics via channels.list?part=statistics. Uses the same API
+ * key as the rest of the integration — no OAuth, because these figures are public.
+ */
+export async function fetchChannelStats(channelUrlOrHandle: string): Promise<ChannelStats> {
+  const channelInput = resolveChannelInput(channelUrlOrHandle)
+  if (!channelInput) {
+    throw new Error('Invalid YouTube channel URL or handle')
+  }
+
+  const url = new URL(`${YOUTUBE_API_BASE}/channels`)
+  url.searchParams.set('part', 'statistics')
+  url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
+  url.searchParams.set('maxResults', '1')
+
+  if (channelInput.kind === 'handle') {
+    url.searchParams.set('forHandle', channelInput.value)
+  } else if (channelInput.kind === 'channelId') {
+    url.searchParams.set('id', channelInput.value)
+  } else {
+    url.searchParams.set('forUsername', channelInput.value)
+  }
+
+  const res = await fetch(url.toString())
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`YouTube API error: ${res.status} - ${text}`)
+  }
+
+  const data = await res.json()
+  const stats = data.items?.[0]?.statistics
+  if (!stats) {
+    throw new Error('Channel not found')
+  }
+
+  return {
+    subscriberCount: parseCount(stats.subscriberCount),
+    viewCount: parseCount(stats.viewCount),
+    videoCount: parseCount(stats.videoCount),
+  }
 }

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { refreshChannelStats } from '@/lib/channel-stats'
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,7 +63,16 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    return NextResponse.json({ success: true })
+    // Deliberately after the URL has been saved, and deliberately non-fatal: a
+    // statistics hiccup must not make connecting a channel look like it failed.
+    // The response reports whether stats came through so the UI can say so.
+    const statsResult = await refreshChannelStats(supabase, creator.id, channel_url.trim())
+
+    return NextResponse.json({
+      success: true,
+      stats: statsResult.success ? statsResult.stats : null,
+      statsError: statsResult.success ? null : statsResult.error,
+    })
   } catch (err) {
     console.error('Save channel URL error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
     return NextResponse.json(

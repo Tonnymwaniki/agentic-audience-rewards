@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
-import { computeTrendingGroups, type TrendingComment } from '@/lib/trending'
+import { computeTrendingGroups, computeSentiment, type TrendingComment } from '@/lib/trending'
 import ResearchChat from './ResearchChat'
 import ResearchHero from './ResearchHero'
 import ResearchSidebar, {
@@ -36,18 +36,6 @@ const PLACEHOLDER_OVERVIEW = {
   isPlaceholder: true,
 }
 
-// TODO: replace with real sentiment. Nothing in the schema stores a sentiment score
-// today — comment_categories holds intent categories (purchase_intent / question /
-// complaint / casual), not sentiment. Deriving this needs either a new classifier
-// pass writing a sentiment column, or an agreed mapping from the existing
-// categories. Until then these percentages are illustrative only.
-const PLACEHOLDER_SENTIMENT = {
-  positive: 62,
-  neutral: 27,
-  negative: 11,
-  isPlaceholder: true,
-}
-
 type CommentRow = {
   id: string
   text: string
@@ -71,7 +59,7 @@ async function loadSidebarData(
     overview: PLACEHOLDER_OVERVIEW,
     trending: [],
     interests: [],
-    sentiment: PLACEHOLDER_SENTIMENT,
+    sentiment: { positive: 0, neutral: 0, negative: 0, isPlaceholder: false },
     insights: [],
   }
 
@@ -140,6 +128,7 @@ async function loadSidebarData(
   }))
 
   let interests: SidebarInterest[] = []
+  let sentiment = { positive: 0, neutral: 0, negative: 0, isPlaceholder: false }
   const insights: SidebarInsight[] = []
 
   const { data: notifications, error: notificationsError } = await supabase
@@ -184,6 +173,15 @@ async function loadSidebarData(
     for (const row of categories) {
       if (!row.category) continue
       categoryCounts.set(row.category, (categoryCounts.get(row.category) || 0) + 1)
+    }
+
+    // Real, from the same category rows the interest bars use — no second pass.
+    const breakdown = computeSentiment(categories)
+    sentiment = {
+      positive: breakdown.positive,
+      neutral: breakdown.neutral,
+      negative: breakdown.negative,
+      isPlaceholder: false,
     }
 
     const categorized = Array.from(categoryCounts.values()).reduce((a, b) => a + b, 0)
@@ -265,6 +263,7 @@ async function loadSidebarData(
     ...base,
     trending,
     interests,
+    sentiment,
     insights: insights.slice(0, SIDEBAR_INSIGHTS_LIMIT),
   }
 }

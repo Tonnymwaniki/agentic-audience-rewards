@@ -34,6 +34,11 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
         title: meta.title,
         content: meta.description,
         thumbnail_url: meta.thumbnailUrl,
+        // Refreshed on every re-ingest of the same video, since the upsert conflicts
+        // on (platform_id, external_post_id) — so counts track the video over time
+        // rather than freezing at whatever they were on first import.
+        like_count: meta.likeCount,
+        view_count: meta.viewCount,
       },
       {
         onConflict: 'platform_id, external_post_id',
