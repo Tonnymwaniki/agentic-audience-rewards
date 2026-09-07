@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import Avatar from '@/components/Avatar'
 import type { Highlight } from '@/lib/highlights'
+import DraftReplyEditor from '@/components/DraftReplyEditor'
 
 // A compact preview of the Highlights page's "Needs a Reply" section. Same data,
 // same approve endpoint — denser layout, and capped to a few items.
@@ -18,29 +19,6 @@ function timeAgo(dateString: string): string {
   if (diffMin < 60) return `${diffMin}m ago`
   if (diffHour < 24) return `${diffHour}h ago`
   return `${diffDay}d ago`
-}
-
-function CopyReplyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // clipboard unavailable
-    }
-  }
-
-  return (
-    <button
-      onClick={handleCopy}
-      className="rounded-lg border border-white/10 px-3 py-1.5 text-xs font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary"
-    >
-      {copied ? 'Copied!' : 'Copy reply'}
-    </button>
-  )
 }
 
 function AttentionCard({
@@ -66,19 +44,16 @@ function AttentionCard({
           <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-text-primary">{item.text}</p>
 
           {item.draftReply && (
-            <p className="mt-2 line-clamp-2 border-l-2 border-purple pl-2.5 text-sm leading-relaxed text-text-muted">
-              {item.draftReply}
-            </p>
+            <DraftReplyEditor
+              className="mt-2"
+              commentId={item.id}
+              draftReply={item.draftReply}
+              finalReplyText={item.finalReplyText}
+              onApproved={() => onApprove(item.id)}
+            />
           )}
 
           <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button
-              onClick={() => onApprove(item.id)}
-              className="btn-primary px-3 py-1.5 text-xs"
-            >
-              Approve
-            </button>
-            {item.draftReply && <CopyReplyButton text={item.draftReply} />}
             <Link
               href={`/dashboard/inbox/${item.postId}`}
               // min-w-0 is load-bearing, not decorative. `truncate` sets
@@ -98,34 +73,14 @@ function AttentionCard({
 }
 
 export default function AttentionList({ items }: { items: Highlight[] }) {
-  // Optimistic: the card leaves the list immediately, and comes back if the
-  // approve call fails, so a failure is visible rather than silently swallowed.
   const [dismissedIds, setDismissedIds] = useState<Set<string>>(new Set())
-  const [failedId, setFailedId] = useState<string | null>(null)
 
-  async function approve(commentId: string) {
-    setFailedId(null)
+  // Dismiss only. DraftReplyEditor owns the save and calls back on success, so this
+  // must NOT post to the approve endpoint as well — a second request would carry no
+  // final_reply_text and would overwrite the creator's edit with the raw draft,
+  // silently resetting reply_was_edited to false.
+  function approve(commentId: string) {
     setDismissedIds(prev => new Set(prev).add(commentId))
-
-    const restore = () => {
-      setDismissedIds(prev => {
-        const next = new Set(prev)
-        next.delete(commentId)
-        return next
-      })
-      setFailedId(commentId)
-    }
-
-    try {
-      const res = await fetch('/api/draft-reply/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment_id: commentId }),
-      })
-      if (!res.ok) restore()
-    } catch {
-      restore()
-    }
   }
 
   const visible = items.filter(item => !dismissedIds.has(item.id))
@@ -140,11 +95,6 @@ export default function AttentionList({ items }: { items: Highlight[] }) {
 
   return (
     <div className="space-y-3">
-      {failedId && (
-        <p className="text-xs text-avax-red">
-          That reply couldn&apos;t be approved — please try again.
-        </p>
-      )}
       {visible.map(item => (
         <AttentionCard key={item.id} item={item} onApprove={approve} />
       ))}

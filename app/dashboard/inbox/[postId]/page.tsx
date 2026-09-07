@@ -107,7 +107,8 @@ export default async function PostInboxPage({
           comment_categories (
             category,
             topic,
-            draft_reply
+            draft_reply,
+            final_reply_text
           )
         `
         )
@@ -149,6 +150,7 @@ export default async function PostInboxPage({
     category: (comment.comment_categories as unknown as { category: string; topic: string; draft_reply?: string | null } | null)?.category || 'other',
     topic: (comment.comment_categories as unknown as { category: string; topic: string; draft_reply?: string | null } | null)?.topic || null,
     draftReply: (comment.comment_categories as unknown as { draft_reply?: string | null } | null)?.draft_reply || null,
+    finalReplyText: (comment.comment_categories as unknown as { final_reply_text?: string | null } | null)?.final_reply_text || null,
     audienceMemberId: comment.audience_member_id,
   }))
 

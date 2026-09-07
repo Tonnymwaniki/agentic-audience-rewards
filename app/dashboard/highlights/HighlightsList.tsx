@@ -4,6 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import Avatar from '@/components/Avatar'
 import type { Highlight } from '@/lib/highlights'
+import DraftReplyEditor from '@/components/DraftReplyEditor'
 
 type HighlightsListProps = {
   draftHighlights: Highlight[]
@@ -30,29 +31,11 @@ function reasonLabel(highlight: Highlight): string {
 export default function HighlightsList({ draftHighlights, repeatedHighlights }: HighlightsListProps) {
   const [dismissedDraftIds, setDismissedDraftIds] = useState<Set<string>>(new Set())
 
-  async function approveDraft(commentId: string) {
+  // The save request now lives in DraftReplyEditor, which only calls back on
+  // success — so this dismisses on a confirmed write rather than optimistically and
+  // then un-dismissing on failure. The editor shows the error in place instead.
+  function approveDraft(commentId: string) {
     setDismissedDraftIds(prev => new Set(prev).add(commentId))
-
-    try {
-      const res = await fetch('/api/draft-reply/approve', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ comment_id: commentId }),
-      })
-      if (!res.ok) {
-        setDismissedDraftIds(prev => {
-          const next = new Set(prev)
-          next.delete(commentId)
-          return next
-        })
-      }
-    } catch {
-      setDismissedDraftIds(prev => {
-        const next = new Set(prev)
-        next.delete(commentId)
-        return next
-      })
-    }
   }
 
   const visibleDrafts = draftHighlights.filter(h => !dismissedDraftIds.has(h.id))
@@ -130,39 +113,16 @@ function HighlightCard({
           <p className="mt-1 text-sm leading-relaxed text-text-primary">{highlight.text}</p>
 
           {highlight.reason === 'pending_draft' && highlight.draftReply && (
-            <div className="mt-3 rounded-md bg-surface-hover p-3">
-              <p className="mb-1 text-xs font-medium text-text-muted">Drafted reply</p>
-              <p className="text-sm text-text-primary">{highlight.draftReply}</p>
-              <div className="mt-2 flex flex-wrap gap-3">
-                <button onClick={() => onApproveDraft(highlight.id)} className="btn-primary text-xs">
-                  Approve
-                </button>
-                <CopyReplyButton text={highlight.draftReply} />
-              </div>
-            </div>
+            <DraftReplyEditor
+              className="mt-3"
+              commentId={highlight.id}
+              draftReply={highlight.draftReply}
+              finalReplyText={highlight.finalReplyText}
+              onApproved={() => onApproveDraft(highlight.id)}
+            />
           )}
         </div>
       </div>
     </div>
-  )
-}
-
-function CopyReplyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false)
-
-  async function handleCopy() {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopied(true)
-      setTimeout(() => setCopied(false), 2000)
-    } catch {
-      // clipboard unavailable
-    }
-  }
-
-  return (
-    <button onClick={handleCopy} className="text-xs text-text-muted underline hover:text-text-primary">
-      {copied ? 'Copied!' : 'Copy Reply'}
-    </button>
   )
 }

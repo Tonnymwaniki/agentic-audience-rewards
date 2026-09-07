@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import Avatar from '@/components/Avatar'
+import DraftReplyEditor from '@/components/DraftReplyEditor'
 
 type Comment = {
   id: string
@@ -12,6 +13,7 @@ type Comment = {
   topic: string | null
   hasReward?: boolean
   draftReply?: string | null
+  finalReplyText?: string | null
   profileSummary?: string | null
 }
 
@@ -58,7 +60,7 @@ export default function CommentsList({ comments, peopleNoticed, repeatedCommentI
   const [category, setCategory] = useState<string | null>(null)
   const [commentIndex, setCommentIndex] = useState(0)
   const [expandedDrafts, setExpandedDrafts] = useState<Set<string>>(new Set())
-  const [copyingId, setCopyingId] = useState<string | null>(null)
+  const [approvedIds, setApprovedIds] = useState<Set<string>>(new Set())
   const [regeneratingId, setRegeneratingId] = useState<string | null>(null)
   const [draftErrors, setDraftErrors] = useState<Set<string>>(new Set())
   const [draftReplies, setDraftReplies] = useState<Map<string, string>>(new Map())
@@ -88,14 +90,9 @@ export default function CommentsList({ comments, peopleNoticed, repeatedCommentI
     })
   }
 
-  async function copyReply(commentId: string, text: string) {
-    try {
-      await navigator.clipboard.writeText(text)
-      setCopyingId(commentId)
-      setTimeout(() => setCopyingId(null), 2000)
-    } catch {
-      // clipboard unavailable
-    }
+  // Copy now lives inside DraftReplyEditor, which copies whatever is in the box.
+  function markApproved(commentId: string) {
+    setApprovedIds(prev => new Set(prev).add(commentId))
   }
 
   async function regenerateDraft(commentId: string) {
@@ -228,16 +225,18 @@ export default function CommentsList({ comments, peopleNoticed, repeatedCommentI
                       💬 Suggested reply
                     </button>
                     {expandedDrafts.has(current.id) && (
-                      <div className="mt-2 rounded-md bg-surface-hover p-4">
-                        <p className="text-sm text-text-primary">{getDraftReply(current)}</p>
+                      <div className="mt-2">
+                        {/* keyed on the draft text so regenerating remounts the
+                            editor with the new draft — otherwise its internal state,
+                            seeded once on mount, would keep showing the old one. */}
+                        <DraftReplyEditor
+                          key={getDraftReply(current)!}
+                          commentId={current.id}
+                          draftReply={getDraftReply(current)!}
+                          finalReplyText={current.finalReplyText}
+                          onApproved={() => markApproved(current.id)}
+                        />
                         <div className="mt-2 flex gap-3">
-                          <button
-                            onClick={() => copyReply(current.id, getDraftReply(current)!)}
-                            disabled={copyingId === current.id}
-                            className="text-xs text-purple-text underline hover:text-purple-hover disabled:opacity-50"
-                          >
-                            {copyingId === current.id ? 'Copied!' : 'Copy Reply'}
-                          </button>
                           <button
                             onClick={() => regenerateDraft(current.id)}
                             disabled={regeneratingId === current.id}
@@ -245,6 +244,9 @@ export default function CommentsList({ comments, peopleNoticed, repeatedCommentI
                           >
                             {regeneratingId === current.id ? 'Regenerating...' : 'Regenerate'}
                           </button>
+                          {approvedIds.has(current.id) && (
+                            <span className="text-xs text-green">Approved</span>
+                          )}
                         </div>
                         {draftErrors.has(current.id) && (
                           <p className="mt-2 text-xs text-avax-red">Failed to regenerate. Please try again.</p>
