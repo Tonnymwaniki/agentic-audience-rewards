@@ -79,13 +79,15 @@ export default function DashboardLayout({
 
           <NotificationBell />
 
-          {/* Duplicated by the "Me" tab below md, so it hides with the link row. */}
+          {/* Duplicated by the "Me" tab below md, so it hides with the link row.
+              Points at the account page rather than straight to Business Profile —
+              /dashboard/me is now the hub that links on to the profile form. */}
           <Link
-            href="/dashboard/profile"
-            aria-label="Business Profile"
-            title="Business Profile"
+            href="/dashboard/me"
+            aria-label="Account"
+            title="Account"
             className={`hidden rounded-md p-2 transition-colors md:block ${
-              pathname.startsWith('/dashboard/profile')
+              pathname.startsWith('/dashboard/me') || pathname.startsWith('/dashboard/profile')
                 ? 'text-purple-text'
                 : 'text-text-muted hover:text-text-primary'
             }`}

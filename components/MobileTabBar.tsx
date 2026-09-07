@@ -6,9 +6,14 @@ import { usePathname } from 'next/navigation'
 // Fixed bottom tab bar for narrow viewports. The dashboard's top nav hides its link
 // row at the same `md` breakpoint, so exactly one navigation is visible at a time.
 //
-// Four tabs split 2 | gap | 2, with Research promoted out of the row into a floating
-// action button that sits in the gap. The gap is a real flex child rather than the
-// FAB being laid over a tab, so the FAB can never cover another tab's tap target.
+// Three tabs plus the Research floating action button, which sits in a reserved gap
+// rather than being laid over a tab — so it can never cover a tap target.
+//
+// The gap must stay at the horizontal centre, because the FAB is centred on the
+// VIEWPORT (left-1/2), not on the flex row. With an even 1|1|gap|1 split the gap
+// would land off-centre and the FAB would overlap the second tab. Weighting the
+// trailing tab x2 restores symmetry: 1 + 1 on the left, gap, 2 on the right, so the
+// gap's midpoint is the viewport's midpoint. Verified by measurement, not by eye.
 
 const FAB_HREF = '/dashboard/research'
 
@@ -43,7 +48,7 @@ const TABS: TabItem[] = [
   },
   {
     href: '/dashboard/inbox',
-    label: 'Videos',
+    label: 'My Videos',
     icon: (
       <svg {...iconProps}>
         <path
@@ -55,20 +60,7 @@ const TABS: TabItem[] = [
     ),
   },
   {
-    href: '/dashboard/rewards',
-    label: 'Rewards',
-    icon: (
-      <svg {...iconProps}>
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d="M16.5 18.75h-9m9 0a3 3 0 0 1 3 3h-15a3 3 0 0 1 3-3m9 0v-3.375c0-.621-.503-1.125-1.125-1.125h-.871M7.5 18.75v-3.375c0-.621.504-1.125 1.125-1.125h.872m5.007 0H9.497m5.007 0a7.454 7.454 0 0 1-.982-3.172M9.497 14.25a7.454 7.454 0 0 0 .981-3.172M5.25 4.236c-.982.143-1.954.317-2.916.52A6.003 6.003 0 0 0 7.73 9.728M5.25 4.236V4.5c0 2.108.966 3.99 2.48 5.228M5.25 4.236V2.721C7.456 2.41 9.71 2.25 12 2.25c2.291 0 4.545.16 6.75.47v1.516M7.73 9.728a6.726 6.726 0 0 0 2.748 1.35m8.272-6.842V4.5c0 2.108-.966 3.99-2.48 5.228m2.48-5.492a46.32 46.32 0 0 1 2.916.52 6.003 6.003 0 0 1-5.395 4.972m0 0a6.726 6.726 0 0 1-2.749 1.35m0 0a6.772 6.772 0 0 1-3.044 0"
-        />
-      </svg>
-    ),
-  },
-  {
-    href: '/dashboard/profile',
+    href: '/dashboard/me',
     label: 'Me',
     icon: (
       <svg {...iconProps}>
@@ -108,15 +100,16 @@ export default function MobileTabBar() {
   const pathname = usePathname()
   const fabActive = pathname === FAB_HREF || pathname?.startsWith(FAB_HREF + '/')
 
-  // Split 2 | gap | 2 so the FAB occupies its own column.
+  // Two tabs before the gap, one after. The trailing tab carries double weight so
+  // the gap — and therefore the FAB — lands dead centre; see the note at the top.
   const left = TABS.slice(0, 2)
   const right = TABS.slice(2)
 
-  function renderTab(tab: TabItem) {
+  function renderTab(tab: TabItem, grow = 'flex-1') {
     const isActive = pathname === tab.href || pathname?.startsWith(tab.href + '/')
 
     return (
-      <li key={tab.href} className="flex-1">
+      <li key={tab.href} className={grow}>
         <Link
           href={tab.href}
           aria-current={isActive ? 'page' : undefined}
@@ -169,12 +162,14 @@ export default function MobileTabBar() {
         <SparkleIcon />
       </Link>
 
+      {/* Not `left.map(renderTab)` — map passes the index as the second argument,
+          which would land in `grow` and emit className="0". */}
       <ul className="flex items-stretch">
-        {left.map(renderTab)}
+        {left.map(tab => renderTab(tab))}
 
         {/* Reserved column under the FAB. Holds the label so Research still reads as
-            a named destination like its neighbours, and keeps the flex maths even so
-            the four tabs stay equally spaced. */}
+            a named destination like its neighbours, and keeps a tab from sitting
+            beneath the button. */}
         <li aria-hidden="true" className="w-16 flex-shrink-0">
           <div className="flex min-h-14 flex-col items-center justify-end px-1 py-2">
             <span
@@ -187,7 +182,7 @@ export default function MobileTabBar() {
           </div>
         </li>
 
-        {right.map(renderTab)}
+        {right.map(tab => renderTab(tab, 'flex-[2]'))}
       </ul>
     </nav>
   )

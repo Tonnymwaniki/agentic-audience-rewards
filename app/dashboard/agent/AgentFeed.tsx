@@ -141,13 +141,15 @@ function ArrowIcon() {
 
 // --- Pieces ---------------------------------------------------------------
 
-type Tone = 'purple' | 'pink' | 'teal' | 'green'
+type Tone = 'purple' | 'pink' | 'teal' | 'green' | 'gold'
 
+// Every tone here must have a matching .icon-badge-<tone> rule in globals.css.
 const TONE_TEXT: Record<Tone, string> = {
   purple: 'text-purple-text',
   pink: 'text-pink',
   teal: 'text-teal',
   green: 'text-green',
+  gold: 'text-gold-light',
 }
 
 function StatCard({
@@ -192,6 +194,15 @@ const QUICK_ACTIONS: Array<{ href: string; label: string; description: string; t
     label: 'View audience insights',
     description: 'Themes, timing and who keeps showing up',
     tone: 'teal',
+  },
+  {
+    // The connect flow is otherwise only reachable from the Me page, which is a
+    // detour for the common case of pulling in new uploads. Agent Home is where a
+    // returning creator lands, so the route back to Connect belongs here too.
+    href: '/dashboard/connect',
+    label: 'Analyze more videos',
+    description: 'Pull in new uploads or another channel',
+    tone: 'gold',
   },
 ]
 
@@ -339,7 +350,10 @@ export default function AgentSummary({
       {/* --- Quick actions --- */}
       <section className="card">
         <h2 className="mb-3 font-display text-base font-semibold text-text-primary">Quick Actions</h2>
-        <div className="grid grid-cols-1 gap-2 lg:grid-cols-3">
+        {/* 2x2 rather than 4-across: at max-w-5xl a four-column row leaves ~185px
+            of text per card, which wraps "Analyze more videos" onto three lines.
+            Three columns would strand the fourth action alone on a second row. */}
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
           {QUICK_ACTIONS.map(action => (
             <Link
               key={action.href}

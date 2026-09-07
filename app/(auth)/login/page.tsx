@@ -34,7 +34,11 @@ export default function LoginPage() {
         if (error) throw error
       }
 
-      router.push('/dashboard/connect')
+      // /dashboard is a server-side router, not a page: it looks up whether this
+      // creator has analyzed any videos and forwards to Agent Home or the connect
+      // flow accordingly. Previously this pushed straight to /dashboard/connect,
+      // which sent returning creators back through onboarding on every login.
+      router.push('/dashboard')
       router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'An error occurred')

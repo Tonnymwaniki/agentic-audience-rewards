@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { loadHighlights } from '@/lib/highlights'
 import { buildActivityFeed } from '@/lib/activity'
+import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
 
@@ -71,6 +72,20 @@ export default async function AgentHomePage() {
   }
 
   const postIds = (posts || []).map(p => p.id)
+
+  // Safeguard for anyone landing here directly — a bookmark, the back button, or a
+  // typed URL — before analyzing anything. Agent Home with no videos is a page of
+  // zeroes that explains nothing, so send them to the connect flow instead.
+  //
+  // Reuses the posts fetch above rather than calling creatorHasPosts(): the rows are
+  // already loaded here, and a second count query would be pure waste. The postsError
+  // branch above returns first, so an empty list here genuinely means zero posts
+  // rather than a failed read.
+  //
+  // Must stay outside any try/catch — redirect() signals by throwing.
+  if (postIds.length === 0) {
+    redirect(CONNECT_PATH)
+  }
 
   type CommentRow = { id: string; posted_at: string }
   const allComments: CommentRow[] = []
