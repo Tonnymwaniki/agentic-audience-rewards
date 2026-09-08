@@ -39,7 +39,7 @@ export default async function HighlightsPage() {
 
   // Selection/ordering lives in lib/highlights so Agent Home's preview of this
   // same data can't drift out of sync with the full list here.
-  const { draftHighlights, repeatedHighlights } = await loadHighlights(
+  const { draftHighlights, escalatedHighlights, repeatedHighlights } = await loadHighlights(
     supabase,
     creator.id,
     HIGHLIGHTS_LIMIT
@@ -53,7 +53,11 @@ export default async function HighlightsPage() {
     // lines. max-w-3xl still keeps this page narrower than the layout's max-w-5xl.
     <div className="mx-auto max-w-3xl">
       <PageHeader title="Highlights" backHref="/dashboard/agent" backLabel="Agent Home" />
-      <HighlightsList draftHighlights={draftHighlights} repeatedHighlights={repeatedHighlights} />
+      <HighlightsList
+        draftHighlights={draftHighlights}
+        escalatedHighlights={escalatedHighlights}
+        repeatedHighlights={repeatedHighlights}
+      />
     </div>
   )
 }

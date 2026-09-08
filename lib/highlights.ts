@@ -11,16 +11,19 @@ export type Highlight = {
   authorName: string
   postId: string
   videoTitle: string
-  reason: 'pending_draft' | 'repeated'
+  reason: 'pending_draft' | 'repeated' | 'escalated'
   category: string | null
   draftReply: string | null
   finalReplyText: string | null
   draftConfidence: string | null
+  escalationFlag: string | null
   repeatCount: number | null
 }
 
 export type HighlightsResult = {
   draftHighlights: Highlight[]
+  /** Comments a human must answer personally — never carry a drafted reply. */
+  escalatedHighlights: Highlight[]
   repeatedHighlights: Highlight[]
   /** Every pending draft, before the display cap — used for badge counts. */
   totalPendingDrafts: number
@@ -28,6 +31,7 @@ export type HighlightsResult = {
 
 const EMPTY: HighlightsResult = {
   draftHighlights: [],
+  escalatedHighlights: [],
   repeatedHighlights: [],
   totalPendingDrafts: 0,
 }
@@ -53,6 +57,7 @@ type CategoryInfo = {
   draft_reply_created_at: string | null
   final_reply_text: string | null
   draft_confidence: string | null
+  escalation_flag: string | null
 }
 
 function getAuthorName(row: CommentRow): string {
@@ -112,7 +117,7 @@ export async function loadHighlights(
         post_id,
         audience_member_id,
         audience_members ( display_name ),
-        comment_categories ( category, draft_reply, draft_reply_approved_at, draft_reply_created_at, final_reply_text, draft_confidence )
+        comment_categories ( category, draft_reply, draft_reply_approved_at, draft_reply_created_at, final_reply_text, draft_confidence, escalation_flag )
       `
       )
       .in('post_id', postIds)
@@ -143,7 +148,14 @@ export async function loadHighlights(
     return allComments
       .filter(c => {
         const cat = getCategoryInfo(c)
-        return cat?.category === category && cat.draft_reply && !cat.draft_reply_approved_at
+        // escalation_flag wins unconditionally: a flagged comment must not surface
+        // as a draft even if one was written before the flag existed.
+        return (
+          cat?.category === category &&
+          !cat.escalation_flag &&
+          cat.draft_reply &&
+          !cat.draft_reply_approved_at
+        )
       })
       .sort(sortByDraftRecency)
   }
@@ -189,9 +201,17 @@ export async function loadHighlights(
       draftReply: info?.draft_reply || null,
       finalReplyText: info?.final_reply_text || null,
       draftConfidence: info?.draft_confidence || null,
+      escalationFlag: info?.escalation_flag || null,
       repeatCount: repeatCountByCommentId.get(comment.id) || null,
     }
   }
+
+  // Escalated comments come first in the selection: they are the only category the
+  // agent explicitly refused to handle, so they must never be crowded out of the
+  // capped list by ordinary drafts.
+  const escalated = allComments
+    .filter(c => getCategoryInfo(c)?.escalation_flag)
+    .sort(sortByDraftRecency)
 
   const draftPriorityOrder = [
     ...pendingDraftsFor('purchase_intent'),
@@ -204,6 +224,11 @@ export async function loadHighlights(
   // under its highest-priority reason.
   const selectedIds = new Set<string>()
   const highlights: Highlight[] = []
+
+  for (const comment of escalated) {
+    selectedIds.add(comment.id)
+    highlights.push(toHighlight(comment, 'escalated'))
+  }
 
   for (const comment of draftPriorityOrder) {
     if (selectedIds.has(comment.id)) continue
@@ -222,6 +247,7 @@ export async function loadHighlights(
   // filter() preserves the priority ordering established above within each group.
   return {
     draftHighlights: capped.filter(h => h.reason === 'pending_draft'),
+    escalatedHighlights: capped.filter(h => h.reason === 'escalated'),
     repeatedHighlights: capped.filter(h => h.reason === 'repeated'),
     totalPendingDrafts: draftPriorityOrder.length,
   }

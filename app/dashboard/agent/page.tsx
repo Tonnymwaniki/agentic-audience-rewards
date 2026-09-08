@@ -229,7 +229,7 @@ export default async function AgentHomePage() {
     .pop() ?? null
 
   // --- Needs Your Attention: the same selection Highlights uses, previewed ---
-  const { draftHighlights, totalPendingDrafts } = await loadHighlights(
+  const { draftHighlights, escalatedHighlights, totalPendingDrafts } = await loadHighlights(
     supabase,
     creator.id,
     ATTENTION_PREVIEW_LIMIT
@@ -271,6 +271,7 @@ export default async function AgentHomePage() {
         repliesReadyCount={repliesReadyCount}
         purchaseIntentReadyCount={purchaseIntentReadyCount}
         attentionItems={draftHighlights}
+        escalatedItems={escalatedHighlights}
         activity={activity}
       />
     </div>

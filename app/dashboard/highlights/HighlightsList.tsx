@@ -6,9 +6,11 @@ import Avatar from '@/components/Avatar'
 import type { Highlight } from '@/lib/highlights'
 import DraftReplyEditor from '@/components/DraftReplyEditor'
 import ConfidenceBadge from '@/components/ConfidenceBadge'
+import { ESCALATION_LABELS, ESCALATION_NOTE, normalizeEscalation } from '@/lib/escalation'
 
 type HighlightsListProps = {
   draftHighlights: Highlight[]
+  escalatedHighlights: Highlight[]
   repeatedHighlights: Highlight[]
 }
 
@@ -29,7 +31,11 @@ function reasonLabel(highlight: Highlight): string {
   return `Trending — repeated ${highlight.repeatCount}x`
 }
 
-export default function HighlightsList({ draftHighlights, repeatedHighlights }: HighlightsListProps) {
+export default function HighlightsList({
+  draftHighlights,
+  escalatedHighlights,
+  repeatedHighlights,
+}: HighlightsListProps) {
   const [dismissedDraftIds, setDismissedDraftIds] = useState<Set<string>>(new Set())
 
   // The save request now lives in DraftReplyEditor, which only calls back on
@@ -41,7 +47,11 @@ export default function HighlightsList({ draftHighlights, repeatedHighlights }: 
 
   const visibleDrafts = draftHighlights.filter(h => !dismissedDraftIds.has(h.id))
 
-  if (visibleDrafts.length === 0 && repeatedHighlights.length === 0) {
+  if (
+    visibleDrafts.length === 0 &&
+    escalatedHighlights.length === 0 &&
+    repeatedHighlights.length === 0
+  ) {
     return (
       <div className="card p-8 text-center">
         <p className="text-sm text-text-muted">Nothing needs your attention right now.</p>
@@ -51,6 +61,22 @@ export default function HighlightsList({ draftHighlights, repeatedHighlights }: 
 
   return (
     <div className="space-y-8">
+      {/* First on the page: these are the only comments the agent declined to
+          handle, so they should be the first thing the creator sees. */}
+      {escalatedHighlights.length > 0 && (
+        <section>
+          <h2 className="mb-1 font-display text-lg font-semibold text-text-primary">
+            Needs your personal attention
+          </h2>
+          <p className="mb-3 text-sm text-text-muted">{ESCALATION_NOTE}</p>
+          <div className="space-y-4">
+            {escalatedHighlights.map(highlight => (
+              <EscalatedCard key={highlight.id} highlight={highlight} />
+            ))}
+          </div>
+        </section>
+      )}
+
       {visibleDrafts.length > 0 && (
         <section>
           <h2 className="mb-3 font-display text-lg font-semibold text-text-primary">Needs a Reply</h2>
@@ -72,6 +98,44 @@ export default function HighlightsList({ draftHighlights, repeatedHighlights }: 
           </div>
         </section>
       )}
+    </div>
+  )
+}
+
+/**
+ * An escalated comment. Shows the comment and nothing else — no drafted reply, no
+ * Approve button, no Copy. The absence of those controls is the feature: there is
+ * deliberately nothing here to accept without reading.
+ */
+function EscalatedCard({ highlight }: { highlight: Highlight }) {
+  const flag = normalizeEscalation(highlight.escalationFlag)
+
+  return (
+    <div className="card border-avax-red/30">
+      <div className="flex items-center justify-between gap-2">
+        <Link
+          href={`/dashboard/inbox/${highlight.postId}`}
+          className="min-w-0 truncate text-xs text-text-muted underline hover:text-text-primary"
+        >
+          {highlight.videoTitle}
+        </Link>
+        {flag && (
+          <span className="flex-shrink-0 rounded-full border border-avax-red/40 bg-avax-red/15 px-2 py-0.5 font-mono text-[10px] tracking-wide text-avax-red uppercase">
+            {ESCALATION_LABELS[flag]}
+          </span>
+        )}
+      </div>
+
+      <div className="mt-3 flex items-start gap-3">
+        <Avatar name={highlight.authorName} size={40} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <p className="font-body text-sm font-medium text-text-primary">{highlight.authorName}</p>
+            <span className="text-xs text-text-muted">{timeAgo(highlight.postedAt)}</span>
+          </div>
+          <p className="mt-1 text-sm leading-relaxed text-text-primary">{highlight.text}</p>
+        </div>
+      </div>
     </div>
   )
 }

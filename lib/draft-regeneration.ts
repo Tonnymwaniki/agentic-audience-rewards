@@ -7,6 +7,7 @@ import {
   BUSINESS_PROFILE_COLUMNS,
   type BusinessProfile,
 } from '@/lib/categorize'
+import { detectEscalation } from '@/lib/escalation'
 
 const DRAFTABLE_CATEGORIES = new Set(['purchase_intent', 'question', 'complaint'])
 const RELEVANCE_CHECK_CATEGORIES = new Set(['question', 'complaint'])
@@ -38,6 +39,7 @@ type CategoryRow = {
   draft_reply: string | null
   draft_reply_approved_at: string | null
   draft_reply_checked_at: string | null
+  escalation_flag: string | null
 }
 
 /**
@@ -144,7 +146,7 @@ export async function regenerateDraftsForCreator(
 
   const categories = await fetchInBatches<CategoryRow>(supabase, {
     table: 'comment_categories',
-    select: 'comment_id, category, draft_reply, draft_reply_approved_at, draft_reply_checked_at',
+    select: 'comment_id, category, draft_reply, draft_reply_approved_at, draft_reply_checked_at, escalation_flag',
     inColumn: 'comment_id',
     inValues: comments.map(c => c.id),
   })
@@ -225,6 +227,34 @@ export async function regenerateDraftsForCreator(
     const meta = postMeta.get(comment.post_id)
 
     try {
+      // Regeneration runs over rows categorized at some earlier time, so it can't
+      // use a fresh batch result. Fast path first: an already-flagged row needs no
+      // API call at all.
+      if (category.escalation_flag) {
+        await markChecked(comment.id, { draft_reply: null })
+        skippedCasual++
+        continue
+      }
+
+      // A null flag is ambiguous — it means EITHER screened-and-clean OR categorized
+      // before escalation screening existed. Every one of the existing rows is the
+      // latter, so reading null as "clean" would silently un-guard all of them. The
+      // standalone check remains the fallback for exactly this case.
+      const { escalation, checkFailed } = await detectEscalation(comment.text)
+
+      if (escalation) {
+        await markChecked(comment.id, { escalation_flag: escalation, draft_reply: null })
+        skippedCasual++
+        continue
+      }
+
+      if (checkFailed) {
+        console.warn(`Escalation check failed for comment ${comment.id}; skipping regeneration.`)
+        await markChecked(comment.id)
+        skippedCasual++
+        continue
+      }
+
       if (RELEVANCE_CHECK_CATEGORIES.has(category.category)) {
         const relevant = await isBusinessRelevant(
           comment.text,

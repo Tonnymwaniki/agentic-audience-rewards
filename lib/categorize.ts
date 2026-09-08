@@ -1,8 +1,20 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
+import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 
 export type ProgressCallback = (count: number) => void
+
+export type CategorizedComment = {
+  id: string
+  category: string
+  topic: string
+  confidence: number
+  /** null = screened and clean, OR not screened — see escalationScreened. */
+  escalation: EscalationType | null
+  /** False when the model omitted the escalation key entirely. */
+  escalationScreened: boolean
+}
 
 const DRAFT_REPLY_INSTRUCTIONS: Record<string, string> = {
   purchase_intent:
@@ -256,12 +268,7 @@ export async function categorizeComments(
   comments: { id: string; text: string }[],
   onProgress?: ProgressCallback
 ) {
-  const results: Array<{
-    id: string
-    category: string
-    topic: string
-    confidence: number
-  }> = []
+  const results: Array<CategorizedComment> = []
 
   const batchSize = 10
 
@@ -291,12 +298,7 @@ async function processBatch(
   batchIds: Set<string>,
   isRetry: boolean
 ) {
-  const batchResults: Array<{
-    id: string
-    category: string
-    topic: string
-    confidence: number
-  }> = []
+  const batchResults: Array<CategorizedComment> = []
 
   try {
     const controller = new AbortController()
@@ -306,7 +308,18 @@ async function processBatch(
       ? '\n\nYour previous response was not valid JSON. Respond with ONLY the JSON array, nothing else.'
       : ''
 
-    const prompt = `You are categorizing audience comments. For each comment, return its category (one of: question, praise, complaint, purchase_intent, spam, other) and a short topic tag. Treat Sheng/Swahili/English code-switched text as meaningful, not spam. Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0}]
+    const prompt = `You are categorizing audience comments. For each comment, return its category (one of: question, praise, complaint, purchase_intent, spam, other) and a short topic tag. Treat Sheng/Swahili/English code-switched text as meaningful, not spam.
+
+Separately, and INDEPENDENTLY of the category, assess whether the comment needs the creator to answer it personally rather than having an AI draft a reply. Set "escalation" to one of:
+- "legal_threat": mentions a lawyer, suing, legal action, reporting to authorities, or similar.
+- "hostility": genuine hostility, abuse or harassment aimed at the creator or another person — beyond ordinary criticism or an annoyed complaint.
+- "sensitive_liability": asks for or asserts medical/health claims, financial or investment advice, or raises a safety/injury issue, where a wrong answer could cause real harm.
+- "crisis": the person describes self-harm, suicidal feelings, or a serious personal crisis.
+- null: none of the above.
+
+Judge escalation on the comment's meaning, not its category. A comment can be "praise" or "other" and still need personal attention. Do NOT escalate ordinary negative feedback — "this is overpriced", "delivery was late", "I did not like this video" are normal complaints. Include the "escalation" key on EVERY item, using null when nothing applies.
+
+Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null}]
 
 Comments:
 ${JSON.stringify(batch)}${retrySuffix}`
@@ -375,11 +388,20 @@ ${JSON.stringify(batch)}${retrySuffix}`
           /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(item.id) &&
           batchIds.has(item.id)
         ) {
+          // `escalationScreened` is the batched equivalent of the standalone
+          // check's `checkFailed`. A model that silently drops the key must not be
+          // read as "nothing to escalate" — that would lose the safety check without
+          // anyone noticing. Present-and-null means screened and clean; absent means
+          // unscreened, and downstream skips drafting without setting a flag.
+          const escalationScreened = Object.prototype.hasOwnProperty.call(item, 'escalation')
+
           batchResults.push({
             id: item.id,
             category: String(item.category),
             topic: String(item.topic),
             confidence: typeof item.confidence === 'number' ? item.confidence : 0,
+            escalation: normalizeEscalation(item.escalation),
+            escalationScreened,
           })
         } else {
           console.error('Categorize batch warning: skipping invalid result', JSON.stringify(item, Object.getOwnPropertyNames(item), 2))
@@ -439,6 +461,10 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     category: c.category,
     topic: c.topic,
     confidence: c.confidence,
+    // Written for EVERY comment now, not only draftable ones — which is the point
+    // of folding this into the batch: crisis language in a 'praise' or 'other'
+    // comment is flagged too.
+    escalation_flag: c.escalation,
   }))
 
   const { error: upsertError } = await supabase
@@ -510,6 +536,21 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     if (!text) continue
 
     try {
+      // Escalation was assessed in the categorization pass and already written to
+      // escalation_flag, so no extra call here — just honour it. It still overrides
+      // both the relevance check and drafting: a legal threat classified as a
+      // "question" must not get a helpful auto-reply however confident the model is.
+      if (comment.escalation) continue
+
+      if (!comment.escalationScreened) {
+        // The model omitted the escalation key for this item. No flag is written —
+        // a malformed response must not label someone's complaint a legal threat —
+        // but drafting is skipped anyway, because the safe failure here is silence
+        // rather than an auto-reply to something unscreened.
+        console.warn(`Comment ${comment.id} was not escalation-screened; skipping draft.`)
+        continue
+      }
+
       if (relevanceCheckCategories.has(comment.category)) {
         const isRelevant = await isBusinessRelevant(text, postTitle, postDescription)
         if (!isRelevant) continue

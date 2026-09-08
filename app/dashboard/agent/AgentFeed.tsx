@@ -3,6 +3,7 @@ import type { Highlight } from '@/lib/highlights'
 import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
 import AttentionList from './AttentionList'
+import { ESCALATION_LABELS, ESCALATION_NOTE, normalizeEscalation } from '@/lib/escalation'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -25,6 +26,7 @@ type AgentSummaryProps = {
   repliesReadyCount: number
   purchaseIntentReadyCount: number
   attentionItems: Highlight[]
+  escalatedItems: Highlight[]
   activity: ActivityItem[]
 }
 
@@ -244,6 +246,7 @@ export default function AgentSummary({
   repliesReadyCount,
   purchaseIntentReadyCount,
   attentionItems,
+  escalatedItems,
   activity,
 }: AgentSummaryProps) {
   const quietDay = commentsReadCount === 0 && draftsWrittenCount === 0 && recognizedCount === 0
@@ -373,6 +376,40 @@ export default function AgentSummary({
           ))}
         </div>
       </section>
+
+      {/* --- Needs your personal attention: escalated, never drafted --- */}
+      {escalatedItems.length > 0 && (
+        <section className="card border-avax-red/30">
+          <h2 className="font-display text-base font-semibold text-text-primary">
+            Needs Your Personal Attention
+          </h2>
+          <p className="mt-1 mb-3 text-sm text-text-muted">{ESCALATION_NOTE}</p>
+          <ul className="space-y-3">
+            {escalatedItems.map(item => {
+              const flag = normalizeEscalation(item.escalationFlag)
+              return (
+                <li key={item.id} className="rounded-lg border border-white/10 bg-surface-hover p-4">
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                    <p className="font-body text-sm font-medium text-text-primary">{item.authorName}</p>
+                    {flag && (
+                      <span className="rounded-full border border-avax-red/40 bg-avax-red/15 px-2 py-0.5 font-mono text-[10px] tracking-wide text-avax-red uppercase">
+                        {ESCALATION_LABELS[flag]}
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1.5 text-sm leading-relaxed text-text-primary">{item.text}</p>
+                  <Link
+                    href={`/dashboard/inbox/${item.postId}`}
+                    className="mt-2 inline-block truncate text-xs text-text-muted underline"
+                  >
+                    {item.videoTitle}
+                  </Link>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* --- Needs your attention (preview of Highlights) --- */}
       <section className="card">
