@@ -5,6 +5,7 @@ import Link from 'next/link'
 import Avatar from '@/components/Avatar'
 import type { Highlight } from '@/lib/highlights'
 import DraftReplyEditor from '@/components/DraftReplyEditor'
+import ConfidenceBadge from '@/components/ConfidenceBadge'
 
 type HighlightsListProps = {
   draftHighlights: Highlight[]
@@ -113,13 +114,20 @@ function HighlightCard({
           <p className="mt-1 text-sm leading-relaxed text-text-primary">{highlight.text}</p>
 
           {highlight.reason === 'pending_draft' && highlight.draftReply && (
-            <DraftReplyEditor
-              className="mt-3"
-              commentId={highlight.id}
-              draftReply={highlight.draftReply}
-              finalReplyText={highlight.finalReplyText}
-              onApproved={() => onApproveDraft(highlight.id)}
-            />
+            <>
+              {/* Above the editor, so uncertainty is visible before the creator
+                  starts reading the drafted text as if it were settled. */}
+              <div className="mt-3">
+                <ConfidenceBadge confidence={highlight.draftConfidence} />
+              </div>
+              <DraftReplyEditor
+                className="mt-2"
+                commentId={highlight.id}
+                draftReply={highlight.draftReply}
+                finalReplyText={highlight.finalReplyText}
+                onApproved={() => onApproveDraft(highlight.id)}
+              />
+            </>
           )}
         </div>
       </div>

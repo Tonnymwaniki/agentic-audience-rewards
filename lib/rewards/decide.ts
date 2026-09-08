@@ -5,6 +5,7 @@ import {
   getSimilarRewardedPeople,
   type RewardedPrecedent,
 } from '@/lib/rewards/evaluate-tools'
+import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 
 /**
  * Tool rounds allowed per person. Two is enough to fetch both tools once each and
@@ -14,7 +15,12 @@ import {
 export const MAX_TOOL_ROUNDS = 2
 const ANTHROPIC_TIMEOUT_MS = 15000
 
-export type RewardDecision = { qualifies: boolean; reason: string }
+export type RewardDecision = {
+  qualifies: boolean
+  /** null when the model omitted it or returned something unrecognised. */
+  confidence: Confidence | null
+  reason: string
+}
 
 /** Everything the tools need, resolved once per run rather than per member. */
 export type DecisionContext = {
@@ -53,7 +59,9 @@ IMPORTANT: the signals above may be scoped to a single video. If the decision is
 
 Qualify people who show genuine engagement — this can include: commenting 3+ times with substantive (non-spam, non-repetitive) content even on a single post, asking thoughtful questions, showing clear purchase intent, or giving specific praise that references actual content (not just emojis or one-word reactions). Do not require engagement across multiple posts — that's a bonus signal, not a requirement. Disqualify only clear one-off/low-effort engagement (1-2 very short or generic comments) or spam/repetitive content.
 
-When you have decided, respond with ONLY valid JSON: {"qualifies": true or false, "reason": "one sentence explaining why, referencing specific evidence"}`
+When you have decided, respond with ONLY valid JSON: {"qualifies": true or false, "confidence": "high" or "medium" or "low", "reason": "one sentence explaining why, referencing specific evidence"}
+
+On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
 
     type ContentBlock =
       | { type: 'text'; text: string }
@@ -168,9 +176,17 @@ When you have decided, respond with ONLY valid JSON: {"qualifies": true or false
       throw new Error('No JSON object found in response')
     }
 
-    let decision: { qualifies: boolean; reason: string }
+    let decision: RewardDecision
     try {
-      decision = JSON.parse(match[0])
+      const parsed = JSON.parse(match[0])
+      decision = {
+        qualifies: Boolean(parsed.qualifies),
+        // Normalised rather than trusted: the model can return "very high", a number
+        // or nothing at all, and an unrecognised value has to become null rather
+        // than a confident-looking badge nobody actually scored.
+        confidence: normalizeConfidence(parsed.confidence),
+        reason: typeof parsed.reason === 'string' ? parsed.reason : '',
+      }
     } catch (parseErr) {
       console.error('Reward evaluate parse error:', JSON.stringify(parseErr, Object.getOwnPropertyNames(parseErr), 2))
       return { decision: null, toolsUsed }

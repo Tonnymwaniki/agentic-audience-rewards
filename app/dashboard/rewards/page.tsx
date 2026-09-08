@@ -4,6 +4,7 @@ import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import PageHeader from '@/components/PageHeader'
 import MascotIcon from '@/components/MascotIcon'
+import ConfidenceBadge from '@/components/ConfidenceBadge'
 import EvaluateButton from './EvaluateButton'
 import CopyLinkButton from './CopyLinkButton'
 
@@ -154,6 +155,7 @@ export default async function RewardsPage({
     status: string
     claim_token: string
     tx_hash: string | null
+    confidence: string | null
     created_at: string
     audience_members: unknown
   }
@@ -168,7 +170,7 @@ export default async function RewardsPage({
       rewardEvents = await fetchInBatches<RewardEventRow>(supabase, {
         table: 'reward_events',
         select:
-          'id, post_id, audience_member_id, reason, status, claim_token, tx_hash, created_at, audience_members ( display_name )',
+          'id, post_id, audience_member_id, reason, status, claim_token, tx_hash, confidence, created_at, audience_members ( display_name )',
         inColumn: 'audience_member_id',
         inValues: creatorMemberIds,
         // Applied server-side too, so narrowing to one video doesn't over-fetch.
@@ -201,6 +203,7 @@ export default async function RewardsPage({
       createdAt: event.created_at,
       claimToken: event.claim_token,
       txHash: event.tx_hash,
+      confidence: event.confidence,
     }))
 
   // Derived from the same array the list below renders, so the numbers always
@@ -261,6 +264,11 @@ export default async function RewardsPage({
                   {event.displayName}
                 </p>
                 <StatusPill status={event.status} />
+              </div>
+
+              {/* Directly under the name, before the reasoning it qualifies. */}
+              <div className="mt-1.5">
+                <ConfidenceBadge confidence={event.confidence} />
               </div>
 
               <p className="mt-2 text-sm text-text-muted">

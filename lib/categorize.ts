@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
+import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 
 export type ProgressCallback = (count: number) => void
 
@@ -125,12 +126,18 @@ function buildStyleContext(examples: StyleExample[] | null | undefined): string 
   return `\n\nHere's how this creator has previously adjusted AI-drafted replies to better match their voice — learn from the pattern of changes:\n${rendered}\nMatch this creator's tone, phrasing style, and any consistent adjustments they tend to make, based on these examples. Do not copy the specific facts from these examples — only the voice.`
 }
 
+export type DraftReplyResult = {
+  text: string
+  /** null when the model omitted it or returned something unrecognised. */
+  confidence: Confidence | null
+}
+
 export async function generateDraftReply(
   commentText: string,
   category: string,
   profile?: BusinessProfile | null,
   styleExamples?: StyleExample[] | null
-): Promise<string> {
+): Promise<DraftReplyResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
 
@@ -140,7 +147,13 @@ export async function generateDraftReply(
     // Style applies to every category: how someone signs off or phrases things is
     // not specific to questions or purchase intent the way business facts are.
     const styleContext = buildStyleContext(styleExamples)
-    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction} Respond with ONLY the reply text, no preamble.${styleContext}`
+    // JSON rather than bare text now, so the model can report how sure it is about
+    // the reply alongside the reply itself.
+    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction}${styleContext}
+
+Respond with ONLY valid JSON, no preamble: {"reply": "the reply text", "confidence": "high" or "medium" or "low"}
+
+On confidence: ${CONFIDENCE_PROMPT_GUIDANCE} For a drafted reply, "high" means the comment is unambiguous and you have the facts needed to answer it; "low" means you had to guess at what they meant or answered without the details that would make the reply accurate.`
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -168,7 +181,21 @@ export async function generateDraftReply(
       throw new Error('Empty response from Anthropic')
     }
 
-    return content.trim()
+    // Falls back to the raw text when the model ignores the JSON instruction — a
+    // usable reply with no confidence beats discarding the draft entirely.
+    const match = content.match(/\{[\s\S]*\}/)
+    if (!match) {
+      return { text: content.trim(), confidence: null }
+    }
+
+    try {
+      const parsed = JSON.parse(match[0])
+      const text = typeof parsed.reply === 'string' ? parsed.reply.trim() : ''
+      if (!text) return { text: content.trim(), confidence: null }
+      return { text, confidence: normalizeConfidence(parsed.confidence) }
+    } catch {
+      return { text: content.trim(), confidence: null }
+    }
   } finally {
     clearTimeout(timeoutId)
   }
@@ -488,10 +515,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         if (!isRelevant) continue
       }
 
-      const draftReply = await generateDraftReply(text, comment.category, businessProfile, styleExamples)
+      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples)
+      const draftReply = draft.text
       await supabase
         .from('comment_categories')
-        .update({ draft_reply: draftReply, draft_reply_created_at: new Date().toISOString() })
+        .update({
+          draft_reply: draftReply,
+          draft_confidence: draft.confidence,
+          draft_reply_created_at: new Date().toISOString(),
+        })
         .eq('comment_id', comment.id)
     } catch (err) {
       console.error('Draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))

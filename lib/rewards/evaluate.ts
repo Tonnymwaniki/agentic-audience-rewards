@@ -152,6 +152,8 @@ export async function evaluateRewards(
     audience_member_display_name: string
     qualifies: boolean
     reason: string
+    /** null when the model didn't score it or returned something unrecognised. */
+    confidence?: string | null
     /** Which lookups the decision actually needed — empty for the clear-cut cases. */
     toolsUsed?: string[]
   }> = []
@@ -209,6 +211,7 @@ export async function evaluateRewards(
           audience_member_display_name: member.display_name,
           qualifies: false,
           reason: decision.reason,
+          confidence: decision.confidence,
           toolsUsed,
         })
         evaluated++
@@ -221,6 +224,8 @@ export async function evaluateRewards(
         .insert({
           audience_member_id: member.id,
           reason: decision.reason,
+          // Persisted so the Rewards page can steer the creator to the shaky calls.
+          confidence: decision.confidence,
           status: 'pending',
           claim_token: crypto.randomUUID(),
           post_id: post_id || null,
@@ -245,6 +250,7 @@ export async function evaluateRewards(
         audience_member_display_name: member.display_name,
         qualifies: true,
         reason: decision.reason,
+        confidence: decision.confidence,
         toolsUsed,
       })
       evaluated++

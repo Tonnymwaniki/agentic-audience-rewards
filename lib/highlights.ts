@@ -15,6 +15,7 @@ export type Highlight = {
   category: string | null
   draftReply: string | null
   finalReplyText: string | null
+  draftConfidence: string | null
   repeatCount: number | null
 }
 
@@ -51,6 +52,7 @@ type CategoryInfo = {
   draft_reply_approved_at: string | null
   draft_reply_created_at: string | null
   final_reply_text: string | null
+  draft_confidence: string | null
 }
 
 function getAuthorName(row: CommentRow): string {
@@ -110,7 +112,7 @@ export async function loadHighlights(
         post_id,
         audience_member_id,
         audience_members ( display_name ),
-        comment_categories ( category, draft_reply, draft_reply_approved_at, draft_reply_created_at, final_reply_text )
+        comment_categories ( category, draft_reply, draft_reply_approved_at, draft_reply_created_at, final_reply_text, draft_confidence )
       `
       )
       .in('post_id', postIds)
@@ -186,6 +188,7 @@ export async function loadHighlights(
       category: info?.category || null,
       draftReply: info?.draft_reply || null,
       finalReplyText: info?.final_reply_text || null,
+      draftConfidence: info?.draft_confidence || null,
       repeatCount: repeatCountByCommentId.get(comment.id) || null,
     }
   }

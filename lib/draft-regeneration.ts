@@ -240,10 +240,11 @@ export async function regenerateDraftsForCreator(
         }
       }
 
-      const draftReply = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples)
+      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples)
 
       const stamped = await markChecked(comment.id, {
-        draft_reply: draftReply,
+        draft_reply: draft.text,
+        draft_confidence: draft.confidence,
         draft_reply_created_at: new Date().toISOString(),
       })
 
