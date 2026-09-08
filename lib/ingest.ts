@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchVideoMeta, fetchVideoComments } from '@/lib/youtube'
+import { linkChannelVideoToPost } from '@/lib/channel-videos'
 
 export async function ingestYouTubeVideo(creator_id: string, youtube_url: string) {
   const videoId = parseYouTubeVideoId(youtube_url)
@@ -52,6 +53,13 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
   }
 
   const postId = post.id
+
+  // Links the lightweight channel_videos entry to the real post. Placed here rather
+  // than in the analyze route so EVERY ingestion path is covered — auto-analyze,
+  // manual paste and the standalone ingest endpoint all funnel through this
+  // function. Awaited but non-throwing: the ingestion has already succeeded.
+  await linkChannelVideoToPost(supabase, creator_id, videoId, postId)
+
   let commentsIngested = 0
 
   for (const comment of comments) {

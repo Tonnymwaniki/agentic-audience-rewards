@@ -92,6 +92,99 @@ async function getUploadsPlaylistId(channelInput: { kind: string; value: string 
   return uploadsPlaylistId
 }
 
+/**
+ * Safety valves, not product limits.
+ *
+ * These exist so an unexpected API response pattern — a nextPageToken that never
+ * clears, say — can't spin forever burning quota. 2000 videos is far beyond any
+ * realistic channel back catalogue; if a genuine channel ever trips it, the log
+ * line below is how we find out and raise it.
+ */
+export const MAX_SYNC_VIDEOS = 2000
+export const MAX_SYNC_PAGES = 40
+/** The YouTube API maximum. Fewer, larger pages means fewer calls for the quota. */
+const PAGE_SIZE = 50
+
+export type ChannelSyncProgress = (videosFound: number, pagesFetched: number) => void | Promise<void>
+
+/**
+ * Walks a channel's uploads playlist to the end, following nextPageToken.
+ *
+ * Separate from fetchChannelVideos (which grabs a single page of 15 for the
+ * connect-flow picker) because the two want different things: the picker wants a
+ * fast preview, this wants completeness and is expected to take a while.
+ *
+ * onProgress fires after each page so a caller can surface a live count rather
+ * than leaving the UI looking stuck.
+ */
+export async function fetchAllChannelVideos(
+  channelUrlOrHandle: string,
+  onProgress?: ChannelSyncProgress
+): Promise<{ videos: ChannelVideo[]; pages: number; hitCap: boolean }> {
+  const channelInput = resolveChannelInput(channelUrlOrHandle)
+  if (!channelInput) {
+    throw new Error('Invalid YouTube channel URL or handle')
+  }
+
+  const uploadsPlaylistId = await getUploadsPlaylistId(channelInput)
+
+  const videos: ChannelVideo[] = []
+  let pageToken: string | undefined
+  let pages = 0
+  let hitCap = false
+
+  do {
+    const url = new URL(`${YOUTUBE_API_BASE}/playlistItems`)
+    url.searchParams.set('part', 'snippet')
+    url.searchParams.set('playlistId', uploadsPlaylistId)
+    url.searchParams.set('maxResults', String(PAGE_SIZE))
+    url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
+    if (pageToken) url.searchParams.set('pageToken', pageToken)
+
+    const res = await fetch(url.toString())
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`YouTube API error: ${res.status} - ${text}`)
+    }
+
+    const data = await res.json()
+    pages++
+
+    for (const item of data.items ?? []) {
+      const snippet = item.snippet
+      const videoId = snippet?.resourceId?.videoId
+      // Private and deleted uploads still occupy a playlist slot but carry no
+      // usable id — skipping them keeps a null out of the unique key.
+      if (!videoId) continue
+
+      videos.push({
+        videoId,
+        title: snippet.title,
+        thumbnailUrl: snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || '',
+        publishedAt: snippet.publishedAt,
+      })
+    }
+
+    await onProgress?.(videos.length, pages)
+
+    pageToken = data.nextPageToken
+
+    if (videos.length >= MAX_SYNC_VIDEOS || pages >= MAX_SYNC_PAGES) {
+      if (pageToken) {
+        hitCap = true
+        console.warn(
+          `Channel sync cap reached for ${channelUrlOrHandle}: ${videos.length} videos over ${pages} pages, ` +
+          `and YouTube still returned a nextPageToken. This channel has more history than the cap allows — ` +
+          `raise MAX_SYNC_VIDEOS / MAX_SYNC_PAGES if this is a real channel rather than a runaway response.`
+        )
+      }
+      break
+    }
+  } while (pageToken)
+
+  return { videos, pages, hitCap }
+}
+
 export async function fetchChannelVideos(channelUrlOrHandle: string): Promise<ChannelVideo[]> {
   const channelInput = resolveChannelInput(channelUrlOrHandle)
   if (!channelInput) {

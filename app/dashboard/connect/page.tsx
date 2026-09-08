@@ -15,6 +15,32 @@ export default function ConnectPage() {
   const [category, setCategory] = useState<string | null>(null)
   const [alreadyCategorized, setAlreadyCategorized] = useState(false)
   const router = useRouter()
+  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle')
+  const [syncCount, setSyncCount] = useState(0)
+  const [syncHitCap, setSyncHitCap] = useState(false)
+
+  // Polls the background channel sync. Stops as soon as it finishes, so a completed
+  // sync doesn't leave an interval running for the life of the page.
+  useEffect(() => {
+    if (syncStatus !== 'syncing') return
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch('/api/creator/channel/sync-status')
+        if (!res.ok) return
+        const data = await res.json()
+        setSyncCount(data.videosSynced ?? 0)
+        setSyncHitCap(Boolean(data.hitCap))
+        if (data.status === 'done' || data.status === 'error') {
+          setSyncStatus(data.status)
+        }
+      } catch {
+        // transient; the next tick retries
+      }
+    }, 1500)
+
+    return () => clearInterval(interval)
+  }, [syncStatus])
 
   const {
     start: startAnalysis,
@@ -74,6 +100,10 @@ export default function ConnectPage() {
       if (!response.ok) {
         const data = await response.json()
         console.error('Failed to save channel:', data.error)
+      } else {
+        // The full-history sync runs in the background, so start watching it.
+        setSyncStatus('syncing')
+        setSyncCount(0)
       }
     } catch (err) {
       console.error('Save channel error:', err)
@@ -199,6 +229,42 @@ export default function ConnectPage() {
             Find My Videos
           </button>
         </form>
+
+        {syncStatus !== 'idle' && (
+          <div className="mt-6 rounded-lg border border-white/10 bg-surface-hover p-4">
+            {syncStatus === 'syncing' && (
+              <p className="flex items-center gap-2 text-sm text-text-primary">
+                <span aria-hidden="true" className="inline-flex gap-1">
+                  {[0, 1, 2].map(i => (
+                    <span
+                      key={i}
+                      className="typing-dot h-1.5 w-1.5 rounded-full bg-purple-text"
+                      style={{ animationDelay: `${i * 0.18}s` }}
+                    />
+                  ))}
+                </span>
+                Syncing your channel… {syncCount.toLocaleString()} videos found so far
+              </p>
+            )}
+            {syncStatus === 'done' && (
+              <p className="text-sm text-text-primary">
+                Found {syncCount.toLocaleString()} video{syncCount === 1 ? '' : 's'} on your channel.
+                {syncHitCap && (
+                  <span className="mt-1 block text-xs text-gold-light">
+                    This channel has more history than we sync in one pass — the most recent
+                    {' '}{syncCount.toLocaleString()} are tracked.
+                  </span>
+                )}
+              </p>
+            )}
+            {syncStatus === 'error' && (
+              <p className="text-sm text-text-muted">
+                We couldn&apos;t finish listing your channel&apos;s videos. Your channel is still
+                connected, and we&apos;ll try again next time you reconnect.
+              </p>
+            )}
+          </div>
+        )}
 
         {savedChannel && (
           <div className="mt-6 space-y-3">

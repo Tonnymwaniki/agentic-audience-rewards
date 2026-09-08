@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 import { refreshChannelStats } from '@/lib/channel-stats'
+import { syncChannelVideos } from '@/lib/channel-videos'
 
 export async function POST(request: NextRequest) {
   try {
@@ -68,10 +70,32 @@ export async function POST(request: NextRequest) {
     // The response reports whether stats came through so the UI can say so.
     const statsResult = await refreshChannelStats(supabase, creator.id, channel_url.trim())
 
+    // Marked before the response so the client never polls a stale 'idle' and
+    // concludes nothing is happening.
+    await supabase
+      .from('creators')
+      .update({ channel_sync_status: 'syncing', channel_videos_synced_count: 0 })
+      .eq('id', creator.id)
+
+    // Detached: a full-history sync is ~24 sequential YouTube calls and 11s for a
+    // 1157-video channel, which must not sit inside a request the user is waiting
+    // on. Same after() pattern the analyze flow already uses. Progress is polled
+    // from creators.channel_sync_status / channel_videos_synced_count.
+    after(async () => {
+      try {
+        await syncChannelVideos(supabase, creator.id, channel_url.trim())
+      } catch (err) {
+        console.error('Background channel sync crash:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        await supabase.from('creators').update({ channel_sync_status: 'error' }).eq('id', creator.id)
+      }
+    })
+
     return NextResponse.json({
       success: true,
       stats: statsResult.success ? statsResult.stats : null,
       statsError: statsResult.success ? null : statsResult.error,
+      // The sync is still running; the client polls for the count.
+      syncStarted: true,
     })
   } catch (err) {
     console.error('Save channel URL error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
