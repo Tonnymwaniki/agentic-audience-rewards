@@ -101,25 +101,26 @@ export async function evaluateRewards(
 
   console.log("REWARD DEBUG - members found for evaluation:", eligibleMembers.length)
 
-  // Lowered from 40 because the per-member cost changed. It used to be at most two
-  // sequential Claude calls (eligibility + profile update). With the tool loop a
-  // borderline member can now make up to four: the initial call, one round per tool
-  // lookup (MAX_TOOL_ROUNDS), and the final decision, plus the profile update.
+  // Held at 20, but the arithmetic behind it has been re-derived rather than
+  // assumed. Worst case per member is now FIVE sequential Claude calls: the initial
+  // decision, one round per tool lookup (MAX_TOOL_ROUNDS), the self-critique, and
+  // the profile update.
   //
-  // At ~4s per call that is ~16s worst case per member against the route's 300s
-  // budget, so ~18 members is the realistic worst case and 40 was already optimistic.
-  // 20 keeps the warning honest: it fires while the run can still be reasoned about,
-  // rather than after it has silently started timing out. Clear-cut members still
-  // take a single call, so a typical batch stays far below the worst case.
+  // Measured rather than estimated: a real 11-member batch took 86s — 7.8s per
+  // member with tool lookups on every one and no critiques (all high confidence).
+  // The critique only fires for medium/low decisions and costs ~2-3s, so even if
+  // every member needed one the average lands near 11s, giving ~27 members inside
+  // the route's 300s budget. 20 keeps a margin under that while still firing before
+  // a run can silently time out.
   const ELIGIBLE_MEMBERS_WARNING_THRESHOLD = 20
-  const WORST_CASE_CALLS_PER_MEMBER = 2 + MAX_TOOL_ROUNDS
+  const WORST_CASE_CALLS_PER_MEMBER = 3 + MAX_TOOL_ROUNDS
 
   if (eligibleMembers.length > ELIGIBLE_MEMBERS_WARNING_THRESHOLD) {
     console.warn(
       `Reward evaluate warning: ${eligibleMembers.length} eligible members for creator ${creator_id}` +
       (post_id ? ` (post ${post_id})` : '') +
       ` — each member makes 2 sequential Claude calls in the clear-cut case and up to ${WORST_CASE_CALLS_PER_MEMBER}` +
-      ` when the decision needs tool lookups, so this run may approach the function duration limit.`
+      ` when the decision needs tool lookups and a self-critique, so this run may approach the function duration limit.`
     )
   }
 
@@ -156,6 +157,9 @@ export async function evaluateRewards(
     confidence?: string | null
     /** Which lookups the decision actually needed — empty for the clear-cut cases. */
     toolsUsed?: string[]
+    /** Whether a second, skeptical pass ran, and whether it changed the answer. */
+    critiqued?: boolean
+    overturned?: boolean
   }> = []
 
   for (const member of eligibleMembers) {
@@ -179,7 +183,7 @@ export async function evaluateRewards(
     }
 
     try {
-      const { decision, toolsUsed } = await decideReward(
+      const { decision, toolsUsed, critique } = await decideReward(
         { supabase, creatorPostIds, postTitles, memberIds, precedentCache },
         member,
         signals
@@ -187,6 +191,9 @@ export async function evaluateRewards(
 
       if (toolsUsed.length > 0) {
         console.log(`Reward evaluate: ${member.display_name} — tools used: ${toolsUsed.join(', ')}`)
+      }
+      if (critique.overturned) {
+        console.log(`Reward evaluate: ${member.display_name} — decision overturned on self-critique.`)
       }
 
       if (!decision) {
@@ -213,6 +220,8 @@ export async function evaluateRewards(
           reason: decision.reason,
           confidence: decision.confidence,
           toolsUsed,
+          critiqued: critique.critiqued,
+          overturned: critique.overturned,
         })
         evaluated++
         onProgress?.(evaluated, eligibleMembers.length)
@@ -252,6 +261,8 @@ export async function evaluateRewards(
         reason: decision.reason,
         confidence: decision.confidence,
         toolsUsed,
+        critiqued: critique.critiqued,
+        overturned: critique.overturned,
       })
       evaluated++
       onProgress?.(evaluated, eligibleMembers.length)

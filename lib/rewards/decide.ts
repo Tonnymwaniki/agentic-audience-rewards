@@ -22,6 +22,114 @@ export type RewardDecision = {
   reason: string
 }
 
+/**
+ * Only medium- and low-confidence decisions are critiqued.
+ *
+ * That exclusion is the whole economy of the feature: confidence scoring exists so
+ * clear-cut cases move fast, and re-litigating a high-confidence call would spend a
+ * second API call to almost always hear "stands". Cases the model already flagged as
+ * uncertain are exactly the ones where a skeptical second look can change something.
+ */
+const CRITIQUE_CONFIDENCE_LEVELS = new Set<Confidence>(['medium', 'low'])
+
+export type CritiqueOutcome = {
+  /** True when the critique ran at all. */
+  critiqued: boolean
+  /** True when the critique overturned the original decision. */
+  overturned: boolean
+  critique: string | null
+}
+
+/**
+ * A second, skeptical look at a decision the model has already made.
+ *
+ * Deliberately given NO tools: it is arguing about evidence already gathered, not
+ * collecting more, and a tool loop here would multiply cost on exactly the members
+ * that already cost the most.
+ *
+ * Fails to the ORIGINAL decision. If the critique errors, times out or returns
+ * unparseable text, the first decision stands unchanged — a review step must never
+ * be able to destroy the answer it was meant to check.
+ */
+export async function critiqueDecision(
+  member: { display_name: string },
+  signals: Record<string, unknown>,
+  decision: RewardDecision
+): Promise<{ decision: RewardDecision; outcome: CritiqueOutcome }> {
+  const unchanged = { decision, outcome: { critiqued: true, overturned: false, critique: null } }
+
+  const prompt = `You previously decided: qualifies=${decision.qualifies}, confidence=${decision.confidence}, reason='${decision.reason}' for this audience member.
+
+Their activity: ${JSON.stringify(signals)}
+
+Before finalizing, review this decision as a fair, skeptical reviewer would. Consider both whether the original reasoning holds up AND whether it might be too strict. Would most reasonable people agree with this call, or is it a stretch in either direction?
+
+Respond with ONLY valid JSON: {"stands": true or false, "revised_qualifies": true or false, "critique": "one or two sentences"}
+
+Set "stands" to false ONLY if you would genuinely decide differently now; in that case "revised_qualifies" is your corrected answer. A sound decision standing is a perfectly good outcome — do not manufacture a disagreement.`
+
+  const controller = new AbortController()
+  const timeoutId = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS)
+
+  try {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': process.env.ANTHROPIC_API_KEY!,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 300,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) throw new Error(`Anthropic API error: ${response.status}`)
+
+    const data = await response.json()
+    const text = data.content?.[0]?.text
+    if (!text) throw new Error('Empty critique response')
+
+    const match = text.match(/\{[\s\S]*\}/)
+    if (!match) throw new Error('No JSON object found in critique')
+
+    const parsed = JSON.parse(match[0])
+    const critique = typeof parsed.critique === 'string' ? parsed.critique.trim() : ''
+
+    if (parsed.stands !== false) {
+      return { decision, outcome: { critiqued: true, overturned: false, critique: critique || null } }
+    }
+
+    const revised = Boolean(parsed.revised_qualifies)
+
+    // "stands: false" while landing on the same verdict is a critique of the
+    // REASONING, not a reversal. Recording it as an overturn would overstate what
+    // changed, so it is treated as standing.
+    if (revised === decision.qualifies) {
+      return { decision, outcome: { critiqued: true, overturned: false, critique: critique || null } }
+    }
+
+    return {
+      // Both halves of the audit trail are kept: what was decided first, and why it
+      // was changed. The stored reason is the only record a creator ever sees.
+      decision: {
+        qualifies: revised,
+        confidence: decision.confidence,
+        reason: `Initial: ${decision.reason} On review: ${critique}`,
+      },
+      outcome: { critiqued: true, overturned: true, critique: critique || null },
+    }
+  } catch (err) {
+    console.error('Reward critique error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    return unchanged
+  } finally {
+    clearTimeout(timeoutId)
+  }
+}
+
 /** Everything the tools need, resolved once per run rather than per member. */
 export type DecisionContext = {
   supabase: SupabaseClient
@@ -48,7 +156,12 @@ export async function decideReward(
   ctx: DecisionContext,
   member: { id: string; display_name: string },
   signals: Record<string, unknown>
-): Promise<{ decision: RewardDecision | null; toolsUsed: string[] }> {
+): Promise<{
+  decision: RewardDecision | null
+  toolsUsed: string[]
+  critique: CritiqueOutcome
+}> {
+  const noCritique: CritiqueOutcome = { critiqued: false, overturned: false, critique: null }
   const { supabase, creatorPostIds, postTitles, memberIds, precedentCache } = ctx
 
     const prompt = `You are deciding which audience members deserve on-chain recognition for genuine engagement with a content creator. This audience member's activity: ${JSON.stringify({ ...signals, audience_member_id: member.id })}.
@@ -189,8 +302,21 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
       }
     } catch (parseErr) {
       console.error('Reward evaluate parse error:', JSON.stringify(parseErr, Object.getOwnPropertyNames(parseErr), 2))
-      return { decision: null, toolsUsed }
+      return { decision: null, toolsUsed, critique: noCritique }
     }
 
-    return { decision, toolsUsed }
+    // High-confidence decisions finish here — no second call.
+    if (!decision.confidence || !CRITIQUE_CONFIDENCE_LEVELS.has(decision.confidence)) {
+      return { decision, toolsUsed, critique: noCritique }
+    }
+
+    const reviewed = await critiqueDecision(member, signals, decision)
+
+    if (reviewed.outcome.overturned) {
+      console.log(
+        `Reward critique OVERTURNED ${member.display_name}: qualifies ${decision.qualifies} -> ${reviewed.decision.qualifies}`
+      )
+    }
+
+    return { decision: reviewed.decision, toolsUsed, critique: reviewed.outcome }
 }
