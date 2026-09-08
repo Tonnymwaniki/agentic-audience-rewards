@@ -1,6 +1,8 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { updateAudienceProfile } from '@/lib/audience-memory'
+import { decideReward, MAX_TOOL_ROUNDS } from '@/lib/rewards/decide'
+import type { RewardedPrecedent } from '@/lib/rewards/evaluate-tools'
 
 export type EvaluateProgressCallback = (evaluated: number, total: number) => void
 
@@ -99,15 +101,50 @@ export async function evaluateRewards(
 
   console.log("REWARD DEBUG - members found for evaluation:", eligibleMembers.length)
 
-  const ELIGIBLE_MEMBERS_WARNING_THRESHOLD = 40
+  // Lowered from 40 because the per-member cost changed. It used to be at most two
+  // sequential Claude calls (eligibility + profile update). With the tool loop a
+  // borderline member can now make up to four: the initial call, one round per tool
+  // lookup (MAX_TOOL_ROUNDS), and the final decision, plus the profile update.
+  //
+  // At ~4s per call that is ~16s worst case per member against the route's 300s
+  // budget, so ~18 members is the realistic worst case and 40 was already optimistic.
+  // 20 keeps the warning honest: it fires while the run can still be reasoned about,
+  // rather than after it has silently started timing out. Clear-cut members still
+  // take a single call, so a typical batch stays far below the worst case.
+  const ELIGIBLE_MEMBERS_WARNING_THRESHOLD = 20
+  const WORST_CASE_CALLS_PER_MEMBER = 2 + MAX_TOOL_ROUNDS
 
   if (eligibleMembers.length > ELIGIBLE_MEMBERS_WARNING_THRESHOLD) {
     console.warn(
       `Reward evaluate warning: ${eligibleMembers.length} eligible members for creator ${creator_id}` +
       (post_id ? ` (post ${post_id})` : '') +
-      ` — each member now makes up to 2 sequential Claude calls (eligibility + profile update), so this run may approach Vercel's function duration limit.`
+      ` — each member makes 2 sequential Claude calls in the clear-cut case and up to ${WORST_CASE_CALLS_PER_MEMBER}` +
+      ` when the decision needs tool lookups, so this run may approach the function duration limit.`
     )
   }
+
+  // --- Run-scoped context for the decision tools -----------------------------
+  //
+  // Resolved once for the whole batch, not per member. get_person_full_history
+  // deliberately looks across ALL of this creator's videos even when the run is
+  // scoped to one post_id, which is the point of the tool — but it must stay inside
+  // this creator's posts, so those ids are the boundary it queries within.
+  const { data: creatorPosts, error: creatorPostsError } = await supabase
+    .from('posts')
+    .select('id, title')
+    .eq('creator_id', creator_id)
+
+  if (creatorPostsError) {
+    console.error('Reward evaluate posts fetch error:', JSON.stringify(creatorPostsError, Object.getOwnPropertyNames(creatorPostsError), 2))
+  }
+
+  const creatorPostIds = (creatorPosts || []).map(p => p.id)
+  const postTitles = new Map((creatorPosts || []).map(p => [p.id, p.title as string]))
+
+  // Precedent is identical for every member in this run, so it is fetched at most
+  // once and only if some evaluation actually asks for it. Boxed so decideReward
+  // can populate it for the whole batch.
+  const precedentCache: { value: RewardedPrecedent | null } = { value: null }
 
   let evaluated = 0
   let qualified = 0
@@ -115,6 +152,8 @@ export async function evaluateRewards(
     audience_member_display_name: string
     qualifies: boolean
     reason: string
+    /** Which lookups the decision actually needed — empty for the clear-cut cases. */
+    toolsUsed?: string[]
   }> = []
 
   for (const member of eligibleMembers) {
@@ -138,67 +177,17 @@ export async function evaluateRewards(
     }
 
     try {
-      const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), 15000)
+      const { decision, toolsUsed } = await decideReward(
+        { supabase, creatorPostIds, postTitles, memberIds, precedentCache },
+        member,
+        signals
+      )
 
-      const prompt = `You are deciding which audience members deserve on-chain recognition for genuine engagement with a content creator. Given this audience member's activity: ${JSON.stringify(signals)}, decide if they qualify for a Proof of Engagement reward. If priorEngagementProfile is present, it summarizes this person's engagement across all of the creator's posts over time — weigh it alongside the current signals, and let a consistent pattern of genuine engagement count in their favor even if this post's comments alone are borderline. Qualify people who show genuine engagement — this can include: commenting 3+ times with substantive (non-spam, non-repetitive) content even on a single post, asking thoughtful questions, showing clear purchase intent, or giving specific praise that references actual content (not just emojis or one-word reactions). Do not require engagement across multiple posts — that's a bonus signal, not a requirement. Disqualify only clear one-off/low-effort engagement (1-2 very short or generic comments) or spam/repetitive content. Respond with ONLY valid JSON: {"qualifies": true or false, "reason": "one sentence explaining why, referencing specific evidence"}`
-
-      let response: Response
-      try {
-        response = await fetch('https://api.anthropic.com/v1/messages', {
-          method: 'POST',
-          headers: {
-            'x-api-key': process.env.ANTHROPIC_API_KEY!,
-            'anthropic-version': '2023-06-01',
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            model: 'claude-haiku-4-5-20251001',
-            max_tokens: 256,
-            messages: [{ role: 'user', content: prompt }],
-          }),
-          signal: controller.signal,
-        })
-      } catch (fetchErr) {
-        clearTimeout(timeoutId)
-        if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
-          console.error('Reward evaluate error: request timed out after 15s')
-        } else {
-          console.error('Reward evaluate fetch error:', JSON.stringify(fetchErr, Object.getOwnPropertyNames(fetchErr), 2))
-        }
-        results.push({
-          audience_member_display_name: member.display_name,
-          qualifies: false,
-          reason: fetchErr instanceof Error ? fetchErr.message : 'Request failed',
-        })
-        evaluated++
-        onProgress?.(evaluated, eligibleMembers.length)
-        continue
-      } finally {
-        clearTimeout(timeoutId)
+      if (toolsUsed.length > 0) {
+        console.log(`Reward evaluate: ${member.display_name} — tools used: ${toolsUsed.join(', ')}`)
       }
 
-      if (!response.ok) {
-        throw new Error(`Anthropic API error: ${response.status}`)
-      }
-
-      const data = await response.json()
-      const content = data.content?.[0]?.text
-
-      if (!content) {
-        throw new Error('Empty response from Anthropic')
-      }
-
-      const match = content.match(/\{[\s\S]*\}/)
-      if (!match) {
-        throw new Error('No JSON object found in response')
-      }
-
-      let decision: { qualifies: boolean; reason: string }
-      try {
-        decision = JSON.parse(match[0])
-      } catch (parseErr) {
-        console.error('Reward evaluate parse error:', JSON.stringify(parseErr, Object.getOwnPropertyNames(parseErr), 2))
+      if (!decision) {
         results.push({
           audience_member_display_name: member.display_name,
           qualifies: false,
@@ -220,6 +209,7 @@ export async function evaluateRewards(
           audience_member_display_name: member.display_name,
           qualifies: false,
           reason: decision.reason,
+          toolsUsed,
         })
         evaluated++
         onProgress?.(evaluated, eligibleMembers.length)
@@ -255,6 +245,7 @@ export async function evaluateRewards(
         audience_member_display_name: member.display_name,
         qualifies: true,
         reason: decision.reason,
+        toolsUsed,
       })
       evaluated++
       onProgress?.(evaluated, eligibleMembers.length)
