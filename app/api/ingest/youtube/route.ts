@@ -1,6 +1,8 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { NextRequest, NextResponse, after } from 'next/server'
 import { ingestYouTubeVideo } from '@/lib/ingest'
 import { requireCreator } from '@/lib/api-auth'
+import { embedPostCommentsSafely } from '@/lib/embeddings'
+import { createServiceClient } from '@/lib/supabase/service'
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,6 +20,9 @@ export async function POST(request: NextRequest) {
     }
 
     const result = await ingestYouTubeVideo(authResult.auth.creatorId, youtube_url)
+
+    // After the response, so embedding never lengthens the ingest request.
+    after(() => embedPostCommentsSafely(createServiceClient(), result.postId))
 
     return NextResponse.json(result)
   } catch (err) {

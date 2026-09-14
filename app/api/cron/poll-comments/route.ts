@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ingestNewComments } from '@/lib/ingest'
+import { embedPostCommentsSafely } from '@/lib/embeddings'
 import { categorizePost } from '@/lib/categorize'
 import { createServiceClient } from '@/lib/supabase/service'
 
@@ -111,6 +112,9 @@ export async function GET(request: NextRequest) {
         const ingestResult = await ingestNewComments(track.creator_id, track.post_id, videoId)
 
         if (ingestResult.newCommentIds.length > 0) {
+          // Nothing is waiting on this job, so embedding can simply run in line.
+          // Only this post's null-embedding rows are picked up — i.e. the new ones.
+          await embedPostCommentsSafely(supabase, track.post_id)
           await categorizePost(track.post_id)
           await notifyNewComments(supabase, track.creator_id, post?.title || 'your video', ingestResult.newCommentIds)
         }

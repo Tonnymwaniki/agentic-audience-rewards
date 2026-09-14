@@ -5,6 +5,7 @@ import { categorizePost, type ProgressCallback as CategorizeProgress } from '@/l
 import { evaluateRewards, type EvaluateProgressCallback } from '@/lib/rewards/evaluate'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requireCreator } from '@/lib/api-auth'
+import { embedPostCommentsSafely } from '@/lib/embeddings'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -109,11 +110,17 @@ export async function POST(request: NextRequest) {
     })
 
     after(async () => {
-      try {
-        await processAnalysisInBackground(postId, creator_id)
-      } catch (err) {
-        console.error('Background analysis crash:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
-      }
+      // Embedding runs beside analysis, not inside ingestion: this request waits on
+      // ingestYouTubeVideo before responding, and embedding a large comment thread
+      // there would stretch the creator's "Reading comments" wait. The two jobs are
+      // independent, and embedPostCommentsSafely never throws, so a Voyage outage
+      // or a not-yet-run migration can't affect the analysis result.
+      await Promise.all([
+        embedPostCommentsSafely(createServiceClient(), postId),
+        processAnalysisInBackground(postId, creator_id).catch(err => {
+          console.error('Background analysis crash:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        }),
+      ])
     })
 
     return NextResponse.json({
