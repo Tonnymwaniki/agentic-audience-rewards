@@ -1,18 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ingestYouTubeVideo } from '@/lib/ingest'
+import { requireCreator } from '@/lib/api-auth'
 
 export async function POST(request: NextRequest) {
   try {
-    const { creator_id, youtube_url } = await request.json()
+    // Writes posts, audience_members and comments — session-derived creator only.
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
 
-    if (!creator_id || !youtube_url) {
+    const { youtube_url } = await request.json()
+
+    if (!youtube_url) {
       return NextResponse.json(
-        { error: 'Missing creator_id or youtube_url' },
+        { error: 'Missing youtube_url' },
         { status: 400 }
       )
     }
 
-    const result = await ingestYouTubeVideo(creator_id, youtube_url)
+    const result = await ingestYouTubeVideo(authResult.auth.creatorId, youtube_url)
 
     return NextResponse.json(result)
   } catch (err) {

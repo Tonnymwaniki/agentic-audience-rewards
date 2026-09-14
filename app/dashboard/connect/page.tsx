@@ -4,7 +4,12 @@ import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useAnalyze } from '@/lib/hooks/useAnalyze'
+import { runAnalysis } from '@/lib/analyze-run'
 import { BUSINESS_CATEGORIES } from '@/lib/business-categories'
+import MascotIcon from '@/components/MascotIcon'
+
+/** How many of the newest un-analyzed videos auto-analyze picks up after a sync. */
+const AUTO_ANALYZE_COUNT = 5
 
 export default function ConnectPage() {
   const [channel, setChannel] = useState('')
@@ -15,14 +20,93 @@ export default function ConnectPage() {
   const [category, setCategory] = useState<string | null>(null)
   const [alreadyCategorized, setAlreadyCategorized] = useState(false)
   const router = useRouter()
-  const [syncStatus, setSyncStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle')
+  // The connect flow is a small state machine now: form -> syncing -> (analyzing)
+  // -> My Videos. Kept explicit rather than derived from a pile of booleans,
+  // because the transitions matter (auto-analyze must not start until the sync has
+  // finished, or "5 most recent" would come from the first page only).
+  const [phase, setPhase] = useState<'form' | 'syncing' | 'analyzing' | 'leaving'>('form')
   const [syncCount, setSyncCount] = useState(0)
   const [syncHitCap, setSyncHitCap] = useState(false)
+  const [analyzeTotal, setAnalyzeTotal] = useState(0)
+  const [analyzeIndex, setAnalyzeIndex] = useState(0)
+  const [progressText, setProgressText] = useState('')
+  const [progressPercent, setProgressPercent] = useState(0)
+  const [analyzeError, setAnalyzeError] = useState<string | null>(null)
+
+
+  /**
+   * Runs once the background sync reports done (or failed).
+   *
+   * Auto-analyze is triggered HERE rather than at submit time, which is the whole
+   * point of the ordering: only now is the full upload history stored, so
+   * "5 most recent" is the 5 most recent overall rather than the 5 most recent on
+   * the first page of the API response.
+   *
+   * The videos are analyzed one at a time in a plain loop — runAnalysis resolves
+   * on actual completion, so no queue state or status-watching effect is needed.
+   */
+  async function handleSyncFinished(succeeded: boolean) {
+    const leave = () => {
+      setPhase('leaving')
+      router.push('/dashboard/inbox')
+    }
+
+    if (!autoAnalyze || !succeeded || !creatorId) {
+      leave()
+      return
+    }
+
+    try {
+      const supabase = createClient()
+      const { data: recent } = await supabase
+        .from('channel_videos')
+        .select('video_id, published_at')
+        .eq('creator_id', creatorId)
+        .is('post_id', null)
+        .order('published_at', { ascending: false })
+        .limit(AUTO_ANALYZE_COUNT)
+
+      const urls = (recent || []).map(v => `https://www.youtube.com/watch?v=${v.video_id}`)
+
+      if (urls.length === 0) {
+        leave()
+        return
+      }
+
+      setAnalyzeTotal(urls.length)
+      setAnalyzeIndex(0)
+      setAnalyzeError(null)
+      setPhase('analyzing')
+
+      for (let i = 0; i < urls.length; i++) {
+        setAnalyzeIndex(i)
+        setProgressText('')
+        setProgressPercent(0)
+
+        const outcome = await runAnalysis(creatorId, urls[i], progress => {
+          setProgressText(progress.text)
+          setProgressPercent(progress.percent)
+        })
+
+        // One bad video shouldn't strand the creator on this screen; the rest of
+        // the queue still runs and the failure is visible in My Videos as an
+        // un-analyzed card they can retry.
+        if (outcome.status === 'error') {
+          setAnalyzeError(outcome.error)
+        }
+      }
+
+      leave()
+    } catch (err) {
+      console.error('Auto-analyze error:', err)
+      leave()
+    }
+  }
 
   // Polls the background channel sync. Stops as soon as it finishes, so a completed
   // sync doesn't leave an interval running for the life of the page.
   useEffect(() => {
-    if (syncStatus !== 'syncing') return
+    if (phase !== 'syncing') return
 
     const interval = setInterval(async () => {
       try {
@@ -31,8 +115,12 @@ export default function ConnectPage() {
         const data = await res.json()
         setSyncCount(data.videosSynced ?? 0)
         setSyncHitCap(Boolean(data.hitCap))
+
         if (data.status === 'done' || data.status === 'error') {
-          setSyncStatus(data.status)
+          clearInterval(interval)
+          // Even a failed sync moves on: the channel is connected, and My Videos
+          // still shows whatever was stored plus the paste-a-link option.
+          await handleSyncFinished(data.status === 'done')
         }
       } catch {
         // transient; the next tick retries
@@ -40,16 +128,10 @@ export default function ConnectPage() {
     }, 1500)
 
     return () => clearInterval(interval)
-  }, [syncStatus])
+    // handleSyncFinished is stable for the life of a phase transition.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [phase])
 
-  const {
-    start: startAnalysis,
-    status,
-    progressText,
-    progressPercent,
-    error: analyzeError,
-    result,
-  } = useAnalyze(creatorId || '')
 
   useEffect(() => {
     async function loadCreator() {
@@ -102,7 +184,7 @@ export default function ConnectPage() {
         console.error('Failed to save channel:', data.error)
       } else {
         // The full-history sync runs in the background, so start watching it.
-        setSyncStatus('syncing')
+        setPhase('syncing')
         setSyncCount(0)
       }
     } catch (err) {
@@ -127,20 +209,19 @@ export default function ConnectPage() {
       }
     }
 
-    navigateToPick(trimmed)
+    // Deliberately NOT navigateToPick any more. The picker still exists at
+    // /dashboard/connect/pick and nothing was deleted, but the default flow now
+    // syncs the whole channel and lands on My Videos, where every video is listed.
   }
 
-  function navigateToPick(channelUrl: string) {
-    const query = new URLSearchParams({ channel: channelUrl })
-    if (autoAnalyze) {
-      query.set('autoAnalyze', 'true')
-    }
-    router.push(`/dashboard/connect/pick?${query.toString()}`)
-  }
-
+  // The picker at /dashboard/connect/pick still exists and still works if opened
+  // directly — nothing was deleted — but no default path routes here any more.
+  // A returning creator whose channel is already synced goes straight to the full
+  // list in My Videos, where every video is shown and un-analyzed ones can be
+  // analyzed in place.
   function handleUseSaved() {
     if (savedChannel) {
-      navigateToPick(savedChannel)
+      router.push('/dashboard/inbox')
     }
   }
 
@@ -153,6 +234,87 @@ export default function ConnectPage() {
     return (
       <div className="flex min-h-[70vh] items-center justify-center px-6">
         <p className="text-text-muted">Loading...</p>
+      </div>
+    )
+  }
+
+  // Everything after submit happens on this screen: the channel sync, then the
+  // optional auto-analyze queue, then the redirect. The form is not rendered
+  // underneath it, so there is nothing to click twice by accident.
+  if (phase !== 'form') {
+    const analyzingNumber = Math.min(analyzeIndex + 1, analyzeTotal)
+
+    return (
+      <div className="flex min-h-[70vh] items-center justify-center px-6">
+        <div className="w-full max-w-md text-center">
+          <div className="flex justify-center">
+            <MascotIcon type="agent" />
+          </div>
+
+          {phase === 'syncing' && (
+            <>
+              <h1 className="mt-5 font-display text-2xl font-semibold text-text-primary">
+                Syncing your channel…
+              </h1>
+              <p className="mt-2 text-sm text-text-muted">
+                {syncCount > 0
+                  ? `${syncCount.toLocaleString()} videos found so far`
+                  : 'Looking through your uploads'}
+              </p>
+              <span aria-hidden="true" className="mt-4 inline-flex gap-1.5">
+                {[0, 1, 2].map(i => (
+                  <span
+                    key={i}
+                    className="typing-dot h-2 w-2 rounded-full bg-purple-text"
+                    style={{ animationDelay: `${i * 0.18}s` }}
+                  />
+                ))}
+              </span>
+            </>
+          )}
+
+          {phase === 'analyzing' && (
+            <>
+              <h1 className="mt-5 font-display text-2xl font-semibold text-text-primary">
+                Analyzing your {analyzeTotal} most recent videos
+              </h1>
+              <p className="mt-2 text-sm text-text-muted">
+                Video {analyzingNumber} of {analyzeTotal}
+                {progressText ? ` — ${progressText}` : ''}
+              </p>
+              {progressPercent > 0 && (
+                <div className="mt-4 h-1.5 w-full overflow-hidden rounded-full bg-surface-hover">
+                  <div
+                    className="gradient-primary h-full rounded-full transition-all duration-500"
+                    style={{ width: `${Math.min(100, progressPercent)}%` }}
+                  />
+                </div>
+              )}
+              {analyzeError && <p className="mt-3 text-sm text-avax-red">{analyzeError}</p>}
+              {/* The work continues server-side, so leaving early costs nothing. */}
+              <button
+                type="button"
+                onClick={() => router.push('/dashboard/inbox')}
+                className="mt-5 text-xs text-text-muted underline hover:text-text-primary"
+              >
+                Skip and go to My Videos
+              </button>
+            </>
+          )}
+
+          {phase === 'leaving' && (
+            <h1 className="mt-5 font-display text-2xl font-semibold text-text-primary">
+              Opening My Videos…
+            </h1>
+          )}
+
+          {syncHitCap && phase !== 'syncing' && (
+            <p className="mt-4 text-xs text-gold-light">
+              This channel has more history than we sync in one pass — the most recent{' '}
+              {syncCount.toLocaleString()} are tracked.
+            </p>
+          )}
+        </div>
       </div>
     )
   }
@@ -229,42 +391,6 @@ export default function ConnectPage() {
             Find My Videos
           </button>
         </form>
-
-        {syncStatus !== 'idle' && (
-          <div className="mt-6 rounded-lg border border-white/10 bg-surface-hover p-4">
-            {syncStatus === 'syncing' && (
-              <p className="flex items-center gap-2 text-sm text-text-primary">
-                <span aria-hidden="true" className="inline-flex gap-1">
-                  {[0, 1, 2].map(i => (
-                    <span
-                      key={i}
-                      className="typing-dot h-1.5 w-1.5 rounded-full bg-purple-text"
-                      style={{ animationDelay: `${i * 0.18}s` }}
-                    />
-                  ))}
-                </span>
-                Syncing your channel… {syncCount.toLocaleString()} videos found so far
-              </p>
-            )}
-            {syncStatus === 'done' && (
-              <p className="text-sm text-text-primary">
-                Found {syncCount.toLocaleString()} video{syncCount === 1 ? '' : 's'} on your channel.
-                {syncHitCap && (
-                  <span className="mt-1 block text-xs text-gold-light">
-                    This channel has more history than we sync in one pass — the most recent
-                    {' '}{syncCount.toLocaleString()} are tracked.
-                  </span>
-                )}
-              </p>
-            )}
-            {syncStatus === 'error' && (
-              <p className="text-sm text-text-muted">
-                We couldn&apos;t finish listing your channel&apos;s videos. Your channel is still
-                connected, and we&apos;ll try again next time you reconnect.
-              </p>
-            )}
-          </div>
-        )}
 
         {savedChannel && (
           <div className="mt-6 space-y-3">

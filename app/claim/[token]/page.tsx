@@ -1,5 +1,11 @@
 import { redirect } from 'next/navigation'
-import { createClient } from '@/lib/supabase/server'
+// Service-role, not the anon client: this page is opened by an anonymous
+// audience member following a claim link, with no session and therefore no
+// creator to scope by. Once RLS is enabled, a creator-scoped policy cannot
+// serve this read, and the only policy that could would expose every reward row
+// in the database. The unguessable claim_token is the credential here, and it is
+// checked below — exactly as /api/reward/mint already does for the write side.
+import { createServiceClient } from '@/lib/supabase/service'
 import PageHeader from '@/components/PageHeader'
 import ClaimWidget from './ClaimWidget'
 
@@ -8,7 +14,7 @@ export default async function ClaimPage({
 }: {
   params: Promise<{ token: string }>
 }) {
-  const supabase = await createClient()
+  const supabase = createServiceClient()
   const { token } = await params
 
   const { data: rewardEvent, error: rewardError } = await supabase

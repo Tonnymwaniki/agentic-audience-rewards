@@ -1,7 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchChannelVideos, type ChannelVideo } from '@/lib/youtube-channel'
+import { requireCreator } from '@/lib/api-auth'
 
 export async function GET(request: NextRequest) {
+  // Spends the shared YouTube API quota on a caller-supplied channel, so it is
+  // gated even though it reads nothing from our own database.
+  const authResult = await requireCreator()
+  if (!authResult.ok) return authResult.response
+
   const channel = request.nextUrl.searchParams.get('channel')
 
   if (!channel || !channel.trim()) {

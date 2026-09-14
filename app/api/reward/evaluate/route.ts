@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import { evaluateRewards, type EvaluateProgressCallback } from '@/lib/rewards/evaluate'
 import { createServiceClient } from '@/lib/supabase/service'
+import { requireCreator, requirePostOwnership } from '@/lib/api-auth'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -10,13 +11,17 @@ async function updatePostStatus(postId: string, updates: Record<string, unknown>
 
 export async function POST(request: NextRequest) {
   try {
-    const { creator_id, post_id } = await request.json()
+    // Runs evaluateRewards — a paid Anthropic tool-loop per audience member — so
+    // the creator comes from the session, and a named post must belong to them.
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const creator_id = authResult.auth.creatorId
 
-    if (!creator_id) {
-      return NextResponse.json(
-        { error: 'Missing creator_id' },
-        { status: 400 }
-      )
+    const { post_id } = await request.json()
+
+    if (post_id) {
+      const owned = await requirePostOwnership(authResult.auth.supabase, creator_id, post_id)
+      if (!owned.ok) return owned.response
     }
 
     after(async () => {

@@ -4,6 +4,7 @@ import { ingestYouTubeVideo } from '@/lib/ingest'
 import { categorizePost, type ProgressCallback as CategorizeProgress } from '@/lib/categorize'
 import { evaluateRewards, type EvaluateProgressCallback } from '@/lib/rewards/evaluate'
 import { createServiceClient } from '@/lib/supabase/service'
+import { requireCreator } from '@/lib/api-auth'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -71,11 +72,18 @@ async function processAnalysisInBackground(postId: string, creatorId: string) {
 
 export async function POST(request: NextRequest) {
   try {
-    const { creator_id, youtube_url } = await request.json()
+    // The creator is taken from the session, never from the body. This route
+    // triggers YouTube ingestion, database writes and paid Anthropic calls, so a
+    // client-supplied creator_id would let anyone spend against any account.
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const creator_id = authResult.auth.creatorId
 
-    if (!creator_id || !youtube_url) {
+    const { youtube_url } = await request.json()
+
+    if (!youtube_url) {
       return NextResponse.json(
-        { error: 'Missing creator_id or youtube_url' },
+        { error: 'Missing youtube_url' },
         { status: 400 }
       )
     }

@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 // Shared with the Research page's "Trending Topics" sidebar card, so the panel and
 // the get_trending tool can never disagree about what's trending.
 import { computeTrendingGroups } from '@/lib/trending'
+import { requireCreator } from '@/lib/api-auth'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
 // one invocation. Vercel Hobby caps this at 60s, Pro at 300s.
@@ -1214,44 +1213,20 @@ async function callClaude(
 
 export async function POST(request: NextRequest) {
   try {
-    const { creator_id, message, conversation_history } = await request.json()
+    // The creator is derived from the session. This route previously accepted a
+    // creator_id and verified it belonged to the caller, which was safe but left
+    // a client-supplied id in the code path; deriving it removes the chance of a
+    // later edit dropping the check. Every tool below is bound to this same
+    // creator_id via ctx.postIds/ctx.creatorId, never a raw id Claude passes in.
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
 
-    if (!creator_id || !message) {
-      return NextResponse.json({ error: 'Missing creator_id or message' }, { status: 400 })
-    }
+    const { supabase, creatorId: creator_id } = authResult.auth
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
+    const { message, conversation_history } = await request.json()
 
-    // Unlike /api/ask, this route verifies the caller actually owns creator_id
-    // before handing back any audience data — and every tool below is bound to
-    // this same creator_id via ctx.postIds/ctx.creatorId, never the raw input
-    // Claude passes in.
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    const { data: creator } = await supabase
-      .from('creators')
-      .select('id')
-      .eq('id', creator_id)
-      .eq('user_id', user.id)
-      .single()
-
-    if (!creator) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
+    if (!message) {
+      return NextResponse.json({ error: 'Missing message' }, { status: 400 })
     }
 
     const { data: posts, error: postsError } = await supabase

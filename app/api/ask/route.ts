@@ -1,33 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
 import { fetchInBatches } from '@/lib/supabase-helpers'
+import { requireCreator } from '@/lib/api-auth'
 
 export async function POST(request: NextRequest) {
   try {
-    const { creator_id, question, post_id } = await request.json()
+    // This route built a service-role client from the request cookies but never
+    // called getUser(), so the session was decorative: any caller could ask
+    // questions about any creator's audience, at Anthropic's expense.
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
 
-    if (!creator_id || !question) {
+    const { supabase, creatorId: creator_id } = authResult.auth
+
+    const { question, post_id } = await request.json()
+
+    if (!question) {
       return NextResponse.json(
-        { error: 'Missing creator_id or question' },
+        { error: 'Missing question' },
         { status: 400 }
       )
     }
-
-    const cookieStore = await cookies()
-
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
 
     const { data: posts, error: postsError } = await supabase
       .from('posts')
@@ -53,7 +45,13 @@ export async function POST(request: NextRequest) {
         .from('comments')
         .select('id, text, post_id')
 
+      // postIds is the creator's own set, so checking membership here keeps a
+      // supplied post_id from reaching another creator's comments. Filtering by
+      // post_id alone would have read any post in the database.
       if (post_id) {
+        if (!postIds.includes(post_id)) {
+          return NextResponse.json({ error: 'Post not found' }, { status: 404 })
+        }
         commentQuery = commentQuery.eq('post_id', post_id)
       } else {
         commentQuery = commentQuery.in('post_id', postIds)

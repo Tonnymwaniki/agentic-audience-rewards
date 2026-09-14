@@ -37,6 +37,11 @@ export default function DashboardLayout({
   // stable wrapper with {children} in a fixed position preserves it.
   const isFullscreenRoute = pathname === '/dashboard/research/chat'
 
+  // The platform hub sits above every platform. The nav links, bottom tab bar and
+  // Research button below are all YouTube's, so on the hub they're not rendered
+  // at all — picking a platform comes before any of them apply.
+  const isHub = pathname === '/dashboard/hub'
+
   return (
     // The bottom padding below reserves room for the fixed tab bar so the last
     // element of every page isn't hidden underneath it, and returns to normal at md
@@ -62,20 +67,38 @@ export default function DashboardLayout({
       className={
         isFullscreenRoute
           ? ''
-          : `mx-auto w-full p-6 pb-[calc(9rem+env(safe-area-inset-bottom))] md:pb-6 ${
-              isWide ? 'max-w-7xl' : 'max-w-5xl'
-            }`
+          : `mx-auto w-full p-6 ${
+              isHub ? 'pb-[calc(1.5rem+env(safe-area-inset-bottom))]' : 'pb-[calc(9rem+env(safe-area-inset-bottom))] md:pb-6'
+            } ${isWide ? 'max-w-7xl' : 'max-w-5xl'}`
       }
     >
       {!isFullscreenRoute && (
       <nav className="mb-6 flex flex-wrap items-center justify-between gap-y-2 border-b border-white/10 pb-4">
-        <Link href="/dashboard/agent" className="block">
-          <h1 className="text-xl font-bold font-display text-text-primary">Creator Dashboard</h1>
-        </Link>
+        <div>
+          {/* The way back out of YouTube. Lives in the shared nav rather than on
+              Agent Home alone, so it's one tap away from every YouTube page at
+              every width — the bottom tab bar has no slot for it. */}
+          {!isHub && (
+            <Link
+              href="/dashboard/hub"
+              // min-h-11 gives a 44px tap target; the matching negative margin keeps
+              // it taking up only its text height, so the title below does not move.
+              className="-my-2.5 inline-flex min-h-11 items-center gap-1 text-xs text-text-muted transition-colors hover:text-text-primary"
+            >
+              ← All platforms
+              <span aria-hidden="true" className="text-text-muted/50">·</span>
+              <span className="text-text-muted/80">YouTube</span>
+            </Link>
+          )}
+          <Link href={isHub ? '/dashboard/hub' : '/dashboard/agent'} className="block">
+            <h1 className="text-xl font-bold font-display text-text-primary">Creator Dashboard</h1>
+          </Link>
+        </div>
         {/* The link row is the desktop navigation; below md the bottom tab bar
             replaces it. The notification bell stays visible at every width — it has
             no equivalent tab. */}
         <div className="flex items-center gap-1">
+          {!isHub && (
           <div className="hidden flex-wrap items-center gap-1 md:flex">
             {NAV_ITEMS.map(item => {
             const isActive = pathname === item.href || pathname.startsWith(item.href + '/')
@@ -94,8 +117,9 @@ export default function DashboardLayout({
             )
             })}
           </div>
+          )}
 
-          <NotificationBell />
+          {!isHub && <NotificationBell />}
 
           {/* Duplicated by the "Me" tab below md, so it hides with the link row.
               Points at the account page rather than straight to Business Profile —
@@ -104,7 +128,7 @@ export default function DashboardLayout({
             href="/dashboard/me"
             aria-label="Account"
             title="Account"
-            className={`hidden rounded-md p-2 transition-colors md:block ${
+            className={`${isHub ? 'block' : 'hidden md:block'} rounded-md p-2 transition-colors ${
               pathname.startsWith('/dashboard/me') || pathname.startsWith('/dashboard/profile')
                 ? 'text-purple-text'
                 : 'text-text-muted hover:text-text-primary'
@@ -130,7 +154,7 @@ export default function DashboardLayout({
       </nav>
       )}
       {children}
-      {!isFullscreenRoute && <MobileTabBar />}
+      {!isFullscreenRoute && !isHub && <MobileTabBar />}
     </div>
   )
 }

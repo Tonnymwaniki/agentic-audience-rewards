@@ -1,17 +1,18 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
-import { creatorHasPosts, AGENT_PATH, CONNECT_PATH } from '@/lib/onboarding'
+import { HUB_PATH } from '@/lib/onboarding'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * The post-login landing route. Renders nothing — it exists purely to decide where
- * a signed-in creator should go, then redirect.
+ * The post-login landing route. Renders nothing — it only confirms there is a
+ * session, then sends the creator to the platform hub.
  *
- * Doing this server-side rather than in the login form means the decision is made
- * once, in one place, with the session already established: no client round-trip
- * after sign-in, no flash of the wrong screen, and bookmarks or manual visits to
- * /dashboard (which previously 404'd) resolve correctly too.
+ * The "has this creator analyzed anything?" decision no longer happens here. It
+ * is specific to YouTube, so it moved to /dashboard/youtube, which the hub's
+ * YouTube card links to. Keeping /dashboard as a redirect (rather than pointing
+ * the login form at the hub directly) means bookmarks and manual visits to
+ * /dashboard still resolve.
  *
  * Note: redirect() works by throwing, so nothing here may sit inside a try/catch —
  * it would swallow the redirect and fall through.
@@ -26,23 +27,5 @@ export default async function DashboardIndexPage() {
     redirect('/login')
   }
 
-  const { data: creator, error: creatorError } = await supabase
-    .from('creators')
-    .select('id')
-    .eq('user_id', user.id)
-    .maybeSingle()
-
-  if (creatorError) {
-    console.error('Dashboard routing creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
-    // The connect flow creates/repairs the creator row, so it's the safe landing
-    // when we can't read one.
-    redirect(CONNECT_PATH)
-  }
-
-  // A brand-new account has no creators row yet — that's onboarding, not an error.
-  if (!creator) {
-    redirect(CONNECT_PATH)
-  }
-
-  redirect((await creatorHasPosts(supabase, creator.id)) ? AGENT_PATH : CONNECT_PATH)
+  redirect(HUB_PATH)
 }

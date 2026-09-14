@@ -1,8 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { categorizePost } from '@/lib/categorize'
+import { requireCreator, requirePostOwnership } from '@/lib/api-auth'
 
 export async function POST(request: NextRequest) {
   try {
+    // Paid Anthropic call against a caller-named post: authenticate, then confirm
+    // the post is actually theirs before spending anything on it.
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+
     const { post_id } = await request.json()
 
     if (!post_id) {
@@ -11,6 +17,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       )
     }
+
+    const owned = await requirePostOwnership(authResult.auth.supabase, authResult.auth.creatorId, post_id)
+    if (!owned.ok) return owned.response
 
     const result = await categorizePost(post_id)
 

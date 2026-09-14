@@ -6,6 +6,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 
 export const CONNECT_PATH = '/dashboard/connect'
 export const AGENT_PATH = '/dashboard/agent'
+/** Post-login landing: pick a platform before entering any platform's pages. */
+export const HUB_PATH = '/dashboard/hub'
+/** YouTube's entry route — decides between CONNECT_PATH and AGENT_PATH. */
+export const YOUTUBE_ENTRY_PATH = '/dashboard/youtube'
 
 /**
  * True if this creator has at least one analyzed video.
