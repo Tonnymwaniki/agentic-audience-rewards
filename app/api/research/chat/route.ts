@@ -5,6 +5,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 // the get_trending tool can never disagree about what's trending.
 import { computeTrendingGroups } from '@/lib/trending'
 import { requireCreator } from '@/lib/api-auth'
+import { hybridSearchComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
 // one invocation. Vercel Hobby caps this at 60s, Pro at 300s.
@@ -239,24 +240,64 @@ async function toolSearchComments(
   const query = typeof input.query === 'string' ? input.query.trim() : ''
   if (!query) return { error: 'query is required' }
 
-  let postIds = ctx.postIds
+  let postId: string | undefined
   if (typeof input.post_id === 'string' && input.post_id) {
     const resolved = resolvePostId(ctx, input.post_id)
     if (!resolved) return { error: `No video found matching "${input.post_id}"` }
-    postIds = [resolved]
+    postId = resolved
   }
+  const category = typeof input.category === 'string' && input.category ? input.category : undefined
 
+  try {
+    // ctx.creatorId is session-derived (see POST below), and postId has just been
+    // checked against this creator's own videos — the two things the SQL functions
+    // behind hybridSearchComments rely on the caller to guarantee.
+    const hybrid = await hybridSearchComments(query, ctx.creatorId, 20, {
+      postId,
+      category,
+      supabase: ctx.supabase,
+    })
+
+    return {
+      // Same meaning as before: how many comments actually contain the query's
+      // words. The results list below also includes semantically related comments
+      // that use different words, so its length is not a mention count.
+      count: hybrid.keyword_match_count,
+      search_mode: hybrid.semantic_unavailable ? 'keyword' : 'hybrid',
+      note: hybrid.semantic_unavailable
+        ? 'Keyword matches only (semantic search unavailable right now).'
+        : "count = comments containing the query's words. results also include comments with related meaning that use different words (matched_by: semantic); judge those by their text.",
+      results: hybrid.results.map(r => ({
+        author: r.author,
+        text: r.text,
+        video: ctx.postMap.get(r.post_id) || 'Untitled video',
+        category: r.category || 'other',
+        posted_at: r.posted_at,
+        matched_by: r.matched_by,
+      })),
+    }
+  } catch (err) {
+    if (!(err instanceof HybridSearchUnavailableError)) throw err
+    // Hybrid search SQL not installed yet (migration 20240101000020): keep the
+    // tool working with the previous substring search instead of failing it.
+    console.warn('Hybrid search unavailable, using substring search:', err.message)
+    return legacySubstringSearch(ctx, query, postId ? [postId] : ctx.postIds, category)
+  }
+}
+
+// The original search_comments behaviour, kept only as the fallback above.
+async function legacySubstringSearch(ctx: ToolContext, query: string, postIds: string[], category?: string) {
   const comments = await fetchRichComments(ctx.supabase, postIds)
   const lowerQuery = query.toLowerCase()
 
   let matches = comments.filter(c => c.text.toLowerCase().includes(lowerQuery))
-
-  if (typeof input.category === 'string' && input.category) {
-    matches = matches.filter(c => getCatInfo(c)?.category === input.category)
+  if (category) {
+    matches = matches.filter(c => getCatInfo(c)?.category === category)
   }
 
   return {
     count: matches.length,
+    search_mode: 'substring',
     results: matches.slice(0, 20).map(c => ({
       author: getAuthor(c),
       text: c.text,

@@ -35,28 +35,131 @@ const MAX_CHARS_PER_REQUEST = 300_000
 
 const MAX_ATTEMPTS = 6
 
+/**
+ * Rate limits for this account. The API's own 429 message states them: with no
+ * payment method on file, "reduced rate limits of 3 RPM and 10K TPM". The 429
+ * carries no Retry-After header, so the client has to pace itself.
+ *
+ * Read from env on every call so they can be raised without a code change once
+ * a payment method is added (tier 1 is 2000 RPM / 8M TPM for voyage-4):
+ *   VOYAGE_RPM_LIMIT=2000  VOYAGE_TPM_LIMIT=8000000
+ */
+function rateLimits() {
+  const rpm = Number(process.env.VOYAGE_RPM_LIMIT) || 3
+  const tpm = Number(process.env.VOYAGE_TPM_LIMIT) || 10_000
+  return { rpm, tpm }
+}
+
+const WINDOW_MS = 60_000
+/** Margin on top of the computed spacing, for clock skew between us and the API. */
+const PACING_BUFFER_MS = 500
+/** Chars per token assumed when estimating a batch before sending it — deliberately pessimistic. */
+const CHARS_PER_TOKEN_ESTIMATE = 3
+
+/**
+ * Module-level on purpose: every caller in this process — the backfill loop, or
+ * several analyses in one server instance — shares one budget. Separate
+ * serverless instances can't see each other's usage; the 429 backoff below is
+ * the backstop for that case.
+ */
+let lastRequestAt = 0
+const recentUsage: Array<{ at: number; tokens: number }> = []
+
 export type EmbeddingInputType = 'document' | 'query'
+
+export type EmbeddingRequestOptions = {
+  /**
+   * Longest the rate limiter may make this call wait. Background jobs leave it
+   * unset and wait as long as needed; an interactive caller (a search inside a
+   * chat reply) sets a small value and gets EmbeddingUnavailableError instead of
+   * stalling the response for 20+ seconds.
+   */
+  maxWaitMs?: number
+  /** Defaults to MAX_ATTEMPTS. Interactive callers use 1: better to degrade now than retry for minutes. */
+  maxAttempts?: number
+}
+
+/** Thrown when an embedding can't be produced within the caller's limits. */
+export class EmbeddingUnavailableError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'EmbeddingUnavailableError'
+  }
+}
 
 function sleep(ms: number) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function estimateTokens(texts: string[]) {
+  return Math.ceil(texts.reduce((sum, t) => sum + t.length, 0) / CHARS_PER_TOKEN_ESTIMATE)
+}
+
+/**
+ * Waits until sending `estimatedTokens` more would respect both limits:
+ *  - RPM: requests evenly spaced at least 60s / RPM apart (20.5s at 3 RPM), rather
+ *    than a burst of three followed by a minute of 429s.
+ *  - TPM: tokens actually used in the last 60s (from each response's usage
+ *    field) plus this batch's estimate stay within the per-minute cap.
+ */
+async function waitForRateLimit(estimatedTokens: number, maxWaitMs?: number) {
+  const { rpm, tpm } = rateLimits()
+
+  for (;;) {
+    const now = Date.now()
+    while (recentUsage.length > 0 && now - recentUsage[0].at >= WINDOW_MS) {
+      recentUsage.shift()
+    }
+
+    const spacingWait = lastRequestAt + Math.ceil(WINDOW_MS / rpm) + PACING_BUFFER_MS - now
+
+    const usedTokens = recentUsage.reduce((sum, u) => sum + u.tokens, 0)
+    // If the window must drain to fit this batch, wait for the oldest entry to age out.
+    const tokenWait =
+      recentUsage.length > 0 && usedTokens + estimatedTokens > tpm
+        ? recentUsage[0].at + WINDOW_MS + PACING_BUFFER_MS - now
+        : 0
+
+    const wait = Math.max(spacingWait, tokenWait, 0)
+    if (wait === 0) return
+    if (maxWaitMs !== undefined && wait > maxWaitMs) {
+      throw new EmbeddingUnavailableError(
+        `Embedding rate limit: next request allowed in ${Math.ceil(wait / 1000)}s (limit ${rpm} RPM / ${tpm} TPM)`
+      )
+    }
+    await sleep(wait)
+  }
+}
+
 /**
  * Embeds a batch of texts in one API call, returning vectors in input order.
  *
- * Retries 429s, 5xx and network failures with exponential backoff (1s, 2s, 4s…
- * plus jitter), as Voyage's rate-limit docs recommend. Any other 4xx — a bad key,
- * a malformed request — throws immediately, because retrying cannot fix it.
+ * Every attempt waits for the shared rate limiter first. A 429 is retried after
+ * a full RPM interval (and a whole minute if it repeats); 5xx and network
+ * failures back off exponentially. Any other 4xx — a bad key, a malformed
+ * request — throws immediately, because retrying cannot fix it.
  */
-async function embedBatch(texts: string[], inputType: EmbeddingInputType): Promise<number[][]> {
+async function embedBatch(
+  texts: string[],
+  inputType: EmbeddingInputType,
+  options: EmbeddingRequestOptions = {}
+): Promise<number[][]> {
   const apiKey = process.env.VOYAGE_API_KEY
   if (!apiKey) {
-    throw new Error('VOYAGE_API_KEY is not set')
+    throw new EmbeddingUnavailableError('VOYAGE_API_KEY is not set')
   }
+  const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS
 
   const baseUrl = process.env.VOYAGE_API_BASE_URL || DEFAULT_BASE_URL
 
+  const estimatedTokens = estimateTokens(texts)
+
   for (let attempt = 1; ; attempt++) {
+    await waitForRateLimit(estimatedTokens, options.maxWaitMs)
+    // Stamped at send time: the API counts a request when it arrives, whatever
+    // the outcome, so a 429 or a failure still occupies its slot.
+    lastRequestAt = Date.now()
+
     let response: Response
     try {
       response = await fetch(`${baseUrl}/v1/embeddings`, {
@@ -75,7 +178,7 @@ async function embedBatch(texts: string[], inputType: EmbeddingInputType): Promi
         }),
       })
     } catch (err) {
-      if (attempt >= MAX_ATTEMPTS) throw err
+      if (attempt >= maxAttempts) throw err
       await sleep(backoffMs(attempt))
       continue
     }
@@ -83,7 +186,11 @@ async function embedBatch(texts: string[], inputType: EmbeddingInputType): Promi
     if (response.ok) {
       const body = (await response.json()) as {
         data: Array<{ embedding: number[]; index: number }>
+        usage?: { total_tokens?: number }
       }
+
+      // Real usage, not the estimate, is what the TPM window tracks from here on.
+      recentUsage.push({ at: lastRequestAt, tokens: body.usage?.total_tokens ?? estimatedTokens })
 
       // Order by the API's index field rather than trusting array order.
       const vectors: number[][] = new Array(texts.length)
@@ -104,12 +211,26 @@ async function embedBatch(texts: string[], inputType: EmbeddingInputType): Promi
     const retryable = response.status === 429 || response.status >= 500
     const detail = (await response.text()).slice(0, 300)
 
-    if (!retryable || attempt >= MAX_ATTEMPTS) {
-      throw new Error(`Voyage embeddings request failed (${response.status}): ${detail}`)
+    if (!retryable || attempt >= maxAttempts) {
+      const message = `Voyage embeddings request failed (${response.status}): ${detail}`
+      // A 429 the caller chose not to wait out is "unavailable", not a bug.
+      throw response.status === 429 ? new EmbeddingUnavailableError(message) : new Error(message)
     }
 
     const retryAfterSeconds = Number(response.headers.get('retry-after'))
-    await sleep(Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0 ? retryAfterSeconds * 1000 : backoffMs(attempt))
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+      await sleep(retryAfterSeconds * 1000)
+    } else if (response.status === 429) {
+      // Short exponential retries (1s, 2s, 4s…) are useless against a per-minute
+      // cap — they just collect more 429s. The loop's waitForRateLimit already
+      // spaces the retry a full RPM interval after this attempt. A second 429 in
+      // a row means the window is still full (another server instance using the
+      // same key, or the token cap), so wait out a whole minute on top.
+      console.warn(`Voyage rate limit hit (attempt ${attempt}); waiting before retrying`)
+      if (attempt >= 2) await sleep(WINDOW_MS)
+    } else {
+      await sleep(backoffMs(attempt))
+    }
   }
 }
 
@@ -120,9 +241,10 @@ function backoffMs(attempt: number) {
 /** Embeds a single text. */
 export async function generateEmbedding(
   text: string,
-  inputType: EmbeddingInputType = 'document'
+  inputType: EmbeddingInputType = 'document',
+  options: EmbeddingRequestOptions = {}
 ): Promise<number[]> {
-  const [vector] = await embedBatch([text], inputType)
+  const [vector] = await embedBatch([text], inputType, options)
   return vector
 }
 
@@ -146,8 +268,12 @@ export async function generateEmbeddings(
     batchChars = 0
   }
 
+  // A batch must fit inside one minute's token allowance as well as the
+  // per-request limit; at 10K TPM that caps a request at ~30K characters.
+  const maxChars = Math.min(MAX_CHARS_PER_REQUEST, rateLimits().tpm * CHARS_PER_TOKEN_ESTIMATE)
+
   for (const text of texts) {
-    if (batch.length >= MAX_INPUTS_PER_REQUEST || (batch.length > 0 && batchChars + text.length > MAX_CHARS_PER_REQUEST)) {
+    if (batch.length >= MAX_INPUTS_PER_REQUEST || (batch.length > 0 && batchChars + text.length > maxChars)) {
       await flush()
     }
     batch.push(text)
@@ -162,7 +288,7 @@ export async function generateEmbeddings(
  * pgvector's text literal. Sent as a string rather than a JSON array so the
  * value reaches Postgres in exactly the form the vector type parses.
  */
-function toVectorLiteral(vector: number[]): string {
+export function toVectorLiteral(vector: number[]): string {
   return `[${vector.join(',')}]`
 }
 
