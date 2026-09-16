@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
-import { generateEmbedding, toVectorLiteral, EmbeddingUnavailableError } from '@/lib/embeddings'
+import { generateEmbedding, rerankDocuments, toVectorLiteral, EmbeddingUnavailableError } from '@/lib/embeddings'
 
 /**
  * Candidates fetched from each signal before fusing. Also the bound that makes
@@ -33,6 +33,14 @@ export function semanticQueryText(query: string): string {
  */
 const INTERACTIVE_EMBED_WAIT_MS = 2_500
 
+/**
+ * How many fused candidates go to the reranker. Enough headroom below the fused
+ * top-20 that a relevant comment fusion ranked ~#30 can still be promoted — the
+ * measured rerank-2.5 gain on "expensive" came from comments at fusion ranks 11-40
+ * ("how much can ... cost", "we cant afford it") — while staying ~700 tokens.
+ */
+export const RERANK_CANDIDATES = 40
+
 export type MatchSignal = 'keyword' | 'semantic'
 
 export type HybridSearchResult = {
@@ -46,8 +54,10 @@ export type HybridSearchResult = {
   matched_by: MatchSignal[]
   /** Cosine similarity to the query, when the semantic signal found it. */
   similarity: number | null
-  /** Fused score; higher is better. */
+  /** Reciprocal-rank-fusion score; higher is better. */
   score: number
+  /** Reranker relevance for the query (0-1), when reranking ran. */
+  relevance: number | null
 }
 
 export type HybridSearchResponse = {
@@ -56,6 +66,10 @@ export type HybridSearchResponse = {
   keyword_match_count: number
   /** Why the semantic signal was skipped, when it was; the results are then keyword-only. */
   semantic_unavailable: string | null
+  /** Which ordering the results are in: the reranker's, or fusion's as a fallback. */
+  ranking: 'rerank' | 'rrf'
+  /** Why reranking was skipped, when it was. */
+  rerank_unavailable: string | null
 }
 
 export type HybridSearchOptions = {
@@ -77,6 +91,23 @@ export class HybridSearchUnavailableError extends Error {
 }
 
 type RankedCandidate = { id: string; similarity?: number }
+
+/**
+ * Comment text as the reranker should read it. YouTube returns HTML-encoded text
+ * ("didn&#39;t", "<br>", timestamp links), which is noise to a relevance model.
+ */
+export function textForReranking(text: string): string {
+  return text
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
 
 /**
  * Reciprocal rank fusion. Each list contributes 1 / (RRF_K + rank) for every
@@ -114,7 +145,9 @@ export function fuseByReciprocalRank(
 
 /**
  * Hybrid search over one creator's comments: full-text keyword matching and
- * vector similarity, fused with reciprocal rank fusion.
+ * vector similarity, fused with reciprocal rank fusion to pick candidates, then
+ * reordered by Voyage's reranker. If reranking can't run, fusion's order stands
+ * and `rerank_unavailable` says why.
  *
  * `creatorId` must come from the authenticated session — the SQL functions trust
  * it, which is why they're callable only with the service-role key.
@@ -181,30 +214,33 @@ export async function hybridSearchComments(
   const keywordList = (keywordRows as Array<{ id: string; total_matches: number }>) ?? []
   const keyword: RankedCandidate[] = keywordList.map(row => ({ id: row.id }))
 
-  const ranked = fuseByReciprocalRank(semantic, keyword, limit)
+  const candidates = fuseByReciprocalRank(semantic, keyword, Math.max(limit, RERANK_CANDIDATES))
   const response: HybridSearchResponse = {
     results: [],
     keyword_match_count: keywordList.length > 0 ? Number(keywordList[0].total_matches) : 0,
     semantic_unavailable: semanticUnavailable,
+    ranking: 'rrf',
+    rerank_unavailable: null,
   }
-  if (ranked.length === 0) return response
+  if (candidates.length === 0) return response
 
   const { data: details, error: detailsError } = await supabase
     .from('comments')
     .select('id, text, post_id, posted_at, audience_members ( display_name ), comment_categories ( category )')
     .in(
       'id',
-      ranked.map(r => r.id)
+      candidates.map(r => r.id)
     )
   if (detailsError) {
     throw new Error(`Could not load search result details: ${detailsError.message}`)
   }
 
   const byId = new Map((details ?? []).map(row => [row.id as string, row]))
-  for (const hit of ranked) {
+  const loaded: HybridSearchResult[] = []
+  for (const hit of candidates) {
     const row = byId.get(hit.id)
     if (!row) continue
-    response.results.push({
+    loaded.push({
       id: hit.id,
       text: row.text as string,
       post_id: row.post_id as string,
@@ -214,7 +250,29 @@ export async function hybridSearchComments(
       matched_by: hit.matched_by,
       similarity: hit.similarity,
       score: hit.score,
+      relevance: null,
     })
+  }
+
+  try {
+    // The raw query, not the embedding template: a reranker reads query and
+    // document together, and the plain query measured best (an instruction-style
+    // query scored lower at twice the tokens).
+    const reranked = await rerankDocuments(
+      query,
+      loaded.map(r => textForReranking(r.text)),
+      { maxWaitMs: INTERACTIVE_EMBED_WAIT_MS, maxAttempts: 1 }
+    )
+    response.results = reranked.slice(0, limit).map(({ index, relevance_score }) => ({
+      ...loaded[index],
+      relevance: relevance_score,
+    }))
+    response.ranking = 'rerank'
+  } catch (err) {
+    // Fusion's order is a sound result on its own; reranking only refines it.
+    response.results = loaded.slice(0, limit)
+    response.rerank_unavailable =
+      err instanceof EmbeddingUnavailableError ? err.message : `Rerank failed: ${err instanceof Error ? err.message : String(err)}`
   }
 
   return response

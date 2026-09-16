@@ -36,12 +36,14 @@ const MAX_CHARS_PER_REQUEST = 300_000
 const MAX_ATTEMPTS = 6
 
 /**
- * Rate limits for this account. The API's own 429 message states them: with no
- * payment method on file, "reduced rate limits of 3 RPM and 10K TPM". The 429
- * carries no Retry-After header, so the client has to pace itself.
+ * Client-side pacing limits, applied PER MODEL (voyage-4 and rerank-2.5 each get
+ * their own budget, matching how Voyage publishes its limits).
  *
- * Read from env on every call so they can be raised without a code change once
- * a payment method is added (tier 1 is 2000 RPM / 8M TPM for voyage-4):
+ * The defaults are Voyage's no-payment-method floor ("reduced rate limits of 3 RPM
+ * and 10K TPM", quoted from a 429 on 2026-09-14). They're conservative on purpose:
+ * too low only slows things down, too high turns into 429s. This account was
+ * re-measured on 2026-09-15 and accepted 24 concurrent requests (12 embeddings +
+ * 12 reranks) without a 429, so set the real tier's numbers via env, e.g. tier 1:
  *   VOYAGE_RPM_LIMIT=2000  VOYAGE_TPM_LIMIT=8000000
  */
 function rateLimits() {
@@ -58,12 +60,21 @@ const CHARS_PER_TOKEN_ESTIMATE = 3
 
 /**
  * Module-level on purpose: every caller in this process — the backfill loop, or
- * several analyses in one server instance — shares one budget. Separate
- * serverless instances can't see each other's usage; the 429 backoff below is
- * the backstop for that case.
+ * several searches in one server instance — shares one budget per model. Separate
+ * serverless instances can't see each other's usage; the 429 backoff below is the
+ * backstop for that case.
  */
-let lastRequestAt = 0
-const recentUsage: Array<{ at: number; tokens: number }> = []
+type LimiterState = { lastRequestAt: number; recentUsage: Array<{ at: number; tokens: number }> }
+const limiters = new Map<string, LimiterState>()
+
+function limiterFor(model: string): LimiterState {
+  let state = limiters.get(model)
+  if (!state) {
+    state = { lastRequestAt: 0, recentUsage: [] }
+    limiters.set(model, state)
+  }
+  return state
+}
 
 export type EmbeddingInputType = 'document' | 'query'
 
@@ -102,29 +113,29 @@ function estimateTokens(texts: string[]) {
  *  - TPM: tokens actually used in the last 60s (from each response's usage
  *    field) plus this batch's estimate stay within the per-minute cap.
  */
-async function waitForRateLimit(estimatedTokens: number, maxWaitMs?: number) {
+async function waitForRateLimit(state: LimiterState, estimatedTokens: number, maxWaitMs?: number) {
   const { rpm, tpm } = rateLimits()
 
   for (;;) {
     const now = Date.now()
-    while (recentUsage.length > 0 && now - recentUsage[0].at >= WINDOW_MS) {
-      recentUsage.shift()
+    while (state.recentUsage.length > 0 && now - state.recentUsage[0].at >= WINDOW_MS) {
+      state.recentUsage.shift()
     }
 
-    const spacingWait = lastRequestAt + Math.ceil(WINDOW_MS / rpm) + PACING_BUFFER_MS - now
+    const spacingWait = state.lastRequestAt + Math.ceil(WINDOW_MS / rpm) + PACING_BUFFER_MS - now
 
-    const usedTokens = recentUsage.reduce((sum, u) => sum + u.tokens, 0)
+    const usedTokens = state.recentUsage.reduce((sum, u) => sum + u.tokens, 0)
     // If the window must drain to fit this batch, wait for the oldest entry to age out.
     const tokenWait =
-      recentUsage.length > 0 && usedTokens + estimatedTokens > tpm
-        ? recentUsage[0].at + WINDOW_MS + PACING_BUFFER_MS - now
+      state.recentUsage.length > 0 && usedTokens + estimatedTokens > tpm
+        ? state.recentUsage[0].at + WINDOW_MS + PACING_BUFFER_MS - now
         : 0
 
     const wait = Math.max(spacingWait, tokenWait, 0)
     if (wait === 0) return
     if (maxWaitMs !== undefined && wait > maxWaitMs) {
       throw new EmbeddingUnavailableError(
-        `Embedding rate limit: next request allowed in ${Math.ceil(wait / 1000)}s (limit ${rpm} RPM / ${tpm} TPM)`
+        `Voyage rate limit: next request allowed in ${Math.ceil(wait / 1000)}s (limit ${rpm} RPM / ${tpm} TPM)`
       )
     }
     await sleep(wait)
@@ -132,50 +143,43 @@ async function waitForRateLimit(estimatedTokens: number, maxWaitMs?: number) {
 }
 
 /**
- * Embeds a batch of texts in one API call, returning vectors in input order.
+ * One paced, retried POST to the Voyage API, shared by embeddings and reranking.
  *
- * Every attempt waits for the shared rate limiter first. A 429 is retried after
+ * Every attempt waits for that model's rate limiter first. A 429 is retried after
  * a full RPM interval (and a whole minute if it repeats); 5xx and network
  * failures back off exponentially. Any other 4xx — a bad key, a malformed
  * request — throws immediately, because retrying cannot fix it.
  */
-async function embedBatch(
-  texts: string[],
-  inputType: EmbeddingInputType,
-  options: EmbeddingRequestOptions = {}
-): Promise<number[][]> {
+async function voyagePost<T extends { usage?: { total_tokens?: number } }>(
+  path: string,
+  model: string,
+  body: Record<string, unknown>,
+  estimatedTokens: number,
+  options: EmbeddingRequestOptions
+): Promise<T> {
   const apiKey = process.env.VOYAGE_API_KEY
   if (!apiKey) {
     throw new EmbeddingUnavailableError('VOYAGE_API_KEY is not set')
   }
   const maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS
-
   const baseUrl = process.env.VOYAGE_API_BASE_URL || DEFAULT_BASE_URL
-
-  const estimatedTokens = estimateTokens(texts)
+  const state = limiterFor(model)
 
   for (let attempt = 1; ; attempt++) {
-    await waitForRateLimit(estimatedTokens, options.maxWaitMs)
+    await waitForRateLimit(state, estimatedTokens, options.maxWaitMs)
     // Stamped at send time: the API counts a request when it arrives, whatever
     // the outcome, so a 429 or a failure still occupies its slot.
-    lastRequestAt = Date.now()
+    state.lastRequestAt = Date.now()
 
     let response: Response
     try {
-      response = await fetch(`${baseUrl}/v1/embeddings`, {
+      response = await fetch(`${baseUrl}${path}`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${apiKey}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          input: texts,
-          model: EMBEDDING_MODEL,
-          // 'document' for stored comments; a later similarity search should embed
-          // its search text with 'query'. Voyage tunes each side differently.
-          input_type: inputType,
-          output_dimension: EMBEDDING_DIMENSION,
-        }),
+        body: JSON.stringify({ ...body, model }),
       })
     } catch (err) {
       if (attempt >= maxAttempts) throw err
@@ -184,35 +188,17 @@ async function embedBatch(
     }
 
     if (response.ok) {
-      const body = (await response.json()) as {
-        data: Array<{ embedding: number[]; index: number }>
-        usage?: { total_tokens?: number }
-      }
-
+      const parsed = (await response.json()) as T
       // Real usage, not the estimate, is what the TPM window tracks from here on.
-      recentUsage.push({ at: lastRequestAt, tokens: body.usage?.total_tokens ?? estimatedTokens })
-
-      // Order by the API's index field rather than trusting array order.
-      const vectors: number[][] = new Array(texts.length)
-      for (const item of body.data) {
-        vectors[item.index] = item.embedding
-      }
-
-      for (let i = 0; i < texts.length; i++) {
-        if (!vectors[i] || vectors[i].length !== EMBEDDING_DIMENSION) {
-          throw new Error(
-            `Voyage returned ${vectors[i] ? vectors[i].length : 'no'} dimensions for input ${i}, expected ${EMBEDDING_DIMENSION}`
-          )
-        }
-      }
-      return vectors
+      state.recentUsage.push({ at: state.lastRequestAt, tokens: parsed.usage?.total_tokens ?? estimatedTokens })
+      return parsed
     }
 
     const retryable = response.status === 429 || response.status >= 500
     const detail = (await response.text()).slice(0, 300)
 
     if (!retryable || attempt >= maxAttempts) {
-      const message = `Voyage embeddings request failed (${response.status}): ${detail}`
+      const message = `Voyage ${path} request failed (${response.status}): ${detail}`
       // A 429 the caller chose not to wait out is "unavailable", not a bug.
       throw response.status === 429 ? new EmbeddingUnavailableError(message) : new Error(message)
     }
@@ -226,7 +212,7 @@ async function embedBatch(
       // spaces the retry a full RPM interval after this attempt. A second 429 in
       // a row means the window is still full (another server instance using the
       // same key, or the token cap), so wait out a whole minute on top.
-      console.warn(`Voyage rate limit hit (attempt ${attempt}); waiting before retrying`)
+      console.warn(`Voyage rate limit hit on ${model} (attempt ${attempt}); waiting before retrying`)
       if (attempt >= 2) await sleep(WINDOW_MS)
     } else {
       await sleep(backoffMs(attempt))
@@ -234,8 +220,98 @@ async function embedBatch(
   }
 }
 
+/** Embeds a batch of texts in one API call, returning vectors in input order. */
+async function embedBatch(
+  texts: string[],
+  inputType: EmbeddingInputType,
+  options: EmbeddingRequestOptions = {}
+): Promise<number[][]> {
+  const body = await voyagePost<{
+    data: Array<{ embedding: number[]; index: number }>
+    usage?: { total_tokens?: number }
+  }>(
+    '/v1/embeddings',
+    EMBEDDING_MODEL,
+    {
+      input: texts,
+      // 'document' for stored comments; a similarity search embeds its search text
+      // with 'query'. Voyage tunes each side differently.
+      input_type: inputType,
+      output_dimension: EMBEDDING_DIMENSION,
+    },
+    estimateTokens(texts),
+    options
+  )
+
+  // Order by the API's index field rather than trusting array order.
+  const vectors: number[][] = new Array(texts.length)
+  for (const item of body.data) {
+    vectors[item.index] = item.embedding
+  }
+
+  for (let i = 0; i < texts.length; i++) {
+    if (!vectors[i] || vectors[i].length !== EMBEDDING_DIMENSION) {
+      throw new Error(
+        `Voyage returned ${vectors[i] ? vectors[i].length : 'no'} dimensions for input ${i}, expected ${EMBEDDING_DIMENSION}`
+      )
+    }
+  }
+  return vectors
+}
+
 function backoffMs(attempt: number) {
   return 1000 * 2 ** (attempt - 1) + Math.floor(Math.random() * 250)
+}
+
+/**
+ * Voyage's reranker. Chosen by measurement on this project's comments: for
+ * "expensive", precision@10 was 6/10 with reciprocal rank fusion, 8/10 with
+ * rerank-2.5, 7/10 with rerank-2.5 plus an instruction prefix (at twice the
+ * tokens) and 6/10 with rerank-3; for "delivery", rerank-2.5 put all five
+ * genuinely relevant comments in the top five, where fusion had a greeting at #5.
+ */
+export const RERANK_MODEL = 'rerank-2.5'
+
+export type RerankResult = { index: number; relevance_score: number }
+
+/**
+ * Scores `documents` for relevance to `query`, best first. `index` refers back to
+ * the position in `documents`.
+ */
+export async function rerankDocuments(
+  query: string,
+  documents: string[],
+  options: EmbeddingRequestOptions = {}
+): Promise<RerankResult[]> {
+  if (documents.length === 0) return []
+
+  // Voyage counts rerank tokens as query tokens x documents + document tokens.
+  const queryTokens = Math.ceil(query.length / CHARS_PER_TOKEN_ESTIMATE)
+  const estimatedTokens = queryTokens * documents.length + estimateTokens(documents)
+
+  const body = await voyagePost<{ data: RerankResult[]; usage?: { total_tokens?: number } }>(
+    '/v1/rerank',
+    RERANK_MODEL,
+    { query, documents },
+    estimatedTokens,
+    options
+  )
+
+  const seen = new Set<number>()
+  for (const item of body.data) {
+    if (!Number.isInteger(item.index) || item.index < 0 || item.index >= documents.length || seen.has(item.index)) {
+      throw new Error(`Voyage rerank returned an invalid index: ${item.index}`)
+    }
+    if (typeof item.relevance_score !== 'number' || !Number.isFinite(item.relevance_score)) {
+      throw new Error(`Voyage rerank returned an invalid score for index ${item.index}`)
+    }
+    seen.add(item.index)
+  }
+  if (seen.size !== documents.length) {
+    throw new Error(`Voyage rerank scored ${seen.size} of ${documents.length} documents`)
+  }
+
+  return [...body.data].sort((a, b) => b.relevance_score - a.relevance_score)
 }
 
 /** Embeds a single text. */

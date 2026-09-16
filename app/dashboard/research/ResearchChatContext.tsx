@@ -43,6 +43,20 @@ export type PersonCard = {
   comment_count: number
 }
 
+// Evidence cited by an answer — mirrors lib/research/evidence.ts, re-declared here
+// so this client module doesn't reach into server-side code.
+export type SourceItem =
+  | {
+      ref: string
+      type: 'comment'
+      comment_id: string
+      text: string
+      author: string | null
+      post_id: string | null
+      video_title: string | null
+    }
+  | { ref: string; type: 'video'; post_id: string; title: string }
+
 export type ChatMessage = {
   role: 'user' | 'assistant'
   content: string
@@ -52,6 +66,7 @@ export type ChatMessage = {
   ideaCards?: IdeaCard[]
   anomalyCard?: AnomalyCard
   personCards?: PersonCard[]
+  sources?: SourceItem[]
 }
 
 type ResearchChatValue = {
@@ -128,6 +143,7 @@ export function ResearchChatProvider({
             ideaCards: data.ideaCards,
             anomalyCard: data.anomalyCard,
             personCards: data.personCards,
+            sources: data.sources,
           },
         ])
       } catch (err) {

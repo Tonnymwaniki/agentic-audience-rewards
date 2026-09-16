@@ -92,9 +92,15 @@ export function computeSentiment(categories: Array<{ category: string | null }>)
   const total = positive + negative + neutral
   if (total === 0) return { positive: 0, negative: 0, neutral: 0, total: 0 }
 
-  const negativePct = Math.round((negative / total) * 100)
-  const neutralPct = Math.round((neutral / total) * 100)
-  const positivePct = 100 - negativePct - neutralPct
+  // The LARGEST bucket absorbs the remainder, as described above. Always giving it
+  // to "positive" could go negative: 1 complaint + 7 neutral rounds to 13% + 88%,
+  // which left positive at -1%.
+  const counts = { positive, negative, neutral }
+  const order = (Object.keys(counts) as Array<keyof typeof counts>).sort((a, b) => counts[b] - counts[a])
+  const pct = { positive: 0, negative: 0, neutral: 0 }
+  pct[order[1]] = Math.round((counts[order[1]] / total) * 100)
+  pct[order[2]] = Math.round((counts[order[2]] / total) * 100)
+  pct[order[0]] = 100 - pct[order[1]] - pct[order[2]]
 
-  return { positive: positivePct, negative: negativePct, neutral: neutralPct, total }
+  return { ...pct, total }
 }

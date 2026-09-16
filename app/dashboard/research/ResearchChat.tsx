@@ -3,7 +3,7 @@
 import { useRef, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
-import { useResearchChat, type ChatMessage, type VideoCard, type StatsCard, type IdeaCard, type AnomalyCard, type PersonCard } from './ResearchChatContext'
+import { useResearchChat, type ChatMessage, type VideoCard, type StatsCard, type IdeaCard, type AnomalyCard, type PersonCard, type SourceItem } from './ResearchChatContext'
 import ReactMarkdown from 'react-markdown'
 import Avatar from '@/components/Avatar'
 import { InterestBars, TrendingList } from './AudienceInsights'
@@ -204,7 +204,39 @@ function StatsCardDisplay({ card }: { card: StatsCard }) {
 // Renders an agent message's markdown with per-element overrides so it inherits
 // the app's theme rather than react-markdown's bare browser defaults (which would
 // come out as unstyled black-on-dark headings and browser-default list indents).
-function MarkdownMessage({ content }: { content: string }) {
+const CITATION_MARKER = /\[([CV]\d+)\]/g
+
+// The source a citation chip points at, scoped per message: every answer numbers
+// its own refs from C1, so an unscoped id would jump to the wrong message's source.
+function sourceElementId(scope: string, ref: string) {
+  return `${scope}-src-${ref}`
+}
+
+function scrollToSource(scope: string, ref: string) {
+  const el = document.getElementById(sourceElementId(scope, ref))
+  if (!el) return
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+  el.classList.add('ring-1', 'ring-purple')
+  window.setTimeout(() => el.classList.remove('ring-1', 'ring-purple'), 1500)
+}
+
+function MarkdownMessage({
+  content,
+  sources,
+  scope,
+}: {
+  content: string
+  sources?: SourceItem[]
+  scope: string
+}) {
+  const known = new Set((sources ?? []).map(s => s.ref))
+  // [C3] becomes a markdown link so the renderer below can draw it as a chip.
+  // Refs the server didn't return as sources are left as plain text (the server
+  // already strips any a tool never produced, so this is only a safety net).
+  const withCitationLinks = known.size
+    ? content.replace(CITATION_MARKER, (marker, ref: string) => (known.has(ref) ? `[${ref}](#cite-${ref})` : marker))
+    : content
+
   return (
     <div className="text-sm leading-relaxed text-text-primary">
       <ReactMarkdown
@@ -224,16 +256,43 @@ function MarkdownMessage({ content }: { content: string }) {
           h3: ({ children }) => (
             <h3 className="mb-2 font-display text-sm font-semibold text-text-primary">{children}</h3>
           ),
-          a: ({ href, children }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-purple-text underline hover:text-purple-hover"
-            >
-              {children}
-            </a>
-          ),
+          a: ({ href, children }) => {
+            if (href?.startsWith('#cite-')) {
+              const ref = href.slice('#cite-'.length)
+              const source = sources?.find(s => s.ref === ref)
+              const label = source?.type === 'comment' ? `Comment by ${source.author ?? 'a viewer'}` : source ? `Video: ${source.title}` : ref
+              return (
+                <sup className="ml-0.5">
+                  <a
+                    href={`#${sourceElementId(scope, ref)}`}
+                    onClick={event => {
+                      event.preventDefault()
+                      scrollToSource(scope, ref)
+                    }}
+                    title={label}
+                    aria-label={`Source ${ref}: ${label}`}
+                    // The chip is drawn 16px tall to sit inside a line of text; the invisible
+                    // before: overlay extends the TAP area to 40px vertically without
+                    // moving layout. Horizontal stays chip-width, so neighbouring
+                    // chips ([C3][C4][C5]) don't steal each other's taps.
+                    className="relative inline-flex h-4 min-w-4 items-center justify-center rounded bg-purple/20 px-1 font-mono text-[10px] leading-none text-purple-text no-underline transition-colors before:absolute before:inset-x-0 before:-inset-y-3 before:content-[''] hover:bg-purple/35"
+                  >
+                    {ref}
+                  </a>
+                </sup>
+              )
+            }
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-purple-text underline hover:text-purple-hover"
+              >
+                {children}
+              </a>
+            )
+          },
           code: ({ children }) => (
             <code className="rounded bg-surface-hover px-1 py-0.5 font-mono text-xs">{children}</code>
           ),
@@ -242,8 +301,58 @@ function MarkdownMessage({ content }: { content: string }) {
           ),
         }}
       >
-        {content}
+        {withCitationLinks}
       </ReactMarkdown>
+    </div>
+  )
+}
+
+/** YouTube comment text arrives HTML-encoded ("didn&#39;t", <br>, timestamp links). */
+function plainCommentText(text: string) {
+  return text
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&#39;/g, "'")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+// The evidence behind an answer, in the order it was cited. Built only from what
+// the server returned for this turn — every entry is a comment or video a tool
+// actually retrieved.
+function SourcesList({ sources, scope }: { sources: SourceItem[]; scope: string }) {
+  return (
+    <div className="mt-3 border-t border-white/10 pt-3">
+      <p className="mb-2 font-mono text-[10px] tracking-wide text-text-muted uppercase">Sources</p>
+      <ol className="space-y-1.5">
+        {sources.map(source => (
+          <li
+            key={source.ref}
+            id={sourceElementId(scope, source.ref)}
+            className="flex min-w-0 gap-2 rounded-md p-1 transition-shadow"
+          >
+            <span className="mt-0.5 inline-flex h-4 min-w-6 shrink-0 items-center justify-center rounded bg-purple/20 px-1 font-mono text-[10px] leading-none text-purple-text">
+              {source.ref}
+            </span>
+            {source.type === 'comment' ? (
+              <div className="min-w-0 text-xs">
+                <p className="line-clamp-2 text-text-primary">&ldquo;{plainCommentText(source.text)}&rdquo;</p>
+                <p className="mt-0.5 truncate text-text-muted">
+                  {source.author ?? 'Viewer'}
+                  {source.video_title ? ` · ${source.video_title}` : ''}
+                </p>
+              </div>
+            ) : (
+              <div className="min-w-0 text-xs">
+                <p className="truncate text-text-primary">{source.title}</p>
+                <p className="mt-0.5 text-text-muted">Video</p>
+              </div>
+            )}
+          </li>
+        ))}
+      </ol>
     </div>
   )
 }
@@ -430,7 +539,7 @@ function ChatThread({
                 <StatsCardDisplay key={card.title} card={card} />
               ))}
               {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
-              <MarkdownMessage content={message.content} />
+              <MarkdownMessage content={message.content} sources={message.sources} scope={`msg-${index}`} />
               {message.personCards?.map(card => (
                 <PersonCardDisplay key={card.display_name} card={card} />
               ))}
@@ -440,10 +549,14 @@ function ChatThread({
               {message.videoCards?.map(card => (
                 <VideoCardDisplay key={card.post_id} card={card} />
               ))}
+              {message.sources && message.sources.length > 0 && (
+                <SourcesList sources={message.sources} scope={`msg-${index}`} />
+              )}
             </div>
             <div className="flex items-center gap-3">
               <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
-              <CopyResponseButton text={message.content} />
+              {/* Copied without citation markers — "[C3]" means nothing outside this view. */}
+              <CopyResponseButton text={message.content.replace(/\s?\[[CV]\d+\]/g, '')} />
               {index === lastAssistantIndex && (
                 <RegenerateButton onClick={onRegenerate} disabled={loading} />
               )}

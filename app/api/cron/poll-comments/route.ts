@@ -3,6 +3,7 @@ import { ingestNewComments } from '@/lib/ingest'
 import { embedPostCommentsSafely } from '@/lib/embeddings'
 import { categorizePost } from '@/lib/categorize'
 import { createServiceClient } from '@/lib/supabase/service'
+import { isCronAuthorized } from '@/lib/cron-auth'
 
 // Gives the loop over all tracked videos room to finish within one invocation.
 // Vercel Hobby caps this at 60s, Pro at 300s — raise the plan if this route
@@ -12,16 +13,6 @@ export const maxDuration = 300
 const POLL_INTERVAL_MS = 20 * 60 * 1000
 const NOTIFIABLE_CATEGORIES = new Set(['purchase_intent', 'question', 'complaint'])
 
-function isAuthorized(request: NextRequest): boolean {
-  const cronSecret = process.env.CRON_SECRET
-  if (!cronSecret) return false
-
-  const authHeader = request.headers.get('authorization')
-  if (authHeader === `Bearer ${cronSecret}`) return true
-
-  const secretParam = request.nextUrl.searchParams.get('secret')
-  return secretParam === cronSecret
-}
 
 function truncate(text: string, maxLength = 100): string {
   const trimmed = text.trim()
@@ -78,7 +69,7 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 })
   }
 
-  if (!isAuthorized(request)) {
+  if (!isCronAuthorized(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
