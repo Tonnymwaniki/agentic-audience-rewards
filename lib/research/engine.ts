@@ -323,7 +323,8 @@ async function legacySubstringSearch(ctx: ToolContext, query: string, postIds: s
   }
 }
 
-async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?: unknown }) {
+/** Exported for the Research report pages, which reuse this exact logic. */
+export async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?: unknown }) {
   const topic = typeof input.topic === 'string' && input.topic.trim() ? input.topic.trim() : undefined
 
   let insights
@@ -539,7 +540,8 @@ function topEntries(counts: Record<string, number>, limit: number): Array<{ name
     .map(([name, count]) => ({ name, count }))
 }
 
-async function toolGetTrending(ctx: ToolContext, input: { min_repeat_count?: unknown }) {
+/** Exported for the Research report pages, which reuse this exact logic. */
+export async function toolGetTrending(ctx: ToolContext, input: { min_repeat_count?: unknown }) {
   const minCount = typeof input.min_repeat_count === 'number' && input.min_repeat_count > 1
     ? Math.floor(input.min_repeat_count)
     : 2
@@ -707,13 +709,15 @@ async function toolGetChannelOverview(ctx: ToolContext) {
 
 // Deliberately returns raw signal, not generated ideas — the conversation turn
 // does the synthesis, so suggestions stay grounded in the data below.
-async function toolSuggestContentIdeas(ctx: ToolContext) {
+/** Exported for the Research report pages, which reuse this exact logic. */
+export async function toolSuggestContentIdeas(ctx: ToolContext) {
   const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
   const trending = computeTrendingGroups(comments, ctx.postMap, 2)
 
   const topicCounts: Record<string, number> = {}
   const questions: RichCommentRow[] = []
   const purchaseIntent: RichCommentRow[] = []
+  const contentRequests: RichCommentRow[] = []
 
   for (const c of comments) {
     const cat = getCatInfo(c)
@@ -724,13 +728,18 @@ async function toolSuggestContentIdeas(ctx: ToolContext) {
     // a drafted reply) — casual "when's the next upload" noise isn't a content signal.
     if (cat.category === 'question' && cat.draft_reply) questions.push(c)
     if (cat.category === 'purchase_intent') purchaseIntent.push(c)
+    if (cat.category === 'content_request') contentRequests.push(c)
   }
 
   return {
     instruction:
-      'Synthesize 3-5 concrete content ideas from this data, grounding each in a specific repeated comment, question, or topic below. Then call present_content_ideas with those ideas so they render as cards.',
+      'Synthesize 3-5 concrete content ideas from this data, grounding each in a specific content request, repeated comment, question, or topic below. Then call present_content_ideas with those ideas so they render as cards.',
     trending_comments: trending.slice(0, 10),
     audience_questions: questions.slice(0, 15).map(c => ({
+      text: c.text,
+      video: ctx.postMap.get(c.post_id) || 'Untitled video',
+    })),
+    content_requests: contentRequests.slice(0, 15).map(c => ({
       text: c.text,
       video: ctx.postMap.get(c.post_id) || 'Untitled video',
     })),
@@ -1081,7 +1090,7 @@ const TOOLS = [
         query: { type: 'string', description: 'Text to search for within comment text' },
         category: {
           type: 'string',
-          enum: ['question', 'praise', 'complaint', 'purchase_intent', 'spam', 'other'],
+          enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
           description: 'Optional category filter',
         },
         post_id: { type: 'string', description: "Optional video id or title to restrict the search to" },

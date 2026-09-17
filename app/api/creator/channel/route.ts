@@ -1,92 +1,64 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { requireCreator } from '@/lib/api-auth'
 import { refreshChannelStats } from '@/lib/channel-stats'
 import { syncChannelVideos } from '@/lib/channel-videos'
+import { isValidVideoLimit, MAX_VIDEOS_PER_SYNC } from '@/lib/channel-sync-limits'
 
+/**
+ * Connects a channel and brings `video_limit` of its most recent videos into My
+ * Videos — metadata only. No comments are ingested and no analysis runs here;
+ * that happens later, per video, when the creator chooses to analyze one.
+ */
 export async function POST(request: NextRequest) {
   try {
-    const { channel_url } = await request.json()
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const { supabase, creatorId } = authResult.auth
 
-    if (!channel_url || !channel_url.trim()) {
+    const { channel_url, video_limit } = await request.json()
+    const channelUrl = typeof channel_url === 'string' ? channel_url.trim() : ''
+
+    if (!channelUrl) {
+      return NextResponse.json({ error: 'Missing channel_url' }, { status: 400 })
+    }
+    // Enforced here as well as on the page: a request can be sent without the page.
+    if (!isValidVideoLimit(video_limit)) {
       return NextResponse.json(
-        { error: 'Missing channel_url' },
+        { error: `video_limit must be a whole number from 1 to ${MAX_VIDEOS_PER_SYNC}` },
         { status: 400 }
-      )
-    }
-
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
-
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      return NextResponse.json(
-        { error: 'Not authenticated' },
-        { status: 401 }
-      )
-    }
-
-    const { data: creator, error: creatorError } = await supabase
-      .from('creators')
-      .select('id')
-      .eq('user_id', user.id)
-      .single()
-
-    if (creatorError || !creator) {
-      return NextResponse.json(
-        { error: 'Creator not found' },
-        { status: 404 }
       )
     }
 
     const { error: updateError } = await supabase
       .from('creators')
-      .update({ channel_url: channel_url.trim() })
-      .eq('id', creator.id)
+      .update({ channel_url: channelUrl })
+      .eq('id', creatorId)
 
     if (updateError) {
       console.error('Update channel_url error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
-      return NextResponse.json(
-        { error: 'Failed to save channel URL' },
-        { status: 500 }
-      )
+      return NextResponse.json({ error: 'Failed to save channel URL' }, { status: 500 })
     }
 
     // Deliberately after the URL has been saved, and deliberately non-fatal: a
     // statistics hiccup must not make connecting a channel look like it failed.
-    // The response reports whether stats came through so the UI can say so.
-    const statsResult = await refreshChannelStats(supabase, creator.id, channel_url.trim())
+    const statsResult = await refreshChannelStats(supabase, creatorId, channelUrl)
 
-    // Marked before the response so the client never polls a stale 'idle' and
-    // concludes nothing is happening.
+    // Marked before the response so the client never polls a stale status from a
+    // previous sync and concludes this one already finished.
     await supabase
       .from('creators')
       .update({ channel_sync_status: 'syncing', channel_videos_synced_count: 0 })
-      .eq('id', creator.id)
+      .eq('id', creatorId)
 
-    // Detached: a full-history sync is ~24 sequential YouTube calls and 11s for a
-    // 1157-video channel, which must not sit inside a request the user is waiting
-    // on. Same after() pattern the analyze flow already uses. Progress is polled
-    // from creators.channel_sync_status / channel_videos_synced_count.
+    // Detached, so the creator watches numbered progress instead of a spinner on a
+    // held-open request. Progress is polled from /api/creator/channel/sync-status.
     after(async () => {
       try {
-        await syncChannelVideos(supabase, creator.id, channel_url.trim())
+        await syncChannelVideos(supabase, creatorId, channelUrl, { limit: video_limit })
       } catch (err) {
         console.error('Background channel sync crash:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
-        await supabase.from('creators').update({ channel_sync_status: 'error' }).eq('id', creator.id)
+        await supabase.from('creators').update({ channel_sync_status: 'error' }).eq('id', creatorId)
       }
     })
 
@@ -94,14 +66,11 @@ export async function POST(request: NextRequest) {
       success: true,
       stats: statsResult.success ? statsResult.stats : null,
       statsError: statsResult.success ? null : statsResult.error,
-      // The sync is still running; the client polls for the count.
       syncStarted: true,
+      videoLimit: video_limit,
     })
   } catch (err) {
     console.error('Save channel URL error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
-    return NextResponse.json(
-      { error: 'Internal error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

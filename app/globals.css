@@ -276,6 +276,11 @@ body {
   color: #F9A8D4;
 }
 
+.badge-content_request {
+  background: var(--teal-dim);
+  color: #5eead4;
+}
+
 .badge-spam {
   background: rgba(148, 163, 184, 0.15);
   color: #cbd5e1;

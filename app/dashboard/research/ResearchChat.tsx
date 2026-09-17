@@ -404,12 +404,42 @@ function VideoCardDisplay({ card }: { card: VideoCard }) {
 // ~8 lines of text at this font size before the textarea starts scrolling internally.
 const MAX_TEXTAREA_HEIGHT = 200
 
-const SUGGESTED_QUESTIONS = [
-  "What's trending?",
-  'What should I post next?',
-  'What does my audience want?',
-  'Show me repeated comments',
+/**
+ * The suggestion pills. Three open dedicated report pages instead of asking the
+ * chat — a report is faster to read and doesn't cost a conversation turn. The
+ * fourth stays a chat question: its natural page, /dashboard/repeated, isn't safe
+ * to route people to until it's scoped to the signed-in creator.
+ */
+const SUGGESTIONS: Array<{ label: string; href?: string }> = [
+  { label: "What's trending?", href: '/dashboard/research/trends' },
+  { label: 'What should I post next?', href: '/dashboard/research/ideas' },
+  { label: 'What does my audience want?', href: '/dashboard/research/insights' },
+  { label: 'Show me repeated comments' },
 ]
+
+/** One pill: a link when it has a report page, otherwise a button that asks the chat. */
+function SuggestionPill({
+  suggestion,
+  onAsk,
+  className,
+}: {
+  suggestion: { label: string; href?: string }
+  onAsk: (question: string) => void
+  className: string
+}) {
+  if (suggestion.href) {
+    return (
+      <Link href={suggestion.href} className={`inline-flex items-center ${className}`}>
+        {suggestion.label}
+      </Link>
+    )
+  }
+  return (
+    <button type="button" onClick={() => onAsk(suggestion.label)} className={className}>
+      {suggestion.label}
+    </button>
+  )
+}
 
 function ArrowRightIcon() {
   return (
@@ -463,14 +493,13 @@ function MobileResearchLanding({
       {error && <p className="text-sm text-avax-red">{error}</p>}
 
       <div className="flex flex-wrap gap-2">
-        {SUGGESTED_QUESTIONS.map(question => (
-          <button
-            key={question}
-            onClick={() => onAsk(question)}
-            className="rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
-          >
-            {question}
-          </button>
+        {SUGGESTIONS.map(suggestion => (
+          <SuggestionPill
+            key={suggestion.label}
+            suggestion={suggestion}
+            onAsk={onAsk}
+            className="min-h-11 rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
+          />
         ))}
       </div>
 
@@ -693,14 +722,13 @@ export default function ResearchChat({
                 Ask anything about your audience.
               </p>
               <div className="flex flex-wrap justify-center gap-2">
-                {SUGGESTED_QUESTIONS.map(question => (
-                  <button
-                    key={question}
-                    onClick={() => sendMessage(question)}
-                    className="rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
-                  >
-                    {question}
-                  </button>
+                {SUGGESTIONS.map(suggestion => (
+                  <SuggestionPill
+                    key={suggestion.label}
+                    suggestion={suggestion}
+                    onAsk={sendMessage}
+                    className="min-h-11 rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
+                  />
                 ))}
               </div>
             </div>
@@ -786,14 +814,13 @@ export default function ResearchChat({
               Ask anything about your audience.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTED_QUESTIONS.map(question => (
-                <button
-                  key={question}
-                  onClick={() => sendMessage(question)}
+              {SUGGESTIONS.map(suggestion => (
+                <SuggestionPill
+                  key={suggestion.label}
+                  suggestion={suggestion}
+                  onAsk={sendMessage}
                   className="rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors hover:bg-surface-hover"
-                >
-                  {question}
-                </button>
+                />
               ))}
             </div>
           </div>

@@ -47,11 +47,12 @@ const CATEGORY_STYLES: Record<string, { label: string; bg: string; accent: strin
   praise: { label: 'Praise', bg: 'rgba(34, 197, 94, 0.22)', accent: '#86efac' },
   complaint: { label: 'Complaint', bg: 'rgba(239, 68, 68, 0.22)', accent: '#fca5a5' },
   purchase_intent: { label: 'Purchase Intent', bg: 'rgba(236, 72, 153, 0.22)', accent: '#F9A8D4' },
+  content_request: { label: 'Content Request', bg: 'rgba(45, 212, 191, 0.22)', accent: '#5eead4' },
   spam: { label: 'Spam', bg: 'rgba(148, 163, 184, 0.22)', accent: '#cbd5e1' },
   other: { label: 'Other', bg: 'rgba(100, 116, 139, 0.22)', accent: '#94a3b8' },
 }
 
-const CATEGORY_ORDER = ['question', 'praise', 'complaint', 'purchase_intent', 'spam', 'other']
+const CATEGORY_ORDER = ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other']
 
 const SWIPE_THRESHOLD_PX = 50
 

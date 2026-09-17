@@ -22,6 +22,7 @@ const INTEREST_LABELS: Record<string, string> = {
   question: 'Questions',
   complaint: 'Complaints',
   purchase_intent: 'Buying interest',
+  content_request: 'Content requests',
   spam: 'Spam',
   other: 'Everything else',
 }

@@ -95,7 +95,7 @@ function AnimatedMockup() {
   return (
     <div className="mt-12 space-y-3">
       {[
-        { text: 'Bring back Punchline monthly 🔥', category: 'purchase_intent', delay: '0s' },
+        { text: 'Bring back Punchline monthly 🔥', category: 'content_request', delay: '0s' },
         { text: 'Hii kitu ni noma 😂🔥', category: 'praise', delay: '0.4s' },
         { text: 'Can you explain the pricing model?', category: 'question', delay: '0.8s' },
       ].map((item, i) => (

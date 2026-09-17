@@ -308,7 +308,16 @@ async function processBatch(
       ? '\n\nYour previous response was not valid JSON. Respond with ONLY the JSON array, nothing else.'
       : ''
 
-    const prompt = `You are categorizing audience comments. For each comment, return its category (one of: question, praise, complaint, purchase_intent, spam, other) and a short topic tag. Treat Sheng/Swahili/English code-switched text as meaningful, not spam.
+    const prompt = `You are categorizing audience comments. For each comment, return its category and a short topic tag. Treat Sheng/Swahili/English code-switched text as meaningful, not spam.
+
+Categories — pick exactly one:
+- "purchase_intent": GENUINE COMMERCIAL interest in the creator's business. The person wants to buy a product or service, asks about price, cost, stock or how to order, wants delivery of something they intend to buy, or wants to buy wholesale to resell. Asking for a phone or WhatsApp number in order to buy counts. Direction matters: someone asking the creator to sell or supply THEM ("can you sell me stock", "I want to buy in bulk") is purchase_intent; someone offering the creator THEIR OWN services, skills, supplies or a collaboration is NOT purchase_intent — that is content_request.
+- "content_request": asks the creator to MAKE CONTENT — more videos like this, a specific topic, a part 2, a particular guest ("bring X on", "interview Y"), or the return of a show or format. Also use content_request when someone OFFERS to work with or for the creator: joining their team, pitching freelance services or skills, offering to supply the creator's business, proposing a collaboration or partnership, or asking to connect for work. This is NOT purchase_intent, however eager or demanding it sounds: "bring Unitree's CEO", "we want more of this", "bring back the Wicked Edition" are content_request.
+- "question": asks something they want answered that is not a buying question — about the video's subject, the creator, or how to do something themselves. Asking the creator for advice, guidance or help with their OWN plans ("I am starting my own business, can you guide me") is question, not purchase_intent or content_request.
+- "praise": compliments, thanks, appreciation or encouragement.
+- "complaint": criticism or a negative experience.
+- "spam": unrelated promotion, scams or bot links.
+- "other": anything else.
 
 Separately, and INDEPENDENTLY of the category, assess whether the comment needs the creator to answer it personally rather than having an AI draft a reply. Set "escalation" to one of:
 - "legal_threat": mentions a lawyer, suing, legal action, reporting to authorities, or similar.

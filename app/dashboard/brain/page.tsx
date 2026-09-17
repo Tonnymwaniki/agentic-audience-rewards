@@ -12,6 +12,7 @@ const CATEGORIES = [
   'praise',
   'complaint',
   'purchase_intent',
+  'content_request',
   'spam',
   'other',
 ] as const
