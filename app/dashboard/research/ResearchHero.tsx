@@ -1,6 +1,8 @@
 // Welcome header for Research. No 'use client' — pure markup plus CSS animation,
 // so it ships no JS and the prefers-reduced-motion opt-out lives in globals.css.
 
+import Link from 'next/link'
+
 const MASCOT_SIZE = 132
 // The orbit ring the sparkles sit on. Kept inside the mascot's own reserved box so
 // a rotating particle can never widen the card or the page.
@@ -124,6 +126,7 @@ const FEATURES = [
   {
     tone: 'purple',
     title: 'Real-time trends',
+    href: '/dashboard/research/trends',
     detail: 'from your comments',
     icon: (
       <svg {...featureIconProps}>
@@ -138,6 +141,7 @@ const FEATURES = [
   {
     tone: 'pink',
     title: 'Audience insights',
+    href: '/dashboard/research/insights',
     detail: '& behavior patterns',
     icon: (
       <svg {...featureIconProps}>
@@ -152,6 +156,7 @@ const FEATURES = [
   {
     tone: 'teal',
     title: 'Content ideas',
+    href: '/dashboard/research/ideas',
     detail: 'that actually work',
     icon: (
       <svg {...featureIconProps}>
@@ -164,6 +169,22 @@ const FEATURES = [
     ),
   },
 ] as const
+
+function ChevronIcon() {
+  return (
+    <svg
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      className="h-4 w-4 flex-shrink-0 text-text-muted"
+      aria-hidden="true"
+    >
+      <path strokeLinecap="round" strokeLinejoin="round" d="m8.25 4.5 7.5 7.5-7.5 7.5" />
+    </svg>
+  )
+}
 
 export default function ResearchHero({ creatorName }: { creatorName: string }) {
   return (
@@ -198,15 +219,23 @@ export default function ResearchHero({ creatorName }: { creatorName: string }) {
       </section>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {/* Each card opens its report page. Styled like the Me page's link cards
+            (hover border + surface), with a pressed state for touch, where there is
+            no hover to signal that the card is tappable.
+
+            Not the .card class: it's unlayered CSS in globals.css, so it beats every
+            Tailwind utility and the hover/active colours would never apply. These
+            utilities reproduce .card's surface, border, radius and padding exactly. */}
         {FEATURES.map(feature => (
-          <div
+          <Link
             key={feature.title}
-            className="card flex items-center gap-3 py-3.5"
+            href={feature.href}
+            className="flex min-h-11 items-center gap-3 rounded-xl border border-white/[0.07] bg-surface p-5 transition-colors hover:border-purple/40 hover:bg-surface-hover active:border-purple/40 active:bg-surface-hover"
           >
             <span className={`icon-badge icon-badge-${feature.tone}`} aria-hidden="true">
               {feature.icon}
             </span>
-            <span className="min-w-0">
+            <span className="min-w-0 flex-1">
               <span className="block font-body text-sm font-medium text-text-primary">
                 {feature.title}
               </span>
@@ -214,7 +243,8 @@ export default function ResearchHero({ creatorName }: { creatorName: string }) {
                 {feature.detail}
               </span>
             </span>
-          </div>
+            <ChevronIcon />
+          </Link>
         ))}
       </div>
     </div>
