@@ -2,11 +2,11 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 // Shared with the Research page's "Trending Topics" sidebar card, so the panel and
 // the get_trending tool can never disagree about what's trending.
-import { computeTrendingGroups, sentimentForCategory, SENTIMENTS, type Sentiment } from '@/lib/trending'
+import { computeTrendingGroups, computeSentiment, sentimentForCategory, SENTIMENTS, type Sentiment } from '@/lib/trending'
 import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
-import { loadAudienceInsights } from '@/lib/audience-insights'
+import { loadAudienceInsights, themeForTopic } from '@/lib/audience-insights'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
-import { verifyResearchAnswer, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
+import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 
 const MAX_TOOL_ROUNDS = 5
 const ANTHROPIC_TIMEOUT_MS = 25000
@@ -287,6 +287,85 @@ function commentMatchesFilters(c: RichCommentRow, filters: CommentSearchFilters)
   return true
 }
 
+/** Top themes and videos listed in a period breakdown. */
+const PERIOD_BREAKDOWN_THEMES = 10
+const PERIOD_BREAKDOWN_VIDEOS = 5
+
+/**
+ * Theme, sentiment, category and video counts over EVERY comment matching a date-
+ * filtered search, not just the 20 results listed — so questions about a period
+ * ("what were people saying last month?") get counts scoped to that period, and
+ * there's no reason to reach for get_audience_insights' all-time counts.
+ *
+ * Built with the same loader and filter predicate as the fallback search, and the
+ * same theme grouping as the daily audience insights, so a period's themes are
+ * directly comparable with the all-time ones.
+ */
+async function computePeriodBreakdown(ctx: ToolContext, filters: CommentSearchFilters, describe: string) {
+  const comments = await fetchRichComments(ctx.supabase, filters.postId ? [filters.postId] : ctx.postIds)
+  const matching = comments.filter(c => commentMatchesFilters(c, filters))
+
+  const categories: Record<string, number> = {}
+  const themes = new Map<string, { count: number; positive: number; negative: number; neutral: number }>()
+  const videos = new Map<string, number>()
+  let uncategorized = 0
+
+  for (const c of matching) {
+    const info = getCatInfo(c)
+    if (!info?.category) uncategorized++
+    else categories[info.category] = (categories[info.category] || 0) + 1
+
+    const theme = themeForTopic(info?.topic)
+    if (theme) {
+      const entry = themes.get(theme) ?? { count: 0, positive: 0, negative: 0, neutral: 0 }
+      entry.count++
+      const sentiment = sentimentForCategory(info?.category)
+      if (sentiment) entry[sentiment]++
+      themes.set(theme, entry)
+    }
+    videos.set(c.post_id, (videos.get(c.post_id) || 0) + 1)
+  }
+
+  return {
+    scope: `Counts over ALL ${matching.length} comments ${describe} — every matching comment, not only the results listed. Use these figures, not get_audience_insights, for this period.`,
+    total_comments: matching.length,
+    // Counts and percentages under separate, explicit names. With both under plain
+    // "positive"/"negative" keys, the answer check read "9% negative" as "9 negative
+    // comments" and "corrected" it.
+    sentiment_counts: {
+      positive: matching.filter(c => sentimentForCategory(getCatInfo(c)?.category) === 'positive').length,
+      negative: matching.filter(c => sentimentForCategory(getCatInfo(c)?.category) === 'negative').length,
+      neutral: matching.filter(c => sentimentForCategory(getCatInfo(c)?.category) === 'neutral').length,
+      uncategorized,
+    },
+    sentiment_percent: (({ positive, negative, neutral }) => ({ positive, negative, neutral }))(
+      computeSentiment(matching.map(c => ({ category: getCatInfo(c)?.category ?? null })))
+    ),
+    sentiment_percent_note: `Percent of the ${matching.length - uncategorized} categorized comments, rounded so the three add up to 100 (so one can differ by 1 from dividing the count yourself). Use these exact percentages; do not recompute them.`,
+    categories,
+    top_themes: [...themes]
+      .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
+      .slice(0, PERIOD_BREAKDOWN_THEMES)
+      .map(([theme, t]) => ({ theme, ...t })),
+    top_videos: [...videos]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, PERIOD_BREAKDOWN_VIDEOS)
+      .map(([postId, count]) => ({ video: ctx.postMap.get(postId) || 'Untitled video', comments: count })),
+  }
+}
+
+/** "posted 2026-08-01 to 2026-08-31" for the breakdown's scope line. */
+function describeWindow(filters: CommentSearchFilters): string {
+  const from = filters.postedFrom?.slice(0, 10)
+  // posted_before is exclusive: the last included day is the one before it.
+  const to = filters.postedBefore ? new Date(Date.parse(filters.postedBefore) - 1).toISOString().slice(0, 10) : undefined
+  const window = from && to ? `posted ${from} to ${to}` : from ? `posted on or after ${from}` : `posted on or before ${to}`
+  const extra = [filters.sentiment && `${filters.sentiment} sentiment`, filters.category && `category ${filters.category}`, filters.postId && 'on the chosen video']
+    .filter(Boolean)
+    .join(', ')
+  return extra ? `${window} (${extra})` : window
+}
+
 async function toolSearchComments(
   ctx: ToolContext,
   input: { query?: unknown; category?: unknown; post_id?: unknown; date_from?: unknown; date_to?: unknown; sentiment?: unknown }
@@ -349,6 +428,10 @@ async function toolSearchComments(
   // behind hybridSearchComments and listFilteredComments rely on the caller to
   // guarantee.
   const searchOptions = { ...filters, supabase: ctx.supabase }
+  const hasDateFilter = !!(filters.postedFrom || filters.postedBefore)
+  // Started alongside the search itself. Covers the filters only (not the query's
+  // words): it answers "what happened in this period", whatever was searched for.
+  const breakdownPromise = hasDateFilter ? computePeriodBreakdown(ctx, filters, describeWindow(filters)) : null
 
   try {
     if (!query) {
@@ -358,6 +441,7 @@ async function toolSearchComments(
         search_mode: 'filter',
         filters_applied: filtersApplied,
         note: 'count = every comment matching the filters; results are the newest 20 of them.',
+        ...(breakdownPromise ? { period_breakdown: await breakdownPromise } : {}),
         results: listed.results.map(toResult),
       }
     }
@@ -374,6 +458,14 @@ async function toolSearchComments(
       note: hybrid.semantic_unavailable
         ? 'Keyword matches only (semantic search unavailable right now).'
         : "count = comments containing the query's words. results also include comments with related meaning that use different words (matched_by: semantic); judge those by their text.",
+      ...(breakdownPromise
+        ? {
+            period_breakdown: {
+              ...(await breakdownPromise),
+              note: "Covers every comment matching the date and other filters, regardless of the query's words.",
+            },
+          }
+        : {}),
       results: hybrid.results.map(r => ({ ...toResult(r), matched_by: r.matched_by })),
     }
   } catch (err) {
@@ -383,7 +475,8 @@ async function toolSearchComments(
     // with a substring search that applies the SAME filters in code, so a filtered
     // question never silently gets unfiltered results.
     console.warn('Search functions unavailable, using substring search:', err.message)
-    return legacySubstringSearch(ctx, query, filters, hasFilter ? filtersApplied : undefined)
+    const fallback = await legacySubstringSearch(ctx, query, filters, hasFilter ? filtersApplied : undefined)
+    return breakdownPromise ? { ...fallback, period_breakdown: await breakdownPromise } : fallback
   }
 }
 
@@ -422,6 +515,10 @@ async function legacySubstringSearch(
   }
 }
 
+/** Stated in both the tool description and its output, so the timeframe can't be lost. */
+const INSIGHTS_SCOPE =
+  'These counts cover ALL comments ever posted, not any specific date range — only the trend figure compares the last 30 days vs the prior 30. Do not use these counts to answer questions naming a specific time period (e.g. "last month", "this week"); use search_comments with date_from/date_to instead, whose period_breakdown gives that period\'s own counts.'
+
 /** Exported for the Research report pages, which reuse this exact logic. */
 export async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?: unknown }) {
   const topic = typeof input.topic === 'string' && input.topic.trim() ? input.topic.trim() : undefined
@@ -454,6 +551,7 @@ export async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?:
   const ageHours = Math.round((Date.now() - new Date(computedAt).getTime()) / 36e5)
 
   return {
+    scope: INSIGHTS_SCOPE,
     computed_at: computedAt,
     age_hours: ageHours,
     note:
@@ -1172,7 +1270,7 @@ const TOOLS = [
   {
     name: 'get_audience_insights',
     description:
-      "Precomputed daily summary of what this creator's audience talks about: the top themes, each with comment count, sentiment mix, 30-day trend, confidence, representative comments and the videos that discuss it most. Use this FIRST for broad questions about themes, what people talk about or trends. For what people feel negative or positive about, or anything within a time period, use search_comments with its sentiment and date filters instead.",
+      "Precomputed daily, ALL-TIME summary of what this creator's audience talks about: the top themes, each with comment count, sentiment mix, 30-day trend, confidence, representative comments and the videos that discuss it most. These counts cover ALL comments ever posted, not any specific date range — only the trend figure compares the last 30 days vs the prior 30. Use this FIRST for broad, all-time questions about themes, what people talk about or trends. Do not use this tool's counts to answer questions naming a specific time period (e.g. 'last month', 'this week', 'the last 2 weeks') — use search_comments with date filters instead for those. For what people feel negative or positive about, use search_comments with its sentiment filter.",
     input_schema: {
       type: 'object',
       properties: {
@@ -1549,7 +1647,7 @@ You are an audience research assistant for a content creator. You have tools tha
 
 Citations: tool results tag individual comments with a "ref" like "C4" and videos with a "video_ref" like "V2". When a sentence states something drawn from specific comments or videos — a quote, an example, a count about a video — put the matching refs in square brackets right after that claim, like "Several viewers ask about delivery [C2][C5]." Only use refs that appear in this turn's tool results; never invent one. Greetings, general statements and suggestions need no citation.
 
-For broad questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count.`
+For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its period_breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count.`
 
     const history: Array<{ role: string; content: string }> = Array.isArray(conversation_history)
       ? conversation_history
@@ -1654,7 +1752,20 @@ For broad questions about what the audience talks about, themes or trends, call 
     const remainingMs = TURN_BUDGET_MS - (Date.now() - turnStartedAt)
     let verification: AnswerVerification
     if (remainingMs < MIN_VERIFY_MS) {
-      verification = { checked: false, revised: false, unsupported_claims: [], fixes_applied: 0, fixes_rejected: 0, skipped_reason: 'not enough time left in this request' }
+      // Same fail-safe as a crashed check: an answer that couldn't be checked says so.
+      finalText = withNote(finalText, UNVERIFIED_NOTE)
+      verification = {
+        checked: false,
+        mode: 'none',
+        reduced_confidence: true,
+        unresolved_claims: [],
+        attempt_failures: [],
+        revised: false,
+        unsupported_claims: [],
+        fixes_applied: 0,
+        fixes_rejected: 0,
+        skipped_reason: 'not enough time left in this request',
+      }
     } else {
       const verified = await verifyResearchAnswer({
         question: message,
