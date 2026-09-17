@@ -5,11 +5,22 @@ import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 
 export type ProgressCallback = (count: number) => void
 
+export type CommentLanguage = 'english' | 'swahili' | 'sheng' | 'mixed'
+export const COMMENT_LANGUAGES: readonly CommentLanguage[] = ['english', 'swahili', 'sheng', 'mixed']
+
+/** The model's language value, or null for anything outside the four (including "none"). */
+export function normalizeLanguage(value: unknown): CommentLanguage | null {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return (COMMENT_LANGUAGES as readonly string[]).includes(v) ? (v as CommentLanguage) : null
+}
+
 export type CategorizedComment = {
   id: string
   category: string
   topic: string
   confidence: number
+  /** Detected in the same call as the category; null when there's no language to detect. */
+  language: CommentLanguage | null
   /** null = screened and clean, OR not screened — see escalationScreened. */
   escalation: EscalationType | null
   /** False when the model omitted the escalation key entirely. */
@@ -328,7 +339,14 @@ Separately, and INDEPENDENTLY of the category, assess whether the comment needs 
 
 Judge escalation on the comment's meaning, not its category. A comment can be "praise" or "other" and still need personal attention. Do NOT escalate ordinary negative feedback — "this is overpriced", "delivery was late", "I did not like this video" are normal complaints. Include the "escalation" key on EVERY item, using null when nothing applies.
 
-Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null}]
+Also give each comment's "language" — the language it is WRITTEN in, not its topic. Judge the WHOLE comment, including its last sentences. Names, @handles, place names, brands and show titles are not words in any language — ignore them.
+- "english": entirely English.
+- "swahili": Swahili, formal or everyday — casual spellings and stretched words ("Saaasa", "buana") are still Swahili. A single common loanword doesn't change it.
+- "sheng": uses Sheng, the Nairobi street slang built on Swahili, identified by Sheng-specific words such as "manze", "wasee", "msee", "noma", "fiti", "mbogi", "doh", "mresh", "zii", "yawa", "gwama" — with no full English sentence.
+- "mixed": contains at least one whole English phrase or sentence AND at least one Swahili or Sheng phrase or sentence (e.g. "Create another channel ya wadau ya kuleta hizi updates man", or a long English comment ending in a Swahili sentence). This takes precedence: a mostly-Sheng comment that also has a full English sentence is "mixed".
+- null: no words to judge (emoji only) or another language entirely.
+
+Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null, "language": "english"}]
 
 Comments:
 ${JSON.stringify(batch)}${retrySuffix}`
@@ -346,7 +364,8 @@ ${JSON.stringify(batch)}${retrySuffix}`
           },
           body: JSON.stringify({
             model: 'claude-haiku-4-5-20251001',
-            max_tokens: 1024,
+            // Room for the language field on all 10 items of a batch.
+            max_tokens: 1400,
             messages: [{ role: 'user', content: prompt }],
           }),
           signal: controller.signal,
@@ -409,6 +428,7 @@ ${JSON.stringify(batch)}${retrySuffix}`
             category: String(item.category),
             topic: String(item.topic),
             confidence: typeof item.confidence === 'number' ? item.confidence : 0,
+            language: normalizeLanguage(item.language),
             escalation: normalizeEscalation(item.escalation),
             escalationScreened,
           })
@@ -474,11 +494,24 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     // of folding this into the batch: crisis language in a 'praise' or 'other'
     // comment is flagged too.
     escalation_flag: c.escalation,
+    language: c.language,
   }))
 
-  const { error: upsertError } = await supabase
+  let { error: upsertError } = await supabase
     .from('comment_categories')
     .upsert(upsertData, { onConflict: 'comment_id' })
+  // Before migration 20240101000024 the language column doesn't exist: keep
+  // categorizing (without it) rather than failing every analysis.
+  if (upsertError && (upsertError.code === 'PGRST204' || upsertError.code === '42703') && /language/.test(upsertError.message ?? '')) {
+    console.warn('comment_categories.language does not exist yet (migration 20240101000024); saving categories without language')
+    ;({ error: upsertError } = await supabase
+      .from('comment_categories')
+      .upsert(
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
+        upsertData.map(({ language: _language, ...rest }) => rest),
+        { onConflict: 'comment_id' }
+      ))
+  }
 
   if (upsertError) {
     console.error('Upsert categories error:', JSON.stringify(upsertError, Object.getOwnPropertyNames(upsertError), 2))

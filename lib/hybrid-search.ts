@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateEmbedding, rerankDocuments, toVectorLiteral, EmbeddingUnavailableError } from '@/lib/embeddings'
 import type { Sentiment } from '@/lib/trending'
+import type { CommentLanguage } from '@/lib/categorize'
 
 /**
  * Candidates fetched from each signal before fusing. Also the bound that makes
@@ -51,6 +52,8 @@ export type HybridSearchResult = {
   posted_at: string | null
   author: string
   category: string | null
+  /** Detected language, when categorization stored one. */
+  language: string | null
   /** Which signal(s) found this comment. */
   matched_by: MatchSignal[]
   /** Cosine similarity to the query, when the semantic signal found it. */
@@ -82,6 +85,8 @@ export type HybridSearchOptions = {
   postedBefore?: string
   /** praise = positive, complaint = negative, any other category = neutral. */
   sentiment?: Sentiment
+  /** Exact match on the language detected during categorization. */
+  language?: CommentLanguage
   supabase?: SupabaseClient
 }
 
@@ -103,6 +108,7 @@ function filterArgs(creatorId: string, limit: number, options: HybridSearchOptio
     ...(options.postedFrom ? { p_posted_from: options.postedFrom } : {}),
     ...(options.postedBefore ? { p_posted_before: options.postedBefore } : {}),
     ...(options.sentiment ? { p_sentiment: options.sentiment } : {}),
+    ...(options.language ? { p_language: options.language } : {}),
   }
 }
 
@@ -288,13 +294,25 @@ export async function hybridSearchComments(
   return response
 }
 
-type CommentDetails = Pick<HybridSearchResult, 'id' | 'text' | 'post_id' | 'posted_at' | 'author' | 'category'>
+type CommentDetails = Pick<HybridSearchResult, 'id' | 'text' | 'post_id' | 'posted_at' | 'author' | 'category' | 'language'>
+
+// False once the database reports comment_categories.language missing (migration
+// 20240101000024 not run), so later loads skip it instead of failing every search.
+let languageColumnAvailable = true
 
 async function loadCommentDetails(supabase: SupabaseClient, ids: string[]): Promise<Map<string, CommentDetails>> {
-  const { data, error } = await supabase
-    .from('comments')
-    .select('id, text, post_id, posted_at, audience_members ( display_name ), comment_categories ( category )')
-    .in('id', ids)
+  const select = (withLanguage: boolean) =>
+    supabase
+      .from('comments')
+      .select(
+        `id, text, post_id, posted_at, audience_members ( display_name ), comment_categories ( category${withLanguage ? ', language' : ''} )`
+      )
+      .in('id', ids)
+  let { data, error } = await select(languageColumnAvailable)
+  if (error && languageColumnAvailable && /language/.test(error.message ?? '')) {
+    languageColumnAvailable = false
+    ;({ data, error } = await select(false))
+  }
   if (error) {
     throw new Error(`Could not load search result details: ${error.message}`)
   }
@@ -308,6 +326,7 @@ async function loadCommentDetails(supabase: SupabaseClient, ids: string[]): Prom
         posted_at: (row.posted_at as string | null) ?? null,
         author: (row.audience_members as unknown as { display_name: string } | null)?.display_name || 'Unknown',
         category: (row.comment_categories as unknown as { category: string } | null)?.category ?? null,
+        language: (row.comment_categories as unknown as { language?: string | null } | null)?.language ?? null,
       },
     ])
   )

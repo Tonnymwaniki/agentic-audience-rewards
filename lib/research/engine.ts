@@ -5,6 +5,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import { computeTrendingGroups, computeSentiment, sentimentForCategory, SENTIMENTS, type Sentiment } from '@/lib/trending'
 import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
 import { loadAudienceInsights, themeForTopic } from '@/lib/audience-insights'
+import { COMMENT_LANGUAGES, type CommentLanguage } from '@/lib/categorize'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 
@@ -79,6 +80,8 @@ type RichCommentRow = {
 type CategoryInfo = {
   category: string
   topic: string | null
+  /** Absent until migration 20240101000024; null when none was detected. */
+  language?: string | null
   draft_reply: string | null
   draft_reply_approved_at: string | null
   draft_reply_created_at: string | null
@@ -174,6 +177,11 @@ function resolvePostId(ctx: ToolContext, idOrTitle: string): string | null {
 // joins) reused by every tool that needs comment-level data. `postIds` passed in
 // must already be a subset of ctx.postIds — callers are responsible for that
 // check via resolvePostId/ctx.postIds.includes(...) before calling this.
+// False once the database reports comment_categories.language missing (migration
+// 20240101000024 not run). Every Research tool loads comments through here, so a
+// missing column must degrade to "no language data", never to "no comments".
+let commentLanguageColumnAvailable = true
+
 async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): Promise<RichCommentRow[]> {
   if (postIds.length === 0) return []
 
@@ -182,8 +190,8 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
   const batchSize = 1000
   let hasMore = true
 
-  while (hasMore) {
-    const { data: batch, error } = await supabase
+  const selectBatch = (from: number) =>
+    supabase
       .from('comments')
       .select(
         `
@@ -193,11 +201,18 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
         posted_at,
         audience_member_id,
         audience_members ( display_name ),
-        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at )
+        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentLanguageColumnAvailable ? ', language' : ''} )
       `
       )
       .in('post_id', postIds)
-      .range(offset, offset + batchSize - 1)
+      .range(from, from + batchSize - 1)
+
+  while (hasMore) {
+    let { data: batch, error } = await selectBatch(offset)
+    if (error && commentLanguageColumnAvailable && /language/.test(error.message ?? '')) {
+      commentLanguageColumnAvailable = false
+      ;({ data: batch, error } = await selectBatch(offset))
+    }
 
     if (error) {
       console.error('Research tool comments fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
@@ -248,6 +263,7 @@ type CommentSearchFilters = {
   /** Exclusive ISO upper bound on posted_at. */
   postedBefore?: string
   sentiment?: Sentiment
+  language?: CommentLanguage
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
@@ -281,6 +297,7 @@ function commentMatchesFilters(c: RichCommentRow, filters: CommentSearchFilters)
   const category = getCatInfo(c)?.category ?? null
   if (filters.category && category !== filters.category) return false
   if (filters.sentiment && sentimentForCategory(category) !== filters.sentiment) return false
+  if (filters.language && getCatInfo(c)?.language !== filters.language) return false
   const postedAt = c.posted_at ? Date.parse(c.posted_at) : NaN
   if (filters.postedFrom && !(postedAt >= Date.parse(filters.postedFrom))) return false
   if (filters.postedBefore && !(postedAt < Date.parse(filters.postedBefore))) return false
@@ -301,9 +318,19 @@ const PERIOD_BREAKDOWN_VIDEOS = 5
  * same theme grouping as the daily audience insights, so a period's themes are
  * directly comparable with the all-time ones.
  */
-async function computePeriodBreakdown(ctx: ToolContext, filters: CommentSearchFilters, describe: string) {
-  const comments = await fetchRichComments(ctx.supabase, filters.postId ? [filters.postId] : ctx.postIds)
+async function computePeriodBreakdown(
+  ctx: ToolContext,
+  filters: CommentSearchFilters,
+  describe: string,
+  preloaded?: RichCommentRow[]
+) {
+  const comments = preloaded ?? (await fetchRichComments(ctx.supabase, filters.postId ? [filters.postId] : ctx.postIds))
   const matching = comments.filter(c => commentMatchesFilters(c, filters))
+  const languages: Record<string, number> = {}
+  for (const c of matching) {
+    const language = getCatInfo(c)?.language || 'not_detected'
+    languages[language] = (languages[language] || 0) + 1
+  }
 
   const categories: Record<string, number> = {}
   const themes = new Map<string, { count: number; positive: number; negative: number; neutral: number }>()
@@ -343,6 +370,7 @@ async function computePeriodBreakdown(ctx: ToolContext, filters: CommentSearchFi
     ),
     sentiment_percent_note: `Percent of the ${matching.length - uncategorized} categorized comments, rounded so the three add up to 100 (so one can differ by 1 from dividing the count yourself). Use these exact percentages; do not recompute them.`,
     categories,
+    languages,
     top_themes: [...themes]
       .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
       .slice(0, PERIOD_BREAKDOWN_THEMES)
@@ -360,7 +388,12 @@ function describeWindow(filters: CommentSearchFilters): string {
   // posted_before is exclusive: the last included day is the one before it.
   const to = filters.postedBefore ? new Date(Date.parse(filters.postedBefore) - 1).toISOString().slice(0, 10) : undefined
   const window = from && to ? `posted ${from} to ${to}` : from ? `posted on or after ${from}` : `posted on or before ${to}`
-  const extra = [filters.sentiment && `${filters.sentiment} sentiment`, filters.category && `category ${filters.category}`, filters.postId && 'on the chosen video']
+  const extra = [
+    filters.sentiment && `${filters.sentiment} sentiment`,
+    filters.category && `category ${filters.category}`,
+    filters.language && `written in ${filters.language}`,
+    filters.postId && 'on the chosen video',
+  ]
     .filter(Boolean)
     .join(', ')
   return extra ? `${window} (${extra})` : window
@@ -368,7 +401,15 @@ function describeWindow(filters: CommentSearchFilters): string {
 
 async function toolSearchComments(
   ctx: ToolContext,
-  input: { query?: unknown; category?: unknown; post_id?: unknown; date_from?: unknown; date_to?: unknown; sentiment?: unknown }
+  input: {
+    query?: unknown
+    category?: unknown
+    post_id?: unknown
+    date_from?: unknown
+    date_to?: unknown
+    sentiment?: unknown
+    language?: unknown
+  }
 ) {
   const query = typeof input.query === 'string' ? input.query.trim() : ''
 
@@ -387,6 +428,13 @@ async function toolSearchComments(
     filters.sentiment = input.sentiment as Sentiment
   }
 
+  if (input.language !== undefined && input.language !== null && input.language !== '') {
+    if (!COMMENT_LANGUAGES.includes(input.language as CommentLanguage)) {
+      return { error: `language must be one of ${COMMENT_LANGUAGES.join(', ')}` }
+    }
+    filters.language = input.language as CommentLanguage
+  }
+
   const from = parseDateBound(input.date_from, 'from')
   const to = parseDateBound(input.date_to, 'to')
   if (from.error || to.error) return { error: from.error || to.error }
@@ -396,9 +444,9 @@ async function toolSearchComments(
     return { error: 'date_from must be on or before date_to' }
   }
 
-  const hasFilter = !!(filters.postId || filters.category || filters.sentiment || filters.postedFrom || filters.postedBefore)
+  const hasFilter = !!(filters.postId || filters.category || filters.sentiment || filters.language || filters.postedFrom || filters.postedBefore)
   if (!query && !hasFilter) {
-    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, category, post_id).' }
+    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, language, category, post_id).' }
   }
 
   // Echoed back so the answer can state the exact window and filters it covers.
@@ -406,11 +454,20 @@ async function toolSearchComments(
     ...(filters.postedFrom ? { posted_on_or_after: filters.postedFrom } : {}),
     ...(filters.postedBefore ? { posted_before: filters.postedBefore } : {}),
     ...(filters.sentiment ? { sentiment: filters.sentiment } : {}),
+    ...(filters.language ? { language: filters.language } : {}),
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.postId ? { video: ctx.postMap.get(filters.postId) || 'Untitled video' } : {}),
   }
 
-  const toResult = (r: { id: string; text: string; author: string; post_id: string; category: string | null; posted_at: string | null }) => {
+  const toResult = (r: {
+    id: string
+    text: string
+    author: string
+    post_id: string
+    category: string | null
+    posted_at: string | null
+    language?: string | null
+  }) => {
     const video = ctx.postMap.get(r.post_id) || 'Untitled video'
     return {
       ref: ctx.evidence.comment({ id: r.id, text: r.text, author: r.author, post_id: r.post_id, video_title: video }),
@@ -419,6 +476,7 @@ async function toolSearchComments(
       video,
       category: r.category || 'other',
       sentiment: sentimentForCategory(r.category),
+      language: r.language ?? null,
       posted_at: r.posted_at,
     }
   }
@@ -509,9 +567,143 @@ async function legacySubstringSearch(
         video,
         category: category || 'other',
         sentiment: sentimentForCategory(category),
+        language: getCatInfo(c)?.language ?? null,
         posted_at: c.posted_at,
       }
     }),
+  }
+}
+
+/** Below this many categorized comments, a period's percentages are flagged as unstable. */
+const SMALL_PERIOD_SAMPLE = 30
+
+type PeriodBreakdown = Awaited<ReturnType<typeof computePeriodBreakdown>>
+
+const signed = (n: number, unit = '') => `${n > 0 ? '+' : ''}${n}${unit}`
+const round1 = (n: number) => Math.round(n * 10) / 10
+
+/**
+ * Two period breakdowns side by side, with the differences already computed, so a
+ * question like "how has sentiment changed since last month?" is one tool call and
+ * the model reports differences rather than doing arithmetic across two results.
+ * Changes are always period_2 minus period_1.
+ */
+async function toolComparePeriods(
+  ctx: ToolContext,
+  input: {
+    period_1_start?: unknown
+    period_1_end?: unknown
+    period_2_start?: unknown
+    period_2_end?: unknown
+    language?: unknown
+    category?: unknown
+    post_id?: unknown
+  }
+) {
+  const bounds = {
+    p1From: parseDateBound(input.period_1_start, 'from'),
+    p1To: parseDateBound(input.period_1_end, 'to'),
+    p2From: parseDateBound(input.period_2_start, 'from'),
+    p2To: parseDateBound(input.period_2_end, 'to'),
+  }
+  for (const [key, b] of Object.entries(bounds)) {
+    if (b.error) return { error: b.error.replace(/date_(from|to)/, key) }
+    if (!b.iso) return { error: 'period_1_start, period_1_end, period_2_start and period_2_end are all required (YYYY-MM-DD).' }
+  }
+  const p1 = { from: bounds.p1From.iso!, before: bounds.p1To.iso! }
+  const p2 = { from: bounds.p2From.iso!, before: bounds.p2To.iso! }
+  if (p1.from >= p1.before || p2.from >= p2.before) return { error: 'Each period must start on or before its end date.' }
+
+  const base: CommentSearchFilters = {}
+  if (typeof input.post_id === 'string' && input.post_id) {
+    const resolved = resolvePostId(ctx, input.post_id)
+    if (!resolved) return { error: `No video found matching "${input.post_id}"` }
+    base.postId = resolved
+  }
+  if (typeof input.category === 'string' && input.category) base.category = input.category
+  if (input.language !== undefined && input.language !== null && input.language !== '') {
+    if (!COMMENT_LANGUAGES.includes(input.language as CommentLanguage)) {
+      return { error: `language must be one of ${COMMENT_LANGUAGES.join(', ')}` }
+    }
+    base.language = input.language as CommentLanguage
+  }
+
+  // One load, filtered twice: both periods are computed from the same snapshot.
+  const comments = await fetchRichComments(ctx.supabase, base.postId ? [base.postId] : ctx.postIds)
+  const f1 = { ...base, postedFrom: p1.from, postedBefore: p1.before }
+  const f2 = { ...base, postedFrom: p2.from, postedBefore: p2.before }
+  const [b1, b2] = await Promise.all([
+    computePeriodBreakdown(ctx, f1, describeWindow(f1), comments),
+    computePeriodBreakdown(ctx, f2, describeWindow(f2), comments),
+  ])
+
+  const days = (p: { from: string; before: string }) => Math.round((Date.parse(p.before) - Date.parse(p.from)) / 86_400_000)
+  const [d1, d2] = [days(p1), days(p2)]
+  const label = (p: { from: string; before: string }) => `${p.from.slice(0, 10)} to ${new Date(Date.parse(p.before) - 1).toISOString().slice(0, 10)}`
+
+  const summary: string[] = []
+  const caveats: string[] = []
+
+  const total = {
+    period_1: b1.total_comments,
+    period_2: b2.total_comments,
+    change: b2.total_comments - b1.total_comments,
+    change_pct: b1.total_comments > 0 ? round1(((b2.total_comments - b1.total_comments) / b1.total_comments) * 100) : null,
+    per_day: { period_1: round1(b1.total_comments / d1), period_2: round1(b2.total_comments / d2) },
+  }
+  summary.push(
+    `Comments went from ${b1.total_comments} (${d1} days, ${total.per_day.period_1}/day) to ${b2.total_comments} (${d2} days, ${total.per_day.period_2}/day).`
+  )
+  if (d1 !== d2) caveats.push(`The periods differ in length (${d1} vs ${d2} days): compare per_day rates and percentages, not raw counts.`)
+
+  const sentiment = Object.fromEntries(
+    (['positive', 'negative', 'neutral'] as const).map(k => {
+      const change = {
+        period_1_percent: b1.sentiment_percent[k],
+        period_2_percent: b2.sentiment_percent[k],
+        change_points: b2.sentiment_percent[k] - b1.sentiment_percent[k],
+        period_1_count: b1.sentiment_counts[k],
+        period_2_count: b2.sentiment_counts[k],
+      }
+      summary.push(
+        `${k[0].toUpperCase()}${k.slice(1)} sentiment went from ${change.period_1_percent}% to ${change.period_2_percent}% (${signed(change.change_points, ' points')}).`
+      )
+      return [k, change]
+    })
+  )
+
+  const share = (count: number, b: PeriodBreakdown) => (b.total_comments > 0 ? round1((count / b.total_comments) * 100) : 0)
+  const themeNames = [...new Set([...b1.top_themes, ...b2.top_themes].map(t => t.theme))]
+  const themes = themeNames
+    .map(theme => {
+      const c1 = b1.top_themes.find(t => t.theme === theme)?.count ?? 0
+      const c2 = b2.top_themes.find(t => t.theme === theme)?.count ?? 0
+      const s1 = share(c1, b1)
+      const s2 = share(c2, b2)
+      return { theme, period_1_count: c1, period_2_count: c2, period_1_share_percent: s1, period_2_share_percent: s2, share_change_points: round1(s2 - s1) }
+    })
+    .sort((a, b) => Math.abs(b.share_change_points) - Math.abs(a.share_change_points) || a.theme.localeCompare(b.theme))
+  for (const t of themes.slice(0, 3)) {
+    summary.push(
+      `"${t.theme}" went from ${t.period_1_share_percent}% of comments (${t.period_1_count}) to ${t.period_2_share_percent}% (${t.period_2_count}) (${signed(t.share_change_points, ' points')}).`
+    )
+  }
+
+  for (const [name, b] of [['period_1', b1], ['period_2', b2]] as const) {
+    const categorized = b.total_comments - b.sentiment_counts.uncategorized
+    if (categorized < SMALL_PERIOD_SAMPLE) {
+      caveats.push(`${name} has only ${categorized} categorized comments, so its percentages can swing a lot; say so when reporting changes.`)
+    }
+  }
+
+  return {
+    scope:
+      'period_1 is the baseline, period_2 the comparison; every change is period_2 minus period_1. Sentiment changes are in percentage POINTS of each period\'s categorized comments; theme shares are percent of each period\'s comments. Use the summary sentences and these figures as given.',
+    period_1: { dates: label(p1), days: d1, ...b1 },
+    period_2: { dates: label(p2), days: d2, ...b2 },
+    changes: { total_comments: total, sentiment, themes: themes.slice(0, 10) },
+    summary,
+    caveats,
   }
 }
 
@@ -1302,6 +1494,12 @@ const TOOLS = [
           enum: ['positive', 'negative', 'neutral'],
           description: 'Derived from category: praise = positive, complaint = negative, every other category = neutral. Uncategorized comments match no sentiment.',
         },
+        language: {
+          type: 'string',
+          enum: ['english', 'swahili', 'sheng', 'mixed'],
+          description:
+            'Only comments written in this language, as detected during categorization: english, swahili, sheng (Nairobi street slang), or mixed (code-switched between English and Swahili/Sheng). Use for questions like "what are Sheng-speaking commenters saying". Comments analyzed before language detection existed have no language and match no language filter.',
+        },
         category: {
           type: 'string',
           enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
@@ -1309,6 +1507,28 @@ const TOOLS = [
         },
         post_id: { type: 'string', description: "Optional video id or title to restrict the search to" },
       },
+    },
+  },
+  {
+    name: 'compare_periods',
+    description:
+      "Compare two date ranges in ONE call: total comments (and per day), sentiment percentages and counts, theme shares and languages for each period, plus the computed changes and plain-language summary sentences (e.g. \"Negative sentiment went from 15% to 22% (+7 points)\"). Use this for any question about change over time — \"how has sentiment changed since last month\", \"this month vs last month\", \"are complaints up\" — instead of two search_comments calls. period_1 is the earlier/baseline period and period_2 the later one. \"Compared to last month\" with no other period named means last month (full calendar month) vs this month so far (the 1st of this month to today). Dates are YYYY-MM-DD, inclusive.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        period_1_start: { type: 'string', description: 'Baseline period first day, YYYY-MM-DD' },
+        period_1_end: { type: 'string', description: 'Baseline period last day, YYYY-MM-DD (inclusive)' },
+        period_2_start: { type: 'string', description: 'Comparison period first day, YYYY-MM-DD' },
+        period_2_end: { type: 'string', description: 'Comparison period last day, YYYY-MM-DD (inclusive)' },
+        language: { type: 'string', enum: ['english', 'swahili', 'sheng', 'mixed'], description: 'Optional: compare only comments in this language' },
+        category: {
+          type: 'string',
+          enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
+          description: 'Optional: compare only this category',
+        },
+        post_id: { type: 'string', description: 'Optional video id or title to restrict both periods to' },
+      },
+      required: ['period_1_start', 'period_1_end', 'period_2_start', 'period_2_end'],
     },
   },
   {
@@ -1477,6 +1697,8 @@ export async function executeTool(ctx: ToolContext, name: string, input: Record<
     switch (name) {
       case 'search_comments':
         return await toolSearchComments(ctx, input)
+      case 'compare_periods':
+        return await toolComparePeriods(ctx, input)
       case 'get_video_breakdown':
         return await toolGetVideoBreakdown(ctx, input)
       case 'show_video_card':
@@ -1639,9 +1861,12 @@ export async function runResearchTurn(
     // model: given only today's date it tended to pick a rolling 30-day window.
     const lastMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)
     const lastMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).toISOString().slice(0, 10)
+    const thisMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString().slice(0, 10)
     const systemPrompt = `Today's date is ${today} (UTC).
 
-Relative dates: "last month" always means the previous full calendar month — ${lastMonthStart} to ${lastMonthEnd} — never a rolling 30-day window. Use a rolling window ending today only when the wording says so ("the last 30 days", "the past 4 weeks"); for looser phrases like "the past month", use judgment.
+Relative dates: "last month" always means the previous full calendar month — ${lastMonthStart} to ${lastMonthEnd} — never a rolling 30-day window. Use a rolling window ending today only when the wording says so ("the last 30 days", "the past 4 weeks"); for looser phrases like "the past month", use judgment. "This month" means ${thisMonthStart} to ${today}.
+
+For questions about change over time ("how has sentiment changed compared to last month", "are complaints up this month"), call compare_periods once with both periods rather than searching each period separately.
 
 You are an audience research assistant for a content creator. You have tools that query their real, live audience data — use them whenever a question needs specific facts rather than guessing. You can call more than one tool across a conversation turn if needed (e.g. look up a video, then compare it to another). Reference specific numbers and real quotes from tool results. Keep answers concise (2-5 sentences unless the data genuinely warrants a short list) and conversational. Light markdown is supported and rendered in the UI — use **bold** for key numbers, names, or video titles, and bullet or numbered lists when presenting several items. Don't over-format short answers; a one-line reply needs no formatting at all.
 
