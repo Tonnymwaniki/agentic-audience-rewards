@@ -5,12 +5,24 @@ import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 
 export type ProgressCallback = (count: number) => void
 
-export type CommentLanguage = 'english' | 'swahili' | 'sheng' | 'mixed'
-export const COMMENT_LANGUAGES: readonly CommentLanguage[] = ['english', 'swahili', 'sheng', 'mixed']
+/**
+ * Swahili and Sheng are ONE value. Detection that tried to separate them was about
+ * 50% accurate on this audience's comments across two prompts and a majority vote,
+ * and the line is debatable even for a human reviewer — so the data can't support a
+ * filter that distinguishes them. null means no detectable language (emoji, names,
+ * timestamps, links, or another language entirely).
+ */
+export type CommentLanguage = 'english' | 'swahili_sheng' | 'mixed'
+export const COMMENT_LANGUAGES: readonly CommentLanguage[] = ['english', 'swahili_sheng', 'mixed']
 
-/** The model's language value, or null for anything outside the four (including "none"). */
+/**
+ * The model's language value, or null for anything outside the three (including
+ * "none"). The retired 'swahili' and 'sheng' values map to 'swahili_sheng', so an
+ * old-style answer can never store a value the filter no longer accepts.
+ */
 export function normalizeLanguage(value: unknown): CommentLanguage | null {
   const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (v === 'swahili' || v === 'sheng') return 'swahili_sheng'
   return (COMMENT_LANGUAGES as readonly string[]).includes(v) ? (v as CommentLanguage) : null
 }
 
@@ -341,9 +353,8 @@ Judge escalation on the comment's meaning, not its category. A comment can be "p
 
 Also give each comment's "language" — the language it is WRITTEN in, not its topic. Judge the WHOLE comment, including its last sentences. Names, @handles, place names, brands and show titles are not words in any language — ignore them.
 - "english": entirely English.
-- "swahili": Swahili, formal or everyday — casual spellings and stretched words ("Saaasa", "buana") are still Swahili. A single common loanword doesn't change it.
-- "sheng": uses Sheng, the Nairobi street slang built on Swahili, identified by Sheng-specific words such as "manze", "wasee", "msee", "noma", "fiti", "mbogi", "doh", "mresh", "zii", "yawa", "gwama" — with no full English sentence.
-- "mixed": contains at least one whole English phrase or sentence AND at least one Swahili or Sheng phrase or sentence (e.g. "Create another channel ya wadau ya kuleta hizi updates man", or a long English comment ending in a Swahili sentence). This takes precedence: a mostly-Sheng comment that also has a full English sentence is "mixed".
+- "swahili_sheng": Swahili and/or Sheng (the Nairobi street slang built on Swahili) — ONE value; do not try to tell the two apart. Formal or everyday Swahili, casual spellings ("Saaasa", "buana"), Sheng words ("manze", "msee", "noma", "doh", "zii") and single English loanwords inside a Swahili/Sheng sentence ("Hiyo ni misandry sio feminism") are all "swahili_sheng".
+- "mixed": contains at least one whole English phrase or sentence AND at least one Swahili or Sheng phrase or sentence (e.g. "Create another channel ya wadau ya kuleta hizi updates man", or a long English comment ending in a Swahili sentence). This takes precedence: a mostly-Swahili/Sheng comment that also has a full English sentence is "mixed".
 - null: no words to judge (emoji only) or another language entirely.
 
 Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null, "language": "english"}]

@@ -1496,9 +1496,9 @@ const TOOLS = [
         },
         language: {
           type: 'string',
-          enum: ['english', 'swahili', 'sheng', 'mixed'],
+          enum: ['english', 'swahili_sheng', 'mixed'],
           description:
-            'Only comments written in this language, as detected during categorization: english, swahili, sheng (Nairobi street slang), or mixed (code-switched between English and Swahili/Sheng). Use for questions like "what are Sheng-speaking commenters saying". Comments analyzed before language detection existed have no language and match no language filter.',
+            'Only comments in this language, as detected automatically during categorization: english; swahili_sheng = Swahili and/or Sheng, NOT distinguished (detection cannot reliably tell them apart, so there is no Swahili-only or Sheng-only filter); or mixed = code-switched between English and Swahili/Sheng in the same comment. For "Sheng speakers" or "Swahili speakers" use swahili_sheng, and say in the answer that it covers Swahili and Sheng together. Labels are automatic and approximate, not exact. Comments with no detectable language (emoji, names, links) or analyzed before detection existed match no language filter.',
         },
         category: {
           type: 'string',
@@ -1520,7 +1520,11 @@ const TOOLS = [
         period_1_end: { type: 'string', description: 'Baseline period last day, YYYY-MM-DD (inclusive)' },
         period_2_start: { type: 'string', description: 'Comparison period first day, YYYY-MM-DD' },
         period_2_end: { type: 'string', description: 'Comparison period last day, YYYY-MM-DD (inclusive)' },
-        language: { type: 'string', enum: ['english', 'swahili', 'sheng', 'mixed'], description: 'Optional: compare only comments in this language' },
+        language: {
+          type: 'string',
+          enum: ['english', 'swahili_sheng', 'mixed'],
+          description: 'Optional: compare only comments in this language. swahili_sheng = Swahili and/or Sheng, not distinguished; mixed = code-switched with English.',
+        },
         category: {
           type: 'string',
           enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
