@@ -65,6 +65,21 @@ export type SentimentBreakdown = {
 const POSITIVE_CATEGORIES = new Set(['praise'])
 const NEGATIVE_CATEGORIES = new Set(['complaint'])
 
+export type Sentiment = 'positive' | 'negative' | 'neutral'
+export const SENTIMENTS: readonly Sentiment[] = ['positive', 'negative', 'neutral']
+
+/**
+ * The derived sentiment of one comment's category, or null when it has no category
+ * yet (computeSentiment skips those). The comment search SQL functions
+ * (search_comments_* in migration 20240101000023) apply this same mapping.
+ */
+export function sentimentForCategory(category: string | null | undefined): Sentiment | null {
+  if (!category) return null
+  if (POSITIVE_CATEGORIES.has(category)) return 'positive'
+  if (NEGATIVE_CATEGORIES.has(category)) return 'negative'
+  return 'neutral'
+}
+
 /**
  * Sentiment derived from the intent categories already stored on every comment.
  *
@@ -83,10 +98,10 @@ export function computeSentiment(categories: Array<{ category: string | null }>)
   let neutral = 0
 
   for (const row of categories) {
-    if (!row.category) continue
-    if (POSITIVE_CATEGORIES.has(row.category)) positive++
-    else if (NEGATIVE_CATEGORIES.has(row.category)) negative++
-    else neutral++
+    const sentiment = sentimentForCategory(row.category)
+    if (sentiment === 'positive') positive++
+    else if (sentiment === 'negative') negative++
+    else if (sentiment === 'neutral') neutral++
   }
 
   const total = positive + negative + neutral

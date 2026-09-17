@@ -53,6 +53,8 @@ export async function fetchVideoComments(videoId: string) {
     authorDisplayName: string
     text: string
     publishedAt: string
+    /** The comment's own likes, from commentThreads.list. 0 when YouTube omits it. */
+    likeCount: number
   }> = []
 
   let pageToken: string | undefined
@@ -82,6 +84,7 @@ export async function fetchVideoComments(videoId: string) {
         authorDisplayName: top.authorDisplayName,
         text: top.textDisplay,
         publishedAt: top.publishedAt,
+        likeCount: parseCount(top.likeCount) ?? 0,
       })
     }
 

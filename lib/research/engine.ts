@@ -2,8 +2,8 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 // Shared with the Research page's "Trending Topics" sidebar card, so the panel and
 // the get_trending tool can never disagree about what's trending.
-import { computeTrendingGroups } from '@/lib/trending'
-import { hybridSearchComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
+import { computeTrendingGroups, sentimentForCategory, SENTIMENTS, type Sentiment } from '@/lib/trending'
+import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
 import { loadAudienceInsights } from '@/lib/audience-insights'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
@@ -240,30 +240,129 @@ function videoBreakdown(comments: RichCommentRow[]) {
 // generateDraftReply, or trigger reward evaluation.
 // ---------------------------------------------------------------------------
 
+type CommentSearchFilters = {
+  postId?: string
+  category?: string
+  /** Inclusive ISO lower bound on posted_at. */
+  postedFrom?: string
+  /** Exclusive ISO upper bound on posted_at. */
+  postedBefore?: string
+  sentiment?: Sentiment
+}
+
+const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
+
+/**
+ * A date_from / date_to value from the model, as an ISO bound.
+ *
+ * A bare date means the whole day (UTC): date_from 2026-09-03 starts at 00:00 that
+ * day, and date_to 2026-09-17 runs to the START of 2026-09-18 as an exclusive
+ * bound, so comments posted any time on the 17th are included. A full timestamp is
+ * used as given.
+ */
+function parseDateBound(value: unknown, bound: 'from' | 'to'): { iso?: string; error?: string } {
+  if (value === undefined || value === null || value === '') return {}
+  if (typeof value !== 'string') return { error: `date_${bound} must be a date like 2026-09-01` }
+  const trimmed = value.trim()
+  if (DATE_ONLY.test(trimmed)) {
+    const start = new Date(`${trimmed}T00:00:00Z`)
+    if (Number.isNaN(start.getTime()) || start.toISOString().slice(0, 10) !== trimmed) {
+      return { error: `date_${bound} "${value}" is not a real date` }
+    }
+    if (bound === 'from') return { iso: start.toISOString() }
+    return { iso: new Date(start.getTime() + 24 * 60 * 60 * 1000).toISOString() }
+  }
+  const parsed = Date.parse(trimmed)
+  if (Number.isNaN(parsed)) return { error: `date_${bound} "${value}" is not a valid date (use YYYY-MM-DD)` }
+  return { iso: new Date(parsed).toISOString() }
+}
+
+function commentMatchesFilters(c: RichCommentRow, filters: CommentSearchFilters): boolean {
+  const category = getCatInfo(c)?.category ?? null
+  if (filters.category && category !== filters.category) return false
+  if (filters.sentiment && sentimentForCategory(category) !== filters.sentiment) return false
+  const postedAt = c.posted_at ? Date.parse(c.posted_at) : NaN
+  if (filters.postedFrom && !(postedAt >= Date.parse(filters.postedFrom))) return false
+  if (filters.postedBefore && !(postedAt < Date.parse(filters.postedBefore))) return false
+  return true
+}
+
 async function toolSearchComments(
   ctx: ToolContext,
-  input: { query?: unknown; category?: unknown; post_id?: unknown }
+  input: { query?: unknown; category?: unknown; post_id?: unknown; date_from?: unknown; date_to?: unknown; sentiment?: unknown }
 ) {
   const query = typeof input.query === 'string' ? input.query.trim() : ''
-  if (!query) return { error: 'query is required' }
 
-  let postId: string | undefined
+  const filters: CommentSearchFilters = {}
   if (typeof input.post_id === 'string' && input.post_id) {
     const resolved = resolvePostId(ctx, input.post_id)
     if (!resolved) return { error: `No video found matching "${input.post_id}"` }
-    postId = resolved
+    filters.postId = resolved
   }
-  const category = typeof input.category === 'string' && input.category ? input.category : undefined
+  if (typeof input.category === 'string' && input.category) filters.category = input.category
+
+  if (input.sentiment !== undefined && input.sentiment !== null && input.sentiment !== '') {
+    if (!SENTIMENTS.includes(input.sentiment as Sentiment)) {
+      return { error: `sentiment must be one of ${SENTIMENTS.join(', ')}` }
+    }
+    filters.sentiment = input.sentiment as Sentiment
+  }
+
+  const from = parseDateBound(input.date_from, 'from')
+  const to = parseDateBound(input.date_to, 'to')
+  if (from.error || to.error) return { error: from.error || to.error }
+  filters.postedFrom = from.iso
+  filters.postedBefore = to.iso
+  if (filters.postedFrom && filters.postedBefore && filters.postedFrom >= filters.postedBefore) {
+    return { error: 'date_from must be on or before date_to' }
+  }
+
+  const hasFilter = !!(filters.postId || filters.category || filters.sentiment || filters.postedFrom || filters.postedBefore)
+  if (!query && !hasFilter) {
+    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, category, post_id).' }
+  }
+
+  // Echoed back so the answer can state the exact window and filters it covers.
+  const filtersApplied = {
+    ...(filters.postedFrom ? { posted_on_or_after: filters.postedFrom } : {}),
+    ...(filters.postedBefore ? { posted_before: filters.postedBefore } : {}),
+    ...(filters.sentiment ? { sentiment: filters.sentiment } : {}),
+    ...(filters.category ? { category: filters.category } : {}),
+    ...(filters.postId ? { video: ctx.postMap.get(filters.postId) || 'Untitled video' } : {}),
+  }
+
+  const toResult = (r: { id: string; text: string; author: string; post_id: string; category: string | null; posted_at: string | null }) => {
+    const video = ctx.postMap.get(r.post_id) || 'Untitled video'
+    return {
+      ref: ctx.evidence.comment({ id: r.id, text: r.text, author: r.author, post_id: r.post_id, video_title: video }),
+      author: r.author,
+      text: r.text,
+      video,
+      category: r.category || 'other',
+      sentiment: sentimentForCategory(r.category),
+      posted_at: r.posted_at,
+    }
+  }
+
+  // ctx.creatorId is session-derived (see POST below), and postId has just been
+  // checked against this creator's own videos — the two things the SQL functions
+  // behind hybridSearchComments and listFilteredComments rely on the caller to
+  // guarantee.
+  const searchOptions = { ...filters, supabase: ctx.supabase }
 
   try {
-    // ctx.creatorId is session-derived (see POST below), and postId has just been
-    // checked against this creator's own videos — the two things the SQL functions
-    // behind hybridSearchComments rely on the caller to guarantee.
-    const hybrid = await hybridSearchComments(query, ctx.creatorId, 20, {
-      postId,
-      category,
-      supabase: ctx.supabase,
-    })
+    if (!query) {
+      const listed = await listFilteredComments(ctx.creatorId, 20, searchOptions)
+      return {
+        count: listed.total_matches,
+        search_mode: 'filter',
+        filters_applied: filtersApplied,
+        note: 'count = every comment matching the filters; results are the newest 20 of them.',
+        results: listed.results.map(toResult),
+      }
+    }
+
+    const hybrid = await hybridSearchComments(query, ctx.creatorId, 20, searchOptions)
 
     return {
       // Same meaning as before: how many comments actually contain the query's
@@ -271,52 +370,52 @@ async function toolSearchComments(
       // that use different words, so its length is not a mention count.
       count: hybrid.keyword_match_count,
       search_mode: hybrid.semantic_unavailable ? 'keyword' : 'hybrid',
+      ...(hasFilter ? { filters_applied: filtersApplied } : {}),
       note: hybrid.semantic_unavailable
         ? 'Keyword matches only (semantic search unavailable right now).'
         : "count = comments containing the query's words. results also include comments with related meaning that use different words (matched_by: semantic); judge those by their text.",
-      results: hybrid.results.map(r => {
-        const video = ctx.postMap.get(r.post_id) || 'Untitled video'
-        return {
-          ref: ctx.evidence.comment({ id: r.id, text: r.text, author: r.author, post_id: r.post_id, video_title: video }),
-          author: r.author,
-          text: r.text,
-          video,
-          category: r.category || 'other',
-          posted_at: r.posted_at,
-          matched_by: r.matched_by,
-        }
-      }),
+      results: hybrid.results.map(r => ({ ...toResult(r), matched_by: r.matched_by })),
     }
   } catch (err) {
     if (!(err instanceof HybridSearchUnavailableError)) throw err
-    // Hybrid search SQL not installed yet (migration 20240101000020): keep the
-    // tool working with the previous substring search instead of failing it.
-    console.warn('Hybrid search unavailable, using substring search:', err.message)
-    return legacySubstringSearch(ctx, query, postId ? [postId] : ctx.postIds, category)
+    // Search SQL functions not installed yet (migration 20240101000020 for hybrid
+    // search, 20240101000023 for the date/sentiment filters): keep the tool working
+    // with a substring search that applies the SAME filters in code, so a filtered
+    // question never silently gets unfiltered results.
+    console.warn('Search functions unavailable, using substring search:', err.message)
+    return legacySubstringSearch(ctx, query, filters, hasFilter ? filtersApplied : undefined)
   }
 }
 
 // The original search_comments behaviour, kept only as the fallback above.
-async function legacySubstringSearch(ctx: ToolContext, query: string, postIds: string[], category?: string) {
-  const comments = await fetchRichComments(ctx.supabase, postIds)
+async function legacySubstringSearch(
+  ctx: ToolContext,
+  query: string,
+  filters: CommentSearchFilters,
+  filtersApplied: Record<string, string> | undefined
+) {
+  const comments = await fetchRichComments(ctx.supabase, filters.postId ? [filters.postId] : ctx.postIds)
   const lowerQuery = query.toLowerCase()
 
-  let matches = comments.filter(c => c.text.toLowerCase().includes(lowerQuery))
-  if (category) {
-    matches = matches.filter(c => getCatInfo(c)?.category === category)
-  }
+  const matches = comments
+    .filter(c => (!lowerQuery || c.text.toLowerCase().includes(lowerQuery)) && commentMatchesFilters(c, filters))
+    // Newest first, matching the filter-only SQL listing.
+    .sort((a, b) => (b.posted_at || '').localeCompare(a.posted_at || ''))
 
   return {
     count: matches.length,
     search_mode: 'substring',
+    ...(filtersApplied ? { filters_applied: filtersApplied } : {}),
     results: matches.slice(0, 20).map(c => {
       const video = ctx.postMap.get(c.post_id) || 'Untitled video'
+      const category = getCatInfo(c)?.category ?? null
       return {
         ref: ctx.evidence.comment({ id: c.id, text: c.text, author: getAuthor(c), post_id: c.post_id, video_title: video }),
         author: getAuthor(c),
         text: c.text,
         video,
-        category: getCatInfo(c)?.category || 'other',
+        category: category || 'other',
+        sentiment: sentimentForCategory(category),
         posted_at: c.posted_at,
       }
     }),
@@ -1073,7 +1172,7 @@ const TOOLS = [
   {
     name: 'get_audience_insights',
     description:
-      "Precomputed daily summary of what this creator's audience talks about: the top themes, each with comment count, sentiment mix, 30-day trend, confidence, representative comments and the videos that discuss it most. Use this FIRST for broad questions about themes, what people talk about, sentiment or trends; use search_comments for specific wording.",
+      "Precomputed daily summary of what this creator's audience talks about: the top themes, each with comment count, sentiment mix, 30-day trend, confidence, representative comments and the videos that discuss it most. Use this FIRST for broad questions about themes, what people talk about or trends. For what people feel negative or positive about, or anything within a time period, use search_comments with its sentiment and date filters instead.",
     input_schema: {
       type: 'object',
       properties: {
@@ -1083,11 +1182,28 @@ const TOOLS = [
   },
   {
     name: 'search_comments',
-    description: "Full-text search across this creator's comments, optionally filtered by category or scoped to one video.",
+    description:
+      "Search this creator's comments by wording and meaning, and/or filter them by when they were posted, sentiment, category or video. Combine filters in ONE call rather than approximating with several tools. Use date_from/date_to for time questions (\"what were people saying last month\", \"complaints from before the price change\", \"the last 2 weeks\"), working the dates out from today's date. \"Last month\" ALWAYS means the previous FULL CALENDAR MONTH, never a rolling 30-day window: if today is 2026-09-17, \"last month\" is date_from 2026-08-01, date_to 2026-08-31. Use a rolling window ending today only for phrases that say so, like \"the last 30 days\" or \"the past 4 weeks\"; for looser phrases such as \"the past month\", use judgment. Use sentiment for questions phrased in feelings (\"what are people unhappy about\" = negative, \"what do people love\" = positive). query is optional: leave it out to list comments that match the filters alone, newest first, with an exact count.",
     input_schema: {
       type: 'object',
       properties: {
-        query: { type: 'string', description: 'Text to search for within comment text' },
+        query: {
+          type: 'string',
+          description: 'Words or a topic to search for. Omit when the question is only about a time range, sentiment or category.',
+        },
+        date_from: {
+          type: 'string',
+          description: 'Only comments posted on or after this date, YYYY-MM-DD (UTC, inclusive).',
+        },
+        date_to: {
+          type: 'string',
+          description: 'Only comments posted on or before this date, YYYY-MM-DD (UTC, the whole day is included).',
+        },
+        sentiment: {
+          type: 'string',
+          enum: ['positive', 'negative', 'neutral'],
+          description: 'Derived from category: praise = positive, complaint = negative, every other category = neutral. Uncategorized comments match no sentiment.',
+        },
         category: {
           type: 'string',
           enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
@@ -1095,7 +1211,6 @@ const TOOLS = [
         },
         post_id: { type: 'string', description: "Optional video id or title to restrict the search to" },
       },
-      required: ['query'],
     },
   },
   {
@@ -1418,11 +1533,23 @@ export async function runResearchTurn(
     // Every tool call this turn, in order — the evidence the verifier checks against.
     const toolCallLog: ToolCallDigest[] = []
 
-    const systemPrompt = `You are an audience research assistant for a content creator. You have tools that query their real, live audience data — use them whenever a question needs specific facts rather than guessing. You can call more than one tool across a conversation turn if needed (e.g. look up a video, then compare it to another). Reference specific numbers and real quotes from tool results. Keep answers concise (2-5 sentences unless the data genuinely warrants a short list) and conversational. Light markdown is supported and rendered in the UI — use **bold** for key numbers, names, or video titles, and bullet or numbered lists when presenting several items. Don't over-format short answers; a one-line reply needs no formatting at all.
+    // The model has no clock of its own; relative dates ("last 2 weeks") are worked
+    // out from this before calling search_comments with date_from/date_to.
+    const now = new Date()
+    const today = now.toISOString().slice(0, 10)
+    // "Last month" as a full calendar month, computed here rather than left to the
+    // model: given only today's date it tended to pick a rolling 30-day window.
+    const lastMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1)).toISOString().slice(0, 10)
+    const lastMonthEnd = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 0)).toISOString().slice(0, 10)
+    const systemPrompt = `Today's date is ${today} (UTC).
+
+Relative dates: "last month" always means the previous full calendar month — ${lastMonthStart} to ${lastMonthEnd} — never a rolling 30-day window. Use a rolling window ending today only when the wording says so ("the last 30 days", "the past 4 weeks"); for looser phrases like "the past month", use judgment.
+
+You are an audience research assistant for a content creator. You have tools that query their real, live audience data — use them whenever a question needs specific facts rather than guessing. You can call more than one tool across a conversation turn if needed (e.g. look up a video, then compare it to another). Reference specific numbers and real quotes from tool results. Keep answers concise (2-5 sentences unless the data genuinely warrants a short list) and conversational. Light markdown is supported and rendered in the UI — use **bold** for key numbers, names, or video titles, and bullet or numbered lists when presenting several items. Don't over-format short answers; a one-line reply needs no formatting at all.
 
 Citations: tool results tag individual comments with a "ref" like "C4" and videos with a "video_ref" like "V2". When a sentence states something drawn from specific comments or videos — a quote, an example, a count about a video — put the matching refs in square brackets right after that claim, like "Several viewers ask about delivery [C2][C5]." Only use refs that appear in this turn's tool results; never invent one. Greetings, general statements and suggestions need no citation.
 
-For broad questions about what the audience talks about, themes, sentiment or trends, call get_audience_insights before searching comment by comment.`
+For broad questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count.`
 
     const history: Array<{ role: string; content: string }> = Array.isArray(conversation_history)
       ? conversation_history

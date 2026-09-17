@@ -2,6 +2,49 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { fetchVideoMeta, fetchVideoComments } from '@/lib/youtube'
 import { linkChannelVideoToPost } from '@/lib/channel-videos'
 
+type CommentRow = {
+  post_id: string
+  external_comment_id: string
+  audience_member_id: string
+  text: string
+  posted_at: string
+  like_count: number
+}
+
+// Flips to false the first time the database rejects like_count as an unknown
+// column, so a deploy that lands before migration 20240101000023 keeps ingesting
+// (without likes) instead of failing every comment, and only pays for one retry.
+let likeCountColumnAvailable = true
+
+function isMissingLikeCountColumn(error: { code?: string; message?: string } | null) {
+  return !!error && (error.code === 'PGRST204' || error.code === '42703') && /like_count/.test(error.message ?? '')
+}
+
+/**
+ * Upserts one comment, including its like count. Re-ingesting a video refreshes
+ * the like counts of comments already stored, because the upsert overwrites them.
+ */
+async function upsertComment(supabase: ReturnType<typeof createServiceClient>, row: CommentRow) {
+  const attempt = (withLikes: boolean) => {
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const { like_count, ...withoutLikes } = row
+    const values: Omit<CommentRow, 'like_count'> & { like_count?: number } = withLikes ? row : withoutLikes
+    return supabase
+      .from('comments')
+      .upsert(values, { onConflict: 'post_id, external_comment_id' })
+      .select('id')
+      .single()
+  }
+
+  let result = await attempt(likeCountColumnAvailable)
+  if (likeCountColumnAvailable && isMissingLikeCountColumn(result.error)) {
+    likeCountColumnAvailable = false
+    console.warn('comments.like_count does not exist yet (migration 20240101000023); ingesting without like counts')
+    result = await attempt(false)
+  }
+  return result
+}
+
 export async function ingestYouTubeVideo(creator_id: string, youtube_url: string) {
   const videoId = parseYouTubeVideoId(youtube_url)
   if (!videoId) {
@@ -84,20 +127,14 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
       continue
     }
 
-    const { error: commentError } = await supabase
-      .from('comments')
-      .upsert(
-        {
-          post_id: postId,
-          external_comment_id: comment.externalCommentId,
-          audience_member_id: member.id,
-          text: comment.text,
-          posted_at: comment.publishedAt,
-        },
-        {
-          onConflict: 'post_id, external_comment_id',
-        }
-      )
+    const { error: commentError } = await upsertComment(supabase, {
+      post_id: postId,
+      external_comment_id: comment.externalCommentId,
+      audience_member_id: member.id,
+      text: comment.text,
+      posted_at: comment.publishedAt,
+      like_count: comment.likeCount,
+    })
 
     if (commentError) {
       console.error('Comment upsert error:', JSON.stringify(commentError, null, 2))
@@ -164,22 +201,14 @@ export async function ingestNewComments(creator_id: string, post_id: string, vid
       continue
     }
 
-    const { data: insertedComment, error: commentError } = await supabase
-      .from('comments')
-      .upsert(
-        {
-          post_id,
-          external_comment_id: comment.externalCommentId,
-          audience_member_id: member.id,
-          text: comment.text,
-          posted_at: comment.publishedAt,
-        },
-        {
-          onConflict: 'post_id, external_comment_id',
-        }
-      )
-      .select('id')
-      .single()
+    const { data: insertedComment, error: commentError } = await upsertComment(supabase, {
+      post_id,
+      external_comment_id: comment.externalCommentId,
+      audience_member_id: member.id,
+      text: comment.text,
+      posted_at: comment.publishedAt,
+      like_count: comment.likeCount,
+    })
 
     if (commentError || !insertedComment) {
       console.error('Comment upsert error:', JSON.stringify(commentError, null, 2))

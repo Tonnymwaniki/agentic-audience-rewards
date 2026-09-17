@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateEmbedding, rerankDocuments, toVectorLiteral, EmbeddingUnavailableError } from '@/lib/embeddings'
+import type { Sentiment } from '@/lib/trending'
 
 /**
  * Candidates fetched from each signal before fusing. Also the bound that makes
@@ -75,7 +76,34 @@ export type HybridSearchResponse = {
 export type HybridSearchOptions = {
   postId?: string
   category?: string
+  /** Inclusive lower bound on the comment's posted_at (ISO timestamp). */
+  postedFrom?: string
+  /** EXCLUSIVE upper bound on the comment's posted_at (ISO timestamp). */
+  postedBefore?: string
+  /** praise = positive, complaint = negative, any other category = neutral. */
+  sentiment?: Sentiment
   supabase?: SupabaseClient
+}
+
+/**
+ * The filter arguments shared by all three search SQL functions.
+ *
+ * The date and sentiment arguments are only sent when set. Calls that don't use
+ * them then match both the current functions and the older five-argument ones
+ * from migration 20240101000020, so filter-free search keeps working if migration
+ * 23 hasn't been run; a filtered call against the old functions fails, and the
+ * caller falls back to a search that applies the filters itself.
+ */
+function filterArgs(creatorId: string, limit: number, options: HybridSearchOptions) {
+  return {
+    p_creator_id: creatorId,
+    p_limit: limit,
+    p_post_id: options.postId ?? null,
+    p_category: options.category ?? null,
+    ...(options.postedFrom ? { p_posted_from: options.postedFrom } : {}),
+    ...(options.postedBefore ? { p_posted_before: options.postedBefore } : {}),
+    ...(options.sentiment ? { p_sentiment: options.sentiment } : {}),
+  }
 }
 
 /**
@@ -165,12 +193,7 @@ export async function hybridSearchComments(
   options: HybridSearchOptions = {}
 ): Promise<HybridSearchResponse> {
   const supabase = options.supabase ?? createServiceClient()
-  const filters = {
-    p_creator_id: creatorId,
-    p_limit: CANDIDATE_POOL,
-    p_post_id: options.postId ?? null,
-    p_category: options.category ?? null,
-  }
+  const filters = filterArgs(creatorId, CANDIDATE_POOL, options)
 
   // Supabase query builders are lazy — nothing is sent until .then() is called —
   // so calling it here is what actually starts keyword search in parallel with
@@ -224,29 +247,16 @@ export async function hybridSearchComments(
   }
   if (candidates.length === 0) return response
 
-  const { data: details, error: detailsError } = await supabase
-    .from('comments')
-    .select('id, text, post_id, posted_at, audience_members ( display_name ), comment_categories ( category )')
-    .in(
-      'id',
-      candidates.map(r => r.id)
-    )
-  if (detailsError) {
-    throw new Error(`Could not load search result details: ${detailsError.message}`)
-  }
-
-  const byId = new Map((details ?? []).map(row => [row.id as string, row]))
+  const byId = await loadCommentDetails(
+    supabase,
+    candidates.map(r => r.id)
+  )
   const loaded: HybridSearchResult[] = []
   for (const hit of candidates) {
     const row = byId.get(hit.id)
     if (!row) continue
     loaded.push({
-      id: hit.id,
-      text: row.text as string,
-      post_id: row.post_id as string,
-      posted_at: (row.posted_at as string | null) ?? null,
-      author: (row.audience_members as unknown as { display_name: string } | null)?.display_name || 'Unknown',
-      category: (row.comment_categories as unknown as { category: string } | null)?.category ?? null,
+      ...row,
       matched_by: hit.matched_by,
       similarity: hit.similarity,
       score: hit.score,
@@ -276,4 +286,67 @@ export async function hybridSearchComments(
   }
 
   return response
+}
+
+type CommentDetails = Pick<HybridSearchResult, 'id' | 'text' | 'post_id' | 'posted_at' | 'author' | 'category'>
+
+async function loadCommentDetails(supabase: SupabaseClient, ids: string[]): Promise<Map<string, CommentDetails>> {
+  const { data, error } = await supabase
+    .from('comments')
+    .select('id, text, post_id, posted_at, audience_members ( display_name ), comment_categories ( category )')
+    .in('id', ids)
+  if (error) {
+    throw new Error(`Could not load search result details: ${error.message}`)
+  }
+  return new Map(
+    (data ?? []).map(row => [
+      row.id as string,
+      {
+        id: row.id as string,
+        text: row.text as string,
+        post_id: row.post_id as string,
+        posted_at: (row.posted_at as string | null) ?? null,
+        author: (row.audience_members as unknown as { display_name: string } | null)?.display_name || 'Unknown',
+        category: (row.comment_categories as unknown as { category: string } | null)?.category ?? null,
+      },
+    ])
+  )
+}
+
+export type FilteredCommentsResponse = {
+  results: CommentDetails[]
+  /** Every comment matching the filters, not just the ones returned. */
+  total_matches: number
+}
+
+/**
+ * Comments matching filters alone, newest first — for questions with no search
+ * words, like "what negative comments came in during the last 2 weeks?".
+ *
+ * Same trust model as hybridSearchComments: `creatorId` must be session-derived.
+ * Throws HybridSearchUnavailableError when the SQL function is missing (migration
+ * 20240101000023 not run), so the caller can fall back.
+ */
+export async function listFilteredComments(
+  creatorId: string,
+  limit: number = 20,
+  options: HybridSearchOptions = {}
+): Promise<FilteredCommentsResponse> {
+  const supabase = options.supabase ?? createServiceClient()
+  const { data, error } = await supabase.rpc('search_comments_filtered', filterArgs(creatorId, limit, options))
+  if (error) {
+    throw new HybridSearchUnavailableError(`search_comments_filtered failed: ${error.message}`)
+  }
+  const rows = (data as Array<{ id: string; total_matches: number }>) ?? []
+  if (rows.length === 0) return { results: [], total_matches: 0 }
+
+  const byId = await loadCommentDetails(
+    supabase,
+    rows.map(r => r.id)
+  )
+  return {
+    // Keep the SQL function's newest-first order.
+    results: rows.map(r => byId.get(r.id)).filter((r): r is CommentDetails => !!r),
+    total_matches: Number(rows[0].total_matches),
+  }
 }
