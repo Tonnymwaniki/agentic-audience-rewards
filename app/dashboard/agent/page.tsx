@@ -43,7 +43,7 @@ export default async function AgentHomePage() {
   if (creatorError) {
     console.error('Agent home creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your account details.</p>
       </div>
     )
@@ -65,7 +65,7 @@ export default async function AgentHomePage() {
   if (postsError) {
     console.error('Agent home posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your videos.</p>
       </div>
     )

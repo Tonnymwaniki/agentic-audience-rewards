@@ -22,7 +22,7 @@ export default async function RepeatedCommentsPage() {
   if (postsError) {
     console.error('Posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load posts</p>
       </div>
     )
@@ -32,7 +32,7 @@ export default async function RepeatedCommentsPage() {
 
   if (postIds.length === 0) {
     return (
-      <div className="mx-auto max-w-3xl p-6">
+      <div className="mx-auto max-w-3xl">
         <PageHeader title="Repeated Comments" backHref="/dashboard/inbox" backLabel="My Videos" />
         <p className="text-text-muted">No videos yet.</p>
       </div>
@@ -145,7 +145,7 @@ export default async function RepeatedCommentsPage() {
   const postMap = new Map((postsData || []).map(p => [p.id, p.title]))
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
+    <div className="mx-auto max-w-3xl">
       <PageHeader title="Repeated Comments" backHref="/dashboard/inbox" backLabel="My Videos" />
 
       {repeatedGroups.length === 0 ? (

@@ -181,7 +181,7 @@ export default function ConnectPage() {
 
   if (loading) {
     return (
-      <div className="flex min-h-[70vh] items-center justify-center px-6">
+      <div className="flex min-h-[70vh] items-center justify-center">
         <p className="text-text-muted">Loading...</p>
       </div>
     )
@@ -192,7 +192,7 @@ export default function ConnectPage() {
     const percent = target > 0 ? Math.round((shown / target) * 100) : 0
 
     return (
-      <div className="flex min-h-[70vh] items-center justify-center px-6">
+      <div className="flex min-h-[70vh] items-center justify-center">
         <div className="w-full max-w-md text-center">
           <div className="flex justify-center">
             <MascotIcon type="agent" />
@@ -270,7 +270,7 @@ export default function ConnectPage() {
       }`
 
     return (
-      <div className="flex min-h-[70vh] items-center justify-center px-6">
+      <div className="flex min-h-[70vh] items-center justify-center">
         <div className="w-full max-w-md">
           <h1 className="text-center font-display text-2xl font-semibold text-text-primary md:text-3xl">
             We found {videoCount.toLocaleString()} {videoCount === 1 ? 'video' : 'videos'} in this channel.
@@ -366,7 +366,7 @@ export default function ConnectPage() {
   const checking = phase === 'checking'
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center px-6">
+    <div className="flex min-h-[70vh] items-center justify-center">
       <div className="w-full max-w-md">
         <div className="text-center">
           <h1 className="font-display text-3xl font-semibold text-text-primary md:text-4xl">

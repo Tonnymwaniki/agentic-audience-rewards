@@ -84,7 +84,7 @@ export default async function RewardsPage({
   if (creatorError) {
     console.error('Rewards creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your account details.</p>
       </div>
     )
@@ -118,7 +118,7 @@ export default async function RewardsPage({
       if (audienceError) {
         console.error('Audience members fetch error:', JSON.stringify(audienceError, Object.getOwnPropertyNames(audienceError), 2))
         return (
-          <div className="p-6">
+          <div>
             <p className="text-red-500">Failed to load audience members</p>
           </div>
         )
@@ -182,7 +182,7 @@ export default async function RewardsPage({
     } catch (err) {
       console.error('Reward events fetch error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
       return (
-        <div className="p-6">
+        <div>
           <p className="text-red-500">Failed to load reward events</p>
         </div>
       )

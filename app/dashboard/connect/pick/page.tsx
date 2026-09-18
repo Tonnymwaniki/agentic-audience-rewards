@@ -92,7 +92,7 @@ function PickPageInner() {
 
   if (!channelParam) {
     return (
-      <div className="mx-auto max-w-5xl px-6 py-8">
+      <div className="mx-auto max-w-5xl py-2">
         <div className="card p-6 text-center">
           <p className="text-sm text-text-muted">No channel specified.</p>
           <Link href="/dashboard/connect" className="btn-primary mt-4 inline-flex">
@@ -104,7 +104,7 @@ function PickPageInner() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-6 py-8">
+    <div className="mx-auto max-w-5xl py-2">
       <div className="mb-6">
         <h1 className="font-display text-2xl font-semibold text-text-primary">
           Pick a video to analyze

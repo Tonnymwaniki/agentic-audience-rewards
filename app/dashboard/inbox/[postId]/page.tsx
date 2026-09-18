@@ -31,7 +31,7 @@ export default async function PostInboxPage({
   if (creatorError) {
     console.error('Video inbox creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your account details.</p>
       </div>
     )
@@ -53,7 +53,7 @@ export default async function PostInboxPage({
   if (postError) {
     console.error('Video inbox post fetch error:', JSON.stringify(postError, Object.getOwnPropertyNames(postError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load this video.</p>
       </div>
     )
@@ -135,7 +135,7 @@ export default async function PostInboxPage({
   if (commentsFetchError) {
     console.error('Comments fetch error:', JSON.stringify(commentsFetchError, Object.getOwnPropertyNames(commentsFetchError as object), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load comments</p>
       </div>
     )
@@ -203,7 +203,7 @@ export default async function PostInboxPage({
   const repeatedCommentIds = Array.from(repeatedCommentIdsSet)
 
   return (
-    <div className="mx-auto max-w-3xl p-6">
+    <div className="mx-auto max-w-3xl">
       <PageHeader title={post.title} backHref="/dashboard/inbox" backLabel="My Videos" />
 
       <div className="mb-4 flex flex-wrap items-start gap-2">

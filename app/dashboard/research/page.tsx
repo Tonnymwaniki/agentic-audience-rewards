@@ -291,7 +291,7 @@ export default async function ResearchPage() {
   if (creatorError) {
     console.error('Research creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your account details.</p>
       </div>
     )

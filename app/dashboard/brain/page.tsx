@@ -40,7 +40,7 @@ export default async function BrainPage({
   if (creatorError) {
     console.error('Brain creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your account details.</p>
       </div>
     )
@@ -58,7 +58,7 @@ export default async function BrainPage({
   if (postsError) {
     console.error('Posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load posts</p>
       </div>
     )

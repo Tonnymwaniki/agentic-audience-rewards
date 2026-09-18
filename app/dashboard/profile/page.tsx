@@ -29,7 +29,7 @@ export default async function BusinessProfilePage() {
   if (creatorError) {
     console.error('Business profile creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
     return (
-      <div className="p-6">
+      <div>
         <p className="text-red-500">Failed to load your profile.</p>
       </div>
     )
