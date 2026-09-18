@@ -6,6 +6,7 @@ import { computeTrendingGroups, computeSentiment, sentimentForRow, SENTIMENTS, t
 import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
 import { loadAudienceInsights, themesForRow } from '@/lib/audience-insights'
 import { COMMENT_LANGUAGES, COMMENT_EMOTIONS, type CommentLanguage, type CommentEmotion } from '@/lib/categorize'
+import { SEGMENTS, type AudienceSegment } from '@/lib/segments'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 
@@ -94,6 +95,11 @@ type CategoryInfo = {
 
 function getCatInfo(row: RichCommentRow): CategoryInfo | null {
   return row.comment_categories as CategoryInfo | null
+}
+
+/** The commenter's segment, when it has been computed (migration 20240101000028). */
+function getMemberSegment(row: RichCommentRow): string | null {
+  return (row.audience_members as { segment?: string | null } | null)?.segment ?? null
 }
 
 function getAuthor(row: RichCommentRow): string {
@@ -188,6 +194,7 @@ function resolvePostId(ctx: ToolContext, idOrTitle: string): string | null {
 let commentLanguageColumnAvailable = true
 let commentSentimentColumnsAvailable = true
 let commentTopicsColumnAvailable = true
+let commentSegmentColumnAvailable = true
 
 async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): Promise<RichCommentRow[]> {
   if (postIds.length === 0) return []
@@ -207,7 +214,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
         post_id,
         posted_at,
         audience_member_id,
-        audience_members ( display_name ),
+        audience_members ( display_name${commentSegmentColumnAvailable ? ', segment' : ''} ),
         comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentTopicsColumnAvailable ? ', topics' : ''}${commentLanguageColumnAvailable ? ', language' : ''}${commentSentimentColumnsAvailable ? ', sentiment, emotion' : ''} )
       `
       )
@@ -220,6 +227,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
       if (commentLanguageColumnAvailable && /language/.test(error.message ?? '')) commentLanguageColumnAvailable = false
       else if (commentSentimentColumnsAvailable && /(sentiment|emotion)/.test(error.message ?? '')) commentSentimentColumnsAvailable = false
       else if (commentTopicsColumnAvailable && /topics/.test(error.message ?? '')) commentTopicsColumnAvailable = false
+      else if (commentSegmentColumnAvailable && /segment/.test(error.message ?? '')) commentSegmentColumnAvailable = false
       else break
       ;({ data: batch, error } = await selectBatch(offset))
     }
@@ -278,6 +286,7 @@ type CommentSearchFilters = {
   sentiment?: Sentiment
   language?: CommentLanguage
   emotion?: CommentEmotion
+  segment?: AudienceSegment
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
@@ -318,6 +327,7 @@ function commentMatchesFilters(c: RichCommentRow, filters: CommentSearchFilters)
   if (filters.sentiment && sentimentForRow({ category, sentiment: getCatInfo(c)?.sentiment }) !== filters.sentiment) return false
   if (filters.language && getCatInfo(c)?.language !== filters.language) return false
   if (filters.emotion && getCatInfo(c)?.emotion !== filters.emotion) return false
+  if (filters.segment && getMemberSegment(c) !== filters.segment) return false
   const postedAt = c.posted_at ? Date.parse(c.posted_at) : NaN
   if (filters.postedFrom && !(postedAt >= Date.parse(filters.postedFrom))) return false
   if (filters.postedBefore && !(postedAt < Date.parse(filters.postedBefore))) return false
@@ -348,11 +358,14 @@ async function computePeriodBreakdown(
   const matching = comments.filter(c => commentMatchesFilters(c, filters))
   const languages: Record<string, number> = {}
   const emotions: Record<string, number> = {}
+  const segments: Record<string, number> = {}
   for (const c of matching) {
     const language = getCatInfo(c)?.language || 'not_detected'
     languages[language] = (languages[language] || 0) + 1
     const emotion = getCatInfo(c)?.emotion || 'not_classified'
     emotions[emotion] = (emotions[emotion] || 0) + 1
+    const segment = getMemberSegment(c) || 'not_segmented'
+    segments[segment] = (segments[segment] || 0) + 1
   }
 
   const categories: Record<string, number> = {}
@@ -397,6 +410,9 @@ async function computePeriodBreakdown(
     categories,
     languages,
     emotions,
+    // Comments per segment — people can appear more than once (a segment counts a
+    // person, this counts their comments).
+    segments,
     // Emotion and real sentiment only exist for comments categorized since they were
     // introduced. Stated explicitly so an answer can't present the emotion mix of a
     // classified subset as the mix of every comment.
@@ -423,6 +439,7 @@ function describeWindow(filters: CommentSearchFilters): string {
   const extra = [
     filters.sentiment && `${filters.sentiment} sentiment`,
     filters.emotion && `emotion ${filters.emotion}`,
+    filters.segment && `by ${filters.segment}s`,
     filters.category && `category ${filters.category}`,
     filters.language && `written in ${filters.language}`,
     filters.postId && 'on the chosen video',
@@ -443,6 +460,7 @@ async function toolSearchComments(
     sentiment?: unknown
     language?: unknown
     emotion?: unknown
+    segment?: unknown
   }
 ) {
   const query = typeof input.query === 'string' ? input.query.trim() : ''
@@ -476,6 +494,13 @@ async function toolSearchComments(
     filters.emotion = input.emotion as CommentEmotion
   }
 
+  if (input.segment !== undefined && input.segment !== null && input.segment !== '') {
+    if (!SEGMENTS.includes(input.segment as AudienceSegment)) {
+      return { error: `segment must be one of ${SEGMENTS.join(', ')}` }
+    }
+    filters.segment = input.segment as AudienceSegment
+  }
+
   const from = parseDateBound(input.date_from, 'from')
   const to = parseDateBound(input.date_to, 'to')
   if (from.error || to.error) return { error: from.error || to.error }
@@ -491,6 +516,7 @@ async function toolSearchComments(
     filters.sentiment ||
     filters.language ||
     filters.emotion ||
+    filters.segment ||
     filters.postedFrom ||
     filters.postedBefore
   )
@@ -504,6 +530,7 @@ async function toolSearchComments(
     ...(filters.postedBefore ? { posted_before: filters.postedBefore } : {}),
     ...(filters.sentiment ? { sentiment: filters.sentiment } : {}),
     ...(filters.emotion ? { emotion: filters.emotion } : {}),
+    ...(filters.segment ? { segment: filters.segment } : {}),
     ...(filters.language ? { language: filters.language } : {}),
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.postId ? { video: ctx.postMap.get(filters.postId) || 'Untitled video' } : {}),
@@ -519,6 +546,7 @@ async function toolSearchComments(
     language?: string | null
     sentiment?: string | null
     emotion?: string | null
+    segment?: string | null
   }) => {
     const video = ctx.postMap.get(r.post_id) || 'Untitled video'
     return {
@@ -529,6 +557,7 @@ async function toolSearchComments(
       category: r.category || 'other',
       sentiment: sentimentForRow({ category: r.category, sentiment: r.sentiment }),
       emotion: r.emotion ?? null,
+      segment: r.segment ?? null,
       language: r.language ?? null,
       posted_at: r.posted_at,
     }
@@ -622,6 +651,7 @@ async function legacySubstringSearch(
         category: category || 'other',
         sentiment: rowSentiment(c),
         emotion: getCatInfo(c)?.emotion ?? null,
+        segment: getMemberSegment(c),
         language: getCatInfo(c)?.language ?? null,
         posted_at: c.posted_at,
       }
@@ -1575,6 +1605,12 @@ const TOOLS = [
           type: 'string',
           enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
           description: 'Optional category filter',
+        },
+        segment: {
+          type: 'string',
+          enum: ['potential_customer', 'critic', 'loyal_fan', 'content_requester', 'casual_viewer'],
+          description:
+            "Only comments by people in this audience segment. These five are the ONLY segments that exist — there is no 'budget-conscious', 'new viewer' or any other group, so never invent one; if a question asks about a group outside this list, say the data doesn't have it and answer with the closest real filter instead. Each is computed from that person's own history by fixed rules: potential_customer = has at least one comment showing buying interest (purchase_intent); critic = has 2+ negative comments and at least half of their comments are negative; loyal_fan = 3+ comments across 2+ videos, at least 70% positive; content_requester = has 2+ comments asking for content (content_request); casual_viewer = everyone else. People whose segment hasn't been computed yet match no segment filter.",
         },
         post_id: { type: 'string', description: "Optional video id or title to restrict the search to" },
       },

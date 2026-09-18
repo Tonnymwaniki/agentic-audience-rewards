@@ -1,4 +1,5 @@
 import { createServiceClient } from '@/lib/supabase/service'
+import { updateAudienceSegment } from '@/lib/segments'
 
 export async function updateAudienceProfile(audience_member_id: string) {
   console.log("AUDIENCE MEMORY: starting for member", audience_member_id)
@@ -6,6 +7,11 @@ export async function updateAudienceProfile(audience_member_id: string) {
   const supabase = createServiceClient()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
+
+  // Rule-based, no model call, and done BEFORE the early return below: a person with
+  // a single buying comment is exactly the one a creator wants segmented, and they
+  // would never reach the summary step.
+  const segmented = await updateAudienceSegment(supabase, audience_member_id)
 
   try {
     const { data: comments, error: commentsError } = await supabase
@@ -18,7 +24,7 @@ export async function updateAudienceProfile(audience_member_id: string) {
     }
 
     if (!comments || comments.length < 2) {
-      return { success: true, updated: false }
+      return { success: true, updated: false, segment: segmented?.segment ?? null }
     }
 
     const commentSummaries = comments.map(c => {

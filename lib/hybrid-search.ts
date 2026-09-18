@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { generateEmbedding, rerankDocuments, toVectorLiteral, EmbeddingUnavailableError } from '@/lib/embeddings'
 import type { Sentiment } from '@/lib/trending'
 import type { CommentLanguage, CommentEmotion, CommentSentiment } from '@/lib/categorize'
+import type { AudienceSegment } from '@/lib/segments'
 
 /**
  * Candidates fetched from each signal before fusing. Also the bound that makes
@@ -58,6 +59,8 @@ export type HybridSearchResult = {
   sentiment: string | null
   /** The comment's primary emotion, when stored. */
   emotion: string | null
+  /** The commenter's audience segment, when computed. */
+  segment: string | null
   /** Which signal(s) found this comment. */
   matched_by: MatchSignal[]
   /** Cosine similarity to the query, when the semantic signal found it. */
@@ -91,6 +94,8 @@ export type HybridSearchOptions = {
   sentiment?: Sentiment | CommentSentiment
   /** The comment's primary emotion. */
   emotion?: CommentEmotion
+  /** Only comments by people in this audience segment. */
+  segment?: AudienceSegment
   /** Exact match on the language detected during categorization. */
   language?: CommentLanguage
   supabase?: SupabaseClient
@@ -116,6 +121,7 @@ function filterArgs(creatorId: string, limit: number, options: HybridSearchOptio
     ...(options.sentiment ? { p_sentiment: options.sentiment } : {}),
     ...(options.language ? { p_language: options.language } : {}),
     ...(options.emotion ? { p_emotion: options.emotion } : {}),
+    ...(options.segment ? { p_segment: options.segment } : {}),
   }
 }
 
@@ -301,26 +307,29 @@ export async function hybridSearchComments(
   return response
 }
 
-type CommentDetails = Pick<HybridSearchResult, 'id' | 'text' | 'post_id' | 'posted_at' | 'author' | 'category' | 'language' | 'sentiment' | 'emotion'>
+type CommentDetails = Pick<HybridSearchResult, 'id' | 'text' | 'post_id' | 'posted_at' | 'author' | 'category' | 'language' | 'sentiment' | 'emotion' | 'segment'>
 
 // Each flips to false once the database reports the column missing (language:
 // migration 20240101000024, sentiment/emotion: 20240101000026), so later loads skip
 // it instead of failing every search.
 let languageColumnAvailable = true
 let sentimentColumnsAvailable = true
+let segmentColumnAvailable = true
 
 async function loadCommentDetails(supabase: SupabaseClient, ids: string[]): Promise<Map<string, CommentDetails>> {
   const select = () => {
     const extra = `${languageColumnAvailable ? ', language' : ''}${sentimentColumnsAvailable ? ', sentiment, emotion' : ''}`
+    const member = `display_name${segmentColumnAvailable ? ', segment' : ''}`
     // Typed as string, not a literal: the select is assembled at runtime, and
     // Supabase's literal-type parser can't follow the conditional columns.
-    const columns: string = `id, text, post_id, posted_at, audience_members ( display_name ), comment_categories ( category${extra} )`
+    const columns: string = `id, text, post_id, posted_at, audience_members ( ${member} ), comment_categories ( category${extra} )`
     return supabase.from('comments').select(columns).in('id', ids)
   }
   let { data, error } = await select()
-  for (let attempt = 0; attempt < 2 && error; attempt++) {
+  for (let attempt = 0; attempt < 3 && error; attempt++) {
     if (languageColumnAvailable && /language/.test(error.message ?? '')) languageColumnAvailable = false
     else if (sentimentColumnsAvailable && /(sentiment|emotion)/.test(error.message ?? '')) sentimentColumnsAvailable = false
+    else if (segmentColumnAvailable && /segment/.test(error.message ?? '')) segmentColumnAvailable = false
     else break
     ;({ data, error } = await select())
   }
@@ -341,6 +350,7 @@ async function loadCommentDetails(supabase: SupabaseClient, ids: string[]): Prom
         language: (row.comment_categories as unknown as { language?: string | null } | null)?.language ?? null,
         sentiment: (row.comment_categories as unknown as { sentiment?: string | null } | null)?.sentiment ?? null,
         emotion: (row.comment_categories as unknown as { emotion?: string | null } | null)?.emotion ?? null,
+        segment: (row.audience_members as unknown as { segment?: string | null } | null)?.segment ?? null,
       },
     ])
   )
