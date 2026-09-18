@@ -2,10 +2,10 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 // Shared with the Research page's "Trending Topics" sidebar card, so the panel and
 // the get_trending tool can never disagree about what's trending.
-import { computeTrendingGroups, computeSentiment, sentimentForCategory, SENTIMENTS, type Sentiment } from '@/lib/trending'
+import { computeTrendingGroups, computeSentiment, sentimentForRow, SENTIMENTS, type Sentiment } from '@/lib/trending'
 import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
 import { loadAudienceInsights, themeForTopic } from '@/lib/audience-insights'
-import { COMMENT_LANGUAGES, type CommentLanguage } from '@/lib/categorize'
+import { COMMENT_LANGUAGES, COMMENT_EMOTIONS, type CommentLanguage, type CommentEmotion } from '@/lib/categorize'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 
@@ -82,6 +82,9 @@ type CategoryInfo = {
   topic: string | null
   /** Absent until migration 20240101000024; null when none was detected. */
   language?: string | null
+  /** The classifier's own sentiment and primary emotion (migration 20240101000026). */
+  sentiment?: string | null
+  emotion?: string | null
   draft_reply: string | null
   draft_reply_approved_at: string | null
   draft_reply_created_at: string | null
@@ -181,6 +184,7 @@ function resolvePostId(ctx: ToolContext, idOrTitle: string): string | null {
 // 20240101000024 not run). Every Research tool loads comments through here, so a
 // missing column must degrade to "no language data", never to "no comments".
 let commentLanguageColumnAvailable = true
+let commentSentimentColumnsAvailable = true
 
 async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): Promise<RichCommentRow[]> {
   if (postIds.length === 0) return []
@@ -201,7 +205,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
         posted_at,
         audience_member_id,
         audience_members ( display_name ),
-        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentLanguageColumnAvailable ? ', language' : ''} )
+        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentLanguageColumnAvailable ? ', language' : ''}${commentSentimentColumnsAvailable ? ', sentiment, emotion' : ''} )
       `
       )
       .in('post_id', postIds)
@@ -209,8 +213,10 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
 
   while (hasMore) {
     let { data: batch, error } = await selectBatch(offset)
-    if (error && commentLanguageColumnAvailable && /language/.test(error.message ?? '')) {
-      commentLanguageColumnAvailable = false
+    for (let attempt = 0; attempt < 2 && error; attempt++) {
+      if (commentLanguageColumnAvailable && /language/.test(error.message ?? '')) commentLanguageColumnAvailable = false
+      else if (commentSentimentColumnsAvailable && /(sentiment|emotion)/.test(error.message ?? '')) commentSentimentColumnsAvailable = false
+      else break
       ;({ data: batch, error } = await selectBatch(offset))
     }
 
@@ -264,6 +270,7 @@ type CommentSearchFilters = {
   postedBefore?: string
   sentiment?: Sentiment
   language?: CommentLanguage
+  emotion?: CommentEmotion
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
@@ -293,11 +300,17 @@ function parseDateBound(value: unknown, bound: 'from' | 'to'): { iso?: string; e
   return { iso: new Date(parsed).toISOString() }
 }
 
+/** One comment's sentiment: classified where stored, category-derived otherwise. */
+function rowSentiment(c: RichCommentRow): Sentiment | null {
+  return sentimentForRow({ category: getCatInfo(c)?.category ?? null, sentiment: getCatInfo(c)?.sentiment })
+}
+
 function commentMatchesFilters(c: RichCommentRow, filters: CommentSearchFilters): boolean {
   const category = getCatInfo(c)?.category ?? null
   if (filters.category && category !== filters.category) return false
-  if (filters.sentiment && sentimentForCategory(category) !== filters.sentiment) return false
+  if (filters.sentiment && sentimentForRow({ category, sentiment: getCatInfo(c)?.sentiment }) !== filters.sentiment) return false
   if (filters.language && getCatInfo(c)?.language !== filters.language) return false
+  if (filters.emotion && getCatInfo(c)?.emotion !== filters.emotion) return false
   const postedAt = c.posted_at ? Date.parse(c.posted_at) : NaN
   if (filters.postedFrom && !(postedAt >= Date.parse(filters.postedFrom))) return false
   if (filters.postedBefore && !(postedAt < Date.parse(filters.postedBefore))) return false
@@ -327,13 +340,16 @@ async function computePeriodBreakdown(
   const comments = preloaded ?? (await fetchRichComments(ctx.supabase, filters.postId ? [filters.postId] : ctx.postIds))
   const matching = comments.filter(c => commentMatchesFilters(c, filters))
   const languages: Record<string, number> = {}
+  const emotions: Record<string, number> = {}
   for (const c of matching) {
     const language = getCatInfo(c)?.language || 'not_detected'
     languages[language] = (languages[language] || 0) + 1
+    const emotion = getCatInfo(c)?.emotion || 'not_classified'
+    emotions[emotion] = (emotions[emotion] || 0) + 1
   }
 
   const categories: Record<string, number> = {}
-  const themes = new Map<string, { count: number; positive: number; negative: number; neutral: number }>()
+  const themes = new Map<string, { count: number; positive: number; negative: number; neutral: number; mixed: number }>()
   const videos = new Map<string, number>()
   let uncategorized = 0
 
@@ -344,9 +360,9 @@ async function computePeriodBreakdown(
 
     const theme = themeForTopic(info?.topic)
     if (theme) {
-      const entry = themes.get(theme) ?? { count: 0, positive: 0, negative: 0, neutral: 0 }
+      const entry = themes.get(theme) ?? { count: 0, positive: 0, negative: 0, neutral: 0, mixed: 0 }
       entry.count++
-      const sentiment = sentimentForCategory(info?.category)
+      const sentiment = rowSentiment(c)
       if (sentiment) entry[sentiment]++
       themes.set(theme, entry)
     }
@@ -360,17 +376,23 @@ async function computePeriodBreakdown(
     // "positive"/"negative" keys, the answer check read "9% negative" as "9 negative
     // comments" and "corrected" it.
     sentiment_counts: {
-      positive: matching.filter(c => sentimentForCategory(getCatInfo(c)?.category) === 'positive').length,
-      negative: matching.filter(c => sentimentForCategory(getCatInfo(c)?.category) === 'negative').length,
-      neutral: matching.filter(c => sentimentForCategory(getCatInfo(c)?.category) === 'neutral').length,
+      positive: matching.filter(c => rowSentiment(c) === 'positive').length,
+      negative: matching.filter(c => rowSentiment(c) === 'negative').length,
+      neutral: matching.filter(c => rowSentiment(c) === 'neutral').length,
+      mixed: matching.filter(c => rowSentiment(c) === 'mixed').length,
       uncategorized,
     },
-    sentiment_percent: (({ positive, negative, neutral }) => ({ positive, negative, neutral }))(
-      computeSentiment(matching.map(c => ({ category: getCatInfo(c)?.category ?? null })))
+    sentiment_percent: (({ positive, negative, neutral, mixed }) => ({ positive, negative, neutral, mixed }))(
+      computeSentiment(matching.map(c => ({ category: getCatInfo(c)?.category ?? null, sentiment: getCatInfo(c)?.sentiment })))
     ),
     sentiment_percent_note: `Percent of the ${matching.length - uncategorized} categorized comments, rounded so the three add up to 100 (so one can differ by 1 from dividing the count yourself). Use these exact percentages; do not recompute them.`,
     categories,
     languages,
+    emotions,
+    // Emotion and real sentiment only exist for comments categorized since they were
+    // introduced. Stated explicitly so an answer can't present the emotion mix of a
+    // classified subset as the mix of every comment.
+    emotions_coverage: `${matching.length - (emotions.not_classified ?? 0)} of ${matching.length} comments have a classified emotion; the rest were categorized before emotion classification existed and are counted as not_classified. Say so if you report the emotion mix.`,
     top_themes: [...themes]
       .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
       .slice(0, PERIOD_BREAKDOWN_THEMES)
@@ -387,9 +409,10 @@ function describeWindow(filters: CommentSearchFilters): string {
   const from = filters.postedFrom?.slice(0, 10)
   // posted_before is exclusive: the last included day is the one before it.
   const to = filters.postedBefore ? new Date(Date.parse(filters.postedBefore) - 1).toISOString().slice(0, 10) : undefined
-  const window = from && to ? `posted ${from} to ${to}` : from ? `posted on or after ${from}` : `posted on or before ${to}`
+  const window = from && to ? `posted ${from} to ${to}` : from ? `posted on or after ${from}` : to ? `posted on or before ${to}` : 'from the whole channel history'
   const extra = [
     filters.sentiment && `${filters.sentiment} sentiment`,
+    filters.emotion && `emotion ${filters.emotion}`,
     filters.category && `category ${filters.category}`,
     filters.language && `written in ${filters.language}`,
     filters.postId && 'on the chosen video',
@@ -409,6 +432,7 @@ async function toolSearchComments(
     date_to?: unknown
     sentiment?: unknown
     language?: unknown
+    emotion?: unknown
   }
 ) {
   const query = typeof input.query === 'string' ? input.query.trim() : ''
@@ -435,6 +459,13 @@ async function toolSearchComments(
     filters.language = input.language as CommentLanguage
   }
 
+  if (input.emotion !== undefined && input.emotion !== null && input.emotion !== '') {
+    if (!COMMENT_EMOTIONS.includes(input.emotion as CommentEmotion)) {
+      return { error: `emotion must be one of ${COMMENT_EMOTIONS.join(', ')}` }
+    }
+    filters.emotion = input.emotion as CommentEmotion
+  }
+
   const from = parseDateBound(input.date_from, 'from')
   const to = parseDateBound(input.date_to, 'to')
   if (from.error || to.error) return { error: from.error || to.error }
@@ -444,9 +475,17 @@ async function toolSearchComments(
     return { error: 'date_from must be on or before date_to' }
   }
 
-  const hasFilter = !!(filters.postId || filters.category || filters.sentiment || filters.language || filters.postedFrom || filters.postedBefore)
+  const hasFilter = !!(
+    filters.postId ||
+    filters.category ||
+    filters.sentiment ||
+    filters.language ||
+    filters.emotion ||
+    filters.postedFrom ||
+    filters.postedBefore
+  )
   if (!query && !hasFilter) {
-    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, language, category, post_id).' }
+    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, emotion, language, category, post_id).' }
   }
 
   // Echoed back so the answer can state the exact window and filters it covers.
@@ -454,6 +493,7 @@ async function toolSearchComments(
     ...(filters.postedFrom ? { posted_on_or_after: filters.postedFrom } : {}),
     ...(filters.postedBefore ? { posted_before: filters.postedBefore } : {}),
     ...(filters.sentiment ? { sentiment: filters.sentiment } : {}),
+    ...(filters.emotion ? { emotion: filters.emotion } : {}),
     ...(filters.language ? { language: filters.language } : {}),
     ...(filters.category ? { category: filters.category } : {}),
     ...(filters.postId ? { video: ctx.postMap.get(filters.postId) || 'Untitled video' } : {}),
@@ -467,6 +507,8 @@ async function toolSearchComments(
     category: string | null
     posted_at: string | null
     language?: string | null
+    sentiment?: string | null
+    emotion?: string | null
   }) => {
     const video = ctx.postMap.get(r.post_id) || 'Untitled video'
     return {
@@ -475,7 +517,8 @@ async function toolSearchComments(
       text: r.text,
       video,
       category: r.category || 'other',
-      sentiment: sentimentForCategory(r.category),
+      sentiment: sentimentForRow({ category: r.category, sentiment: r.sentiment }),
+      emotion: r.emotion ?? null,
       language: r.language ?? null,
       posted_at: r.posted_at,
     }
@@ -486,10 +529,11 @@ async function toolSearchComments(
   // behind hybridSearchComments and listFilteredComments rely on the caller to
   // guarantee.
   const searchOptions = { ...filters, supabase: ctx.supabase }
-  const hasDateFilter = !!(filters.postedFrom || filters.postedBefore)
   // Started alongside the search itself. Covers the filters only (not the query's
-  // words): it answers "what happened in this period", whatever was searched for.
-  const breakdownPromise = hasDateFilter ? computePeriodBreakdown(ctx, filters, describeWindow(filters)) : null
+  // words): it answers "what does this slice of comments look like", whatever was
+  // searched for — themes, sentiment, emotions, languages and videos over every
+  // matching comment, not just the 20 listed.
+  const breakdownPromise = hasFilter ? computePeriodBreakdown(ctx, filters, describeWindow(filters)) : null
 
   try {
     if (!query) {
@@ -499,7 +543,7 @@ async function toolSearchComments(
         search_mode: 'filter',
         filters_applied: filtersApplied,
         note: 'count = every comment matching the filters; results are the newest 20 of them.',
-        ...(breakdownPromise ? { period_breakdown: await breakdownPromise } : {}),
+        ...(breakdownPromise ? { breakdown: await breakdownPromise } : {}),
         results: listed.results.map(toResult),
       }
     }
@@ -518,9 +562,9 @@ async function toolSearchComments(
         : "count = comments containing the query's words. results also include comments with related meaning that use different words (matched_by: semantic); judge those by their text.",
       ...(breakdownPromise
         ? {
-            period_breakdown: {
+            breakdown: {
               ...(await breakdownPromise),
-              note: "Covers every comment matching the date and other filters, regardless of the query's words.",
+              note: "Covers every comment matching the filters, regardless of the query's words.",
             },
           }
         : {}),
@@ -534,7 +578,7 @@ async function toolSearchComments(
     // question never silently gets unfiltered results.
     console.warn('Search functions unavailable, using substring search:', err.message)
     const fallback = await legacySubstringSearch(ctx, query, filters, hasFilter ? filtersApplied : undefined)
-    return breakdownPromise ? { ...fallback, period_breakdown: await breakdownPromise } : fallback
+    return breakdownPromise ? { ...fallback, breakdown: await breakdownPromise } : fallback
   }
 }
 
@@ -566,7 +610,8 @@ async function legacySubstringSearch(
         text: c.text,
         video,
         category: category || 'other',
-        sentiment: sentimentForCategory(category),
+        sentiment: rowSentiment(c),
+        emotion: getCatInfo(c)?.emotion ?? null,
         language: getCatInfo(c)?.language ?? null,
         posted_at: c.posted_at,
       }
@@ -709,7 +754,7 @@ async function toolComparePeriods(
 
 /** Stated in both the tool description and its output, so the timeframe can't be lost. */
 const INSIGHTS_SCOPE =
-  'These counts cover ALL comments ever posted, not any specific date range — only the trend figure compares the last 30 days vs the prior 30. Do not use these counts to answer questions naming a specific time period (e.g. "last month", "this week"); use search_comments with date_from/date_to instead, whose period_breakdown gives that period\'s own counts.'
+  'These counts cover ALL comments ever posted, not any specific date range — only the trend figure compares the last 30 days vs the prior 30. Do not use these counts to answer questions naming a specific time period (e.g. "last month", "this week"); use search_comments with date_from/date_to instead, whose breakdown gives that period\'s own counts.'
 
 /** Exported for the Research report pages, which reuse this exact logic. */
 export async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?: unknown }) {
@@ -1491,8 +1536,15 @@ const TOOLS = [
         },
         sentiment: {
           type: 'string',
-          enum: ['positive', 'negative', 'neutral'],
-          description: 'Derived from category: praise = positive, complaint = negative, every other category = neutral. Uncategorized comments match no sentiment.',
+          enum: ['positive', 'negative', 'neutral', 'mixed'],
+          description:
+            "The comment's own sentiment, classified with the category and independent of it — a question can be negative, praise can be mixed. Comments categorized before sentiment was classified fall back to category (praise = positive, complaint = negative, everything else neutral); those older comments can never be 'mixed'.",
+        },
+        emotion: {
+          type: 'string',
+          enum: ['anger', 'joy', 'sadness', 'frustration', 'excitement', 'confusion', 'sarcasm', 'disappointment', 'admiration', 'fear', 'none'],
+          description:
+            "The comment's single strongest emotion. Use for questions about how the audience feels — \"what's driving frustration\", \"what are people excited about\", \"is anyone confused\". 'none' means the comment carries no real emotion. Only comments categorized since emotion classification exists have one; older comments match no emotion filter. For a broad \"what emotions is my audience showing\" question, run ONE call with any filter (for example a wide date range) and read the breakdown's emotions counts rather than filtering emotion by emotion.",
         },
         language: {
           type: 'string',
@@ -1876,7 +1928,7 @@ You are an audience research assistant for a content creator. You have tools tha
 
 Citations: tool results tag individual comments with a "ref" like "C4" and videos with a "video_ref" like "V2". When a sentence states something drawn from specific comments or videos — a quote, an example, a count about a video — put the matching refs in square brackets right after that claim, like "Several viewers ask about delivery [C2][C5]." Only use refs that appear in this turn's tool results; never invent one. Greetings, general statements and suggestions need no citation.
 
-For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its period_breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count.`
+For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count.`
 
     const history: Array<{ role: string; content: string }> = Array.isArray(conversation_history)
       ? conversation_history

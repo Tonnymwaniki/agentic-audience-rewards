@@ -32,6 +32,8 @@ export type SidebarSentiment = {
   positive: number
   neutral: number
   negative: number
+  /** Comments carrying both positive and negative feeling; 0 before re-categorization. */
+  mixed: number
   isPlaceholder: boolean
 }
 
@@ -159,6 +161,7 @@ function SentimentCard({ sentiment }: { sentiment: SidebarSentiment }) {
     { label: 'Positive', value: sentiment.positive, color: 'var(--purple)' },
     { label: 'Neutral', value: sentiment.neutral, color: 'var(--text-muted)' },
     { label: 'Negative', value: sentiment.negative, color: 'var(--avax-red)' },
+    { label: 'Mixed', value: sentiment.mixed ?? 0, color: 'var(--gold)' },
   ]
 
   const total = segments.reduce((sum, s) => sum + s.value, 0) || 1

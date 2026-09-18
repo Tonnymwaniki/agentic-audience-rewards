@@ -11,7 +11,7 @@ export const metadata = { title: 'Audience Insights · Research' }
 type Insight = {
   topic: string
   comment_count: number
-  sentiment_breakdown: { positive: number; negative: number; neutral: number; total: number }
+  sentiment_breakdown: { positive: number; negative: number; neutral: number; mixed?: number; total: number }
   trend: { direction: string; pct: number | null }
   confidence: number
   representative_comments: Array<{ ref: string; text: string; author: string; video: string }>
@@ -100,16 +100,18 @@ export default async function InsightsReportPage() {
                   {confidenceLabel(insight.confidence)}
                 </p>
 
-                {/* Sentiment from comment categories: praise = positive, complaint = negative. */}
+                {/* Each comment's classified sentiment where stored, else derived from its
+                    category (praise = positive, complaint = negative). */}
                 <div className="mt-3">
                   <div
                     className="flex h-2 w-full overflow-hidden rounded-full bg-surface-hover"
                     role="img"
-                    aria-label={`Sentiment: ${s.positive}% positive, ${s.neutral}% neutral, ${s.negative}% negative`}
+                    aria-label={`Sentiment: ${s.positive}% positive, ${s.neutral}% neutral, ${s.negative}% negative${s.mixed ? `, ${s.mixed}% mixed` : ''}`}
                   >
                     <div style={{ width: `${s.positive}%`, background: 'var(--purple)' }} />
                     <div style={{ width: `${s.neutral}%`, background: 'var(--text-muted)' }} />
                     <div style={{ width: `${s.negative}%`, background: 'var(--avax-red)' }} />
+                    <div style={{ width: `${s.mixed ?? 0}%`, background: 'var(--gold)' }} />
                   </div>
                   <p className="mt-1.5 text-xs text-text-muted">
                     {s.positive}% positive · {s.neutral}% neutral · {s.negative}% negative

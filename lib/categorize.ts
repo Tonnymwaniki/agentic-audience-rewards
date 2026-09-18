@@ -26,6 +26,51 @@ export function normalizeLanguage(value: unknown): CommentLanguage | null {
   return (COMMENT_LANGUAGES as readonly string[]).includes(v) ? (v as CommentLanguage) : null
 }
 
+/** The classifier's own sentiment judgment, independent of the intent category. */
+export type CommentSentiment = 'positive' | 'negative' | 'neutral' | 'mixed'
+export const COMMENT_SENTIMENTS: readonly CommentSentiment[] = ['positive', 'negative', 'neutral', 'mixed']
+
+/** The single strongest emotion in a comment; 'none' when it carries no real feeling. */
+export type CommentEmotion =
+  | 'anger'
+  | 'joy'
+  | 'sadness'
+  | 'frustration'
+  | 'excitement'
+  | 'confusion'
+  | 'sarcasm'
+  | 'disappointment'
+  | 'admiration'
+  | 'fear'
+  | 'none'
+export const COMMENT_EMOTIONS: readonly CommentEmotion[] = [
+  'anger',
+  'joy',
+  'sadness',
+  'frustration',
+  'excitement',
+  'confusion',
+  'sarcasm',
+  'disappointment',
+  'admiration',
+  'fear',
+  'none',
+]
+
+export function normalizeSentiment(value: unknown): CommentSentiment | null {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return (COMMENT_SENTIMENTS as readonly string[]).includes(v) ? (v as CommentSentiment) : null
+}
+
+export function normalizeEmotion(value: unknown): CommentEmotion | null {
+  const v = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if ((COMMENT_EMOTIONS as readonly string[]).includes(v)) return v as CommentEmotion
+  // Logged rather than silently dropped: an invented value ("skepticism") means the
+  // comment ends up with no emotion at all, which is invisible in the data.
+  if (v) console.warn(`Categorize: unrecognised emotion ${JSON.stringify(v)} — storing none`)
+  return v ? 'none' : null
+}
+
 export type CategorizedComment = {
   id: string
   category: string
@@ -33,6 +78,10 @@ export type CategorizedComment = {
   confidence: number
   /** Detected in the same call as the category; null when there's no language to detect. */
   language: CommentLanguage | null
+  /** The classifier's own sentiment, not derived from the category. */
+  sentiment: CommentSentiment | null
+  /** The single strongest emotion, or 'none'. */
+  emotion: CommentEmotion | null
   /** null = screened and clean, OR not screened — see escalationScreened. */
   escalation: EscalationType | null
   /** False when the model omitted the escalation key entirely. */
@@ -351,13 +400,21 @@ Separately, and INDEPENDENTLY of the category, assess whether the comment needs 
 
 Judge escalation on the comment's meaning, not its category. A comment can be "praise" or "other" and still need personal attention. Do NOT escalate ordinary negative feedback — "this is overpriced", "delivery was late", "I did not like this video" are normal complaints. Include the "escalation" key on EVERY item, using null when nothing applies.
 
+Also judge each comment's "sentiment" — how the person feels, which is INDEPENDENT of the category above. Do not map it from the category: a "question" can be negative ("why is this so expensive?"), a "praise" can be mixed ("great episode but the audio was rough"), a "complaint" can be neutral in tone, and sarcasm is usually negative however positive the words look.
+- "positive": pleased, appreciative, enthusiastic, encouraging.
+- "negative": unhappy, critical, angry, disappointed, dismissive.
+- "neutral": factual, informational or conversational, with no real feeling either way.
+- "mixed": genuinely carries BOTH positive and negative feeling (praise with a real complaint attached).
+
+Also give each comment's single primary "emotion" — the strongest one present, not a list. Use EXACTLY one of these words and never invent another: "anger", "joy", "sadness", "frustration", "excitement", "confusion", "sarcasm", "disappointment", "admiration", "fear", "none". Choose the emotion the words actually show, not the one the topic might suggest. Guidance for the common cases: flatly contradicting or correcting the creator or a guest is "frustration" (or "anger" if hostile); a rhetorical jab or mock-innocent question ("is he okay?") is "sarcasm"; wanting something that didn't happen is "disappointment"; genuinely not understanding is "confusion"; and "none" is right for a plain question, a bare statement or a link. If the feeling you see isn't in the list, pick the closest listed word, or "none".
+
 Also give each comment's "language" — the language it is WRITTEN in, not its topic. Judge the WHOLE comment, including its last sentences. Names, @handles, place names, brands and show titles are not words in any language — ignore them.
 - "english": entirely English.
 - "swahili_sheng": Swahili and/or Sheng (the Nairobi street slang built on Swahili) — ONE value; do not try to tell the two apart. Formal or everyday Swahili, casual spellings ("Saaasa", "buana"), Sheng words ("manze", "msee", "noma", "doh", "zii") and single English loanwords inside a Swahili/Sheng sentence ("Hiyo ni misandry sio feminism") are all "swahili_sheng".
 - "mixed": contains at least one whole English phrase or sentence AND at least one Swahili or Sheng phrase or sentence (e.g. "Create another channel ya wadau ya kuleta hizi updates man", or a long English comment ending in a Swahili sentence). This takes precedence: a mostly-Swahili/Sheng comment that also has a full English sentence is "mixed".
 - null: no words to judge (emoji only) or another language entirely.
 
-Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null, "language": "english"}]
+Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null, "language": "english", "sentiment": "positive", "emotion": "admiration"}]
 
 Comments:
 ${JSON.stringify(batch)}${retrySuffix}`
@@ -375,8 +432,8 @@ ${JSON.stringify(batch)}${retrySuffix}`
           },
           body: JSON.stringify({
             model: 'claude-haiku-4-5-20251001',
-            // Room for the language field on all 10 items of a batch.
-            max_tokens: 1400,
+            // Room for the language, sentiment and emotion fields on all 10 items.
+            max_tokens: 1800,
             messages: [{ role: 'user', content: prompt }],
           }),
           signal: controller.signal,
@@ -440,6 +497,8 @@ ${JSON.stringify(batch)}${retrySuffix}`
             topic: String(item.topic),
             confidence: typeof item.confidence === 'number' ? item.confidence : 0,
             language: normalizeLanguage(item.language),
+            sentiment: normalizeSentiment(item.sentiment),
+            emotion: normalizeEmotion(item.emotion),
             escalation: normalizeEscalation(item.escalation),
             escalationScreened,
           })
@@ -506,20 +565,32 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     // comment is flagged too.
     escalation_flag: c.escalation,
     language: c.language,
+    sentiment: c.sentiment,
+    emotion: c.emotion,
   }))
 
   let { error: upsertError } = await supabase
     .from('comment_categories')
     .upsert(upsertData, { onConflict: 'comment_id' })
-  // Before migration 20240101000024 the language column doesn't exist: keep
-  // categorizing (without it) rather than failing every analysis.
-  if (upsertError && (upsertError.code === 'PGRST204' || upsertError.code === '42703') && /language/.test(upsertError.message ?? '')) {
-    console.warn('comment_categories.language does not exist yet (migration 20240101000024); saving categories without language')
+  // Columns added by later migrations (language: 24; sentiment/emotion: 26). Until
+  // each exists, keep categorizing without it rather than failing every analysis.
+  const optionalColumns = ['language', 'sentiment', 'emotion'] as const
+  const dropped: string[] = []
+  for (let attempt = 0; attempt < optionalColumns.length && upsertError; attempt++) {
+    const missing = optionalColumns.find(
+      c => (upsertError!.code === 'PGRST204' || upsertError!.code === '42703') && (upsertError!.message ?? '').includes(c) && !dropped.includes(c)
+    )
+    if (!missing) break
+    dropped.push(missing)
+    console.warn(`comment_categories.${missing} does not exist yet; saving categories without it`)
     ;({ error: upsertError } = await supabase
       .from('comment_categories')
       .upsert(
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        upsertData.map(({ language: _language, ...rest }) => rest),
+        upsertData.map(row => {
+          const copy: Record<string, unknown> = { ...row }
+          dropped.forEach(c => delete copy[c])
+          return copy
+        }),
         { onConflict: 'comment_id' }
       ))
   }

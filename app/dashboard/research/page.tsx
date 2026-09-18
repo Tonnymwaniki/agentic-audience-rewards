@@ -60,7 +60,7 @@ async function loadSidebarData(
     overview: PLACEHOLDER_OVERVIEW,
     trending: [],
     interests: [],
-    sentiment: { positive: 0, neutral: 0, negative: 0, isPlaceholder: false },
+    sentiment: { positive: 0, neutral: 0, negative: 0, mixed: 0, isPlaceholder: false },
     insights: [],
   }
 
@@ -129,7 +129,7 @@ async function loadSidebarData(
   }))
 
   let interests: SidebarInterest[] = []
-  let sentiment = { positive: 0, neutral: 0, negative: 0, isPlaceholder: false }
+  let sentiment = { positive: 0, neutral: 0, negative: 0, mixed: 0, isPlaceholder: false }
   const insights: SidebarInsight[] = []
 
   const { data: notifications, error: notificationsError } = await supabase
@@ -153,12 +153,13 @@ async function loadSidebarData(
     const categories = await fetchInBatches<{
       comment_id: string
       category: string
+      sentiment: string | null
       draft_reply: string | null
       draft_reply_approved_at: string | null
       draft_reply_created_at: string | null
     }>(supabase, {
       table: 'comment_categories',
-      select: 'comment_id, category, draft_reply, draft_reply_approved_at, draft_reply_created_at',
+      select: 'comment_id, category, sentiment, draft_reply, draft_reply_approved_at, draft_reply_created_at',
       inColumn: 'comment_id',
       inValues: comments.map(c => c.id),
     })
@@ -176,12 +177,14 @@ async function loadSidebarData(
       categoryCounts.set(row.category, (categoryCounts.get(row.category) || 0) + 1)
     }
 
-    // Real, from the same category rows the interest bars use — no second pass.
+    // Real, from the same rows the interest bars use — no second pass. Uses each
+    // comment's classified sentiment where stored, the category-derived value where not.
     const breakdown = computeSentiment(categories)
     sentiment = {
       positive: breakdown.positive,
       neutral: breakdown.neutral,
       negative: breakdown.negative,
+      mixed: breakdown.mixed,
       isPlaceholder: false,
     }
 

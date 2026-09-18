@@ -13,18 +13,30 @@ export async function evaluateRewards(
 ) {
   const supabase = createServiceClient()
 
-  const { data: audienceMembers, error: membersError } = await supabase
-    .from('audience_members')
-    .select('id, display_name, reward_status, profile_summary')
-    .eq('creator_id', creator_id)
-    .eq('reward_status', 'none')
+  // Paged: PostgREST caps a response at 1000 rows, and a channel can easily have
+  // more never-rewarded members than that. Without this, everyone past the first
+  // 1000 was silently skipped — measured on a real channel, 337 of 1337 eligible
+  // members (including every author who had only replied to a comment).
+  const audienceMembers: Array<{ id: string; display_name: string; reward_status: string; profile_summary: string | null }> = []
+  const membersPageSize = 1000
+  for (let from = 0; ; from += membersPageSize) {
+    const { data, error: membersError } = await supabase
+      .from('audience_members')
+      .select('id, display_name, reward_status, profile_summary')
+      .eq('creator_id', creator_id)
+      .eq('reward_status', 'none')
+      .order('id')
+      .range(from, from + membersPageSize - 1)
 
-  if (membersError) {
-    console.error('Audience members fetch error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
-    throw new Error('Failed to fetch audience members')
+    if (membersError) {
+      console.error('Audience members fetch error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
+      throw new Error('Failed to fetch audience members')
+    }
+    audienceMembers.push(...((data ?? []) as typeof audienceMembers))
+    if (!data || data.length < membersPageSize) break
   }
 
-  if (!audienceMembers || audienceMembers.length === 0) {
+  if (audienceMembers.length === 0) {
     return { success: true, evaluated: 0, qualified: 0, results: [] }
   }
 

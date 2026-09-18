@@ -116,8 +116,15 @@ type CommentRow = {
   posted_at: string | null
   audience_member_id: string | null
   category: string | null
+  /** The classifier's own sentiment, when it has been stored; else null. */
+  sentiment?: string | null
   topic: string | null
 }
+
+// False once the database reports comment_categories.sentiment missing (migration
+// 20240101000026 not run); the breakdown then falls back to category-derived
+// sentiment for every comment, exactly as before.
+let sentimentColumnAvailable = true
 
 async function loadCreatorComments(supabase: SupabaseClient, creatorId: string): Promise<CommentRow[]> {
   const { data: posts, error: postsError } = await supabase.from('posts').select('id').eq('creator_id', creatorId)
@@ -130,10 +137,16 @@ async function loadCreatorComments(supabase: SupabaseClient, creatorId: string):
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
       .from('comments')
-      .select('id, post_id, text, posted_at, audience_member_id, comment_categories ( category, topic )')
+      .select(`id, post_id, text, posted_at, audience_member_id, comment_categories ( category, topic${sentimentColumnAvailable ? ', sentiment' : ''} )`)
       .in('post_id', postIds)
       .order('id')
       .range(from, from + pageSize - 1)
+    if (error && sentimentColumnAvailable && /sentiment/.test(error.message ?? '')) {
+      sentimentColumnAvailable = false
+      console.warn('comment_categories.sentiment does not exist yet (migration 20240101000026); using category-derived sentiment')
+      from -= pageSize // retry this page without the column
+      continue
+    }
     if (error) throw new Error(`Could not load comments: ${error.message}`)
     if (!data || data.length === 0) break
     for (const r of data) {
@@ -145,6 +158,7 @@ async function loadCreatorComments(supabase: SupabaseClient, creatorId: string):
         posted_at: (r.posted_at as string | null) ?? null,
         audience_member_id: (r.audience_member_id as string | null) ?? null,
         category: cat?.category ?? null,
+        sentiment: (cat as { sentiment?: string | null } | null)?.sentiment ?? null,
         topic: cat?.topic ?? null,
       })
     }
