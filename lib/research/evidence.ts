@@ -28,13 +28,29 @@ export type VideoEvidence = {
   title: string
 }
 
-export type Evidence = CommentEvidence | VideoEvidence
+/**
+ * An aggregate count behind a statistical claim — "this theme has 99 comments across
+ * 8 videos". A different KIND of evidence from a quoted comment: it justifies a
+ * number, not a specific example, and the UI shows it as a muted line rather than a
+ * citation chip.
+ */
+export type AggregateEvidence = {
+  ref: string
+  type: 'aggregate'
+  /** What the count covers, e.g. "the quality theme" or "negative comments since 2026-09-01". */
+  label: string
+  comment_count: number
+  video_count: number
+}
+
+export type Evidence = CommentEvidence | VideoEvidence | AggregateEvidence
 
 export class EvidenceRegistry {
   private byKey = new Map<string, Evidence>()
   private byRef = new Map<string, Evidence>()
   private comments = 0
   private videos = 0
+  private aggregates = 0
 
   /** Registers a comment (idempotent by id) and returns its ref. */
   comment(input: { id: string; text: string; author?: string | null; post_id?: string | null; video_title?: string | null }): string {
@@ -70,6 +86,29 @@ export class EvidenceRegistry {
     return ref
   }
 
+  /**
+   * Registers an aggregate (idempotent by key) and returns its ref, e.g. "A1".
+   * `key` identifies the same aggregate across tool calls in one turn, so the same
+   * theme cited twice keeps one ref.
+   */
+  aggregate(input: { key: string; label: string; comment_count: number; video_count: number }): string {
+    const key = `aggregate:${input.key}`
+    const existing = this.byKey.get(key)
+    if (existing) return existing.ref
+
+    const ref = `A${++this.aggregates}`
+    const evidence: AggregateEvidence = {
+      ref,
+      type: 'aggregate',
+      label: input.label,
+      comment_count: input.comment_count,
+      video_count: input.video_count,
+    }
+    this.byKey.set(key, evidence)
+    this.byRef.set(ref, evidence)
+    return ref
+  }
+
   get(ref: string): Evidence | undefined {
     return this.byRef.get(ref)
   }
@@ -79,8 +118,8 @@ export class EvidenceRegistry {
   }
 }
 
-/** A citation marker: [C3], [V1], or a group like [C3, C7] / [C3][V1]. */
-const CITATION_GROUP = /\s?\[((?:[CV]\d+)(?:\s*[,;]\s*[CV]\d+)*)\]/g
+/** A citation marker: [C3], [V1], [A2], or a group like [C3, C7] / [C3][V1]. */
+const CITATION_GROUP = /\s?\[((?:[CVA]\d+)(?:\s*[,;]\s*[CVA]\d+)*)\]/g
 
 export type CitationResult = {
   /** The answer with markers normalised to [C3][V1] and unknown refs removed. */
@@ -105,6 +144,7 @@ export function extractCitations(answer: string, registry: EvidenceRegistry): Ci
   const invalid: string[] = []
   let comments = 0
   let videos = 0
+  let aggregates = 0
 
   const text = answer.replace(CITATION_GROUP, (match: string, group: string) => {
     const refs = group.split(/\s*[,;]\s*/)
@@ -117,7 +157,7 @@ export function extractCitations(answer: string, registry: EvidenceRegistry): Ci
       }
       let display = displayRef.get(ref)
       if (!display) {
-        display = evidence.type === 'comment' ? `C${++comments}` : `V${++videos}`
+        display = evidence.type === 'comment' ? `C${++comments}` : evidence.type === 'video' ? `V${++videos}` : `A${++aggregates}`
         displayRef.set(ref, display)
         sources.push({ ...evidence, ref: display })
       }

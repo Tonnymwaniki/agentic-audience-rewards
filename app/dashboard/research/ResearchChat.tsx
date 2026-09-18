@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useResearchChat, type ChatMessage, type VideoCard, type StatsCard, type IdeaCard, type AnomalyCard, type PersonCard, type SourceItem } from './ResearchChatContext'
 import ReactMarkdown from 'react-markdown'
+import { formatAggregateEvidence } from '@/lib/research/aggregate-evidence'
 import Avatar from '@/components/Avatar'
 import { InterestBars, TrendingList } from './AudienceInsights'
 import type { SidebarInterest, SidebarTrendingTopic } from './ResearchSidebar'
@@ -204,7 +205,7 @@ function StatsCardDisplay({ card }: { card: StatsCard }) {
 // Renders an agent message's markdown with per-element overrides so it inherits
 // the app's theme rather than react-markdown's bare browser defaults (which would
 // come out as unstyled black-on-dark headings and browser-default list indents).
-const CITATION_MARKER = /\[([CV]\d+)\]/g
+const CITATION_MARKER = /\[([CVA]\d+)\]/g
 
 // The source a citation chip points at, scoped per message: every answer numbers
 // its own refs from C1, so an unscoped id would jump to the wrong message's source.
@@ -230,12 +231,27 @@ function MarkdownMessage({
   scope: string
 }) {
   const known = new Set((sources ?? []).map(s => s.ref))
-  // [C3] becomes a markdown link so the renderer below can draw it as a chip.
-  // Refs the server didn't return as sources are left as plain text (the server
-  // already strips any a tool never produced, so this is only a safety net).
+  // Aggregate refs render as their own line, so a marker left mid-sentence would cut
+  // the sentence in half — "...appreciation", then the Evidence line, then a stranded
+  // ". The next point". Moving each paragraph's aggregate refs to the end of that
+  // paragraph keeps the line under the claim it belongs to without breaking the prose.
+  const withAggregatesAtEnd = content
+    .split(/\n{2,}/)
+    .map(block => {
+      const refs = [...new Set([...block.matchAll(/\[(A\d+)\]/g)].map(m => m[1]))].filter(r => known.has(r))
+      if (refs.length === 0) return block.replace(/[ \t]*\[A\d+\]/g, '')
+      const stripped = block.replace(/[ \t]*\[A\d+\]/g, '').replace(/[ \t]+([.,;:!?])/g, '$1')
+      // ONE marker carrying every aggregate in this paragraph, so they render as a
+      // single combined line rather than a stack of near-identical ones.
+      return `${stripped.trimEnd()} [evidence](#agg-${refs.join(',')})`
+    })
+    .join('\n\n')
+
   const withCitationLinks = known.size
-    ? content.replace(CITATION_MARKER, (marker, ref: string) => (known.has(ref) ? `[${ref}](#cite-${ref})` : marker))
-    : content
+    ? withAggregatesAtEnd.replace(CITATION_MARKER, (marker, ref: string) =>
+        known.has(ref) && !ref.startsWith('A') ? `[${ref}](#cite-${ref})` : marker
+      )
+    : withAggregatesAtEnd
 
   return (
     <div className="text-sm leading-relaxed text-text-primary">
@@ -257,10 +273,30 @@ function MarkdownMessage({
             <h3 className="mb-2 font-display text-sm font-semibold text-text-primary">{children}</h3>
           ),
           a: ({ href, children }) => {
+            // Aggregate evidence is a different kind of thing from a quoted
+            // example: it backs numbers, so a paragraph's aggregates read as one
+            // muted line under the claim rather than chips pointing at comments.
+            if (href?.startsWith('#agg-')) {
+              const refs = href.slice('#agg-'.length).split(',')
+              const aggregates = refs
+                .map(ref => (sources ?? []).find(s => s.ref === ref))
+                .filter((s): s is Extract<SourceItem, { type: 'aggregate' }> => s?.type === 'aggregate')
+              if (aggregates.length === 0) return null
+              return (
+                <span className="mt-1 block font-mono text-[10px] tracking-wide text-text-muted">
+                  Evidence: {formatAggregateEvidence(aggregates)}
+                </span>
+              )
+            }
             if (href?.startsWith('#cite-')) {
               const ref = href.slice('#cite-'.length)
               const source = sources?.find(s => s.ref === ref)
-              const label = source?.type === 'comment' ? `Comment by ${source.author ?? 'a viewer'}` : source ? `Video: ${source.title}` : ref
+              const label =
+                source?.type === 'comment'
+                  ? `Comment by ${source.author ?? 'a viewer'}`
+                  : source?.type === 'video'
+                    ? `Video: ${source.title}`
+                    : ref
               return (
                 <sup className="ml-0.5">
                   <a
@@ -323,11 +359,14 @@ function plainCommentText(text: string) {
 // the server returned for this turn — every entry is a comment or video a tool
 // actually retrieved.
 function SourcesList({ sources, scope }: { sources: SourceItem[]; scope: string }) {
+  // Aggregates are rendered inline under their claim, not as source entries.
+  const listed = sources.filter(s => s.type !== 'aggregate')
+  if (listed.length === 0) return null
   return (
     <div className="mt-3 border-t border-white/10 pt-3">
       <p className="mb-2 font-mono text-[10px] tracking-wide text-text-muted uppercase">Sources</p>
       <ol className="space-y-1.5">
-        {sources.map(source => (
+        {listed.map(source => (
           <li
             key={source.ref}
             id={sourceElementId(scope, source.ref)}

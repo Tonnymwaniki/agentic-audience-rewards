@@ -390,7 +390,16 @@ async function computePeriodBreakdown(
     videos.set(c.post_id, (videos.get(c.post_id) || 0) + 1)
   }
 
+  const distinctVideos = new Set(matching.map(c => c.post_id)).size
   return {
+    // Aggregate evidence for any count or percentage quoted from this breakdown.
+    evidence_ref: ctx.evidence.aggregate({
+      key: `breakdown:${describe}`,
+      label: `comments ${describe}`,
+      comment_count: matching.length,
+      video_count: distinctVideos,
+    }),
+    distinct_videos: distinctVideos,
     scope: `Counts over ALL ${matching.length} comments ${describe} — every matching comment, not only the results listed. Use these figures, not get_audience_insights, for this period.`,
     total_comments: matching.length,
     // Counts and percentages under separate, explicit names. With both under plain
@@ -838,6 +847,15 @@ export async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?:
     insights: insights.map(i => ({
       topic: i.topic,
       comment_count: i.comment_count,
+      // Aggregate evidence for any number quoted from this theme: cite it as [A#]
+      // after the claim, alongside (not instead of) the [C#] examples below.
+      evidence_ref: ctx.evidence.aggregate({
+        key: `insight:${i.topic}`,
+        label: `the ${i.topic} theme`,
+        comment_count: i.comment_count,
+        video_count: new Set(i.related_post_ids ?? []).size,
+      }),
+      videos_discussing: new Set(i.related_post_ids ?? []).size,
       sentiment_breakdown: i.sentiment_breakdown,
       trend: { direction: i.trend_direction, pct: i.trend_pct === null ? null : Number(i.trend_pct) },
       confidence: Number(i.confidence),
@@ -1980,6 +1998,8 @@ Relative dates: "last month" always means the previous full calendar month — $
 For questions about change over time ("how has sentiment changed compared to last month", "are complaints up this month"), call compare_periods once with both periods rather than searching each period separately.
 
 You are an audience research assistant for a content creator. You have tools that query their real, live audience data — use them whenever a question needs specific facts rather than guessing. You can call more than one tool across a conversation turn if needed (e.g. look up a video, then compare it to another). Reference specific numbers and real quotes from tool results. Keep answers concise (2-5 sentences unless the data genuinely warrants a short list) and conversational. Light markdown is supported and rendered in the UI — use **bold** for key numbers, names, or video titles, and bullet or numbered lists when presenting several items. Don't over-format short answers; a one-line reply needs no formatting at all.
+
+Two kinds of evidence, both used together. Individual examples: tool results tag comments with a "ref" like "C4" and videos with a "video_ref" like "V2". Aggregate counts: get_audience_insights themes and search_comments' breakdown carry an "evidence_ref" like "A1" standing for the whole set the numbers came from. When a sentence states a statistic drawn from one of those — a theme's comment count, a filtered count, a percentage of them — put that [A#] at the end of the sentence, IN ADDITION to any [C#] examples you quote. Use an [A#] only for a number that really came from that set; a sentence quoting comments still gets its [C#] refs.
 
 Citations: tool results tag individual comments with a "ref" like "C4" and videos with a "video_ref" like "V2". When a sentence states something drawn from specific comments or videos — a quote, an example, a count about a video — put the matching refs in square brackets right after that claim, like "Several viewers ask about delivery [C2][C5]." Only use refs that appear in this turn's tool results; never invent one. Greetings, general statements and suggestions need no citation.
 

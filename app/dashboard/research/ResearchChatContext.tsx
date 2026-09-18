@@ -56,6 +56,7 @@ export type SourceItem =
       video_title: string | null
     }
   | { ref: string; type: 'video'; post_id: string; title: string }
+  | { ref: string; type: 'aggregate'; label: string; comment_count: number; video_count: number }
 
 export type ChatMessage = {
   role: 'user' | 'assistant'
