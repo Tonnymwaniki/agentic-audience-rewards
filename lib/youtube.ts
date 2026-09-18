@@ -9,11 +9,56 @@ function parseCount(raw: unknown): number | null {
   return Number.isFinite(n) ? n : null
 }
 
+/**
+ * An ISO 8601 duration as YouTube sends it (PT15M33S, PT1H2M, P1DT2H) in seconds.
+ * null for anything unparseable, and for live streams, which report P0D.
+ */
+export function parseIsoDuration(raw: unknown): number | null {
+  if (typeof raw !== 'string') return null
+  const match = raw.match(/^P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:\.\d+)?)S)?)?$/)
+  if (!match) return null
+  const [, days, hours, minutes, seconds] = match
+  const total = Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes ?? 0) * 60 + Number(seconds ?? 0)
+  return total > 0 ? Math.round(total) : null
+}
+
+/**
+ * YouTube's category names, looked up once per id per process. videoCategories.list
+ * costs 1 quota unit and the names never change, so caching keeps re-ingesting a
+ * channel from paying for the same lookup repeatedly. Falls back to the raw id.
+ */
+const categoryNames = new Map<string, string>()
+
+export async function youtubeCategoryName(categoryId: unknown): Promise<string | null> {
+  if (typeof categoryId !== 'string' || !categoryId) return null
+  const cached = categoryNames.get(categoryId)
+  if (cached) return cached
+  try {
+    const url = new URL(`${YOUTUBE_API_BASE}/videoCategories`)
+    url.searchParams.set('part', 'snippet')
+    url.searchParams.set('id', categoryId)
+    url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
+    const res = await fetch(url.toString())
+    if (!res.ok) throw new Error(`YouTube API error: ${res.status}`)
+    const data = await res.json()
+    const title = data.items?.[0]?.snippet?.title
+    if (typeof title === 'string' && title) {
+      categoryNames.set(categoryId, title)
+      return title
+    }
+  } catch (err) {
+    console.warn(`Could not resolve YouTube category ${categoryId}:`, err instanceof Error ? err.message : err)
+  }
+  // The raw id is still useful, and keeps the column populated.
+  return categoryId
+}
+
 export async function fetchVideoMeta(videoId: string) {
   const url = new URL(`${YOUTUBE_API_BASE}/videos`)
-  // snippet and statistics in ONE request — videos.list accepts multiple parts, so
-  // asking separately would double the quota cost for the same data.
-  url.searchParams.set('part', 'snippet,statistics')
+  // snippet, statistics and contentDetails in ONE request — videos.list accepts
+  // multiple parts, so asking separately would multiply the quota cost for the same
+  // data.
+  url.searchParams.set('part', 'snippet,statistics,contentDetails')
   url.searchParams.set('id', videoId)
   url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
 
@@ -43,6 +88,8 @@ export async function fetchVideoMeta(videoId: string) {
     thumbnailUrl,
     likeCount: parseCount(statistics.likeCount),
     viewCount: parseCount(statistics.viewCount),
+    durationSeconds: parseIsoDuration(item.contentDetails?.duration),
+    youtubeCategory: await youtubeCategoryName(snippet.categoryId),
   }
 }
 

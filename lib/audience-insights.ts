@@ -68,6 +68,22 @@ export function themeForTopic(topic: string | null | undefined): string | null {
   return head
 }
 
+/**
+ * Every distinct theme a comment belongs to. Multi-topic comments (migration
+ * 20240101000027) map to one theme per topic; older rows fall back to their single
+ * `topic`. Deduplicated, because two topics can share a head word ("video_quality"
+ * and "content_quality" are both "quality").
+ */
+export function themesForRow(row: { topic: string | null; topics?: string[] | null }): string[] {
+  const source = row.topics && row.topics.length > 0 ? row.topics : [row.topic]
+  const themes = new Set<string>()
+  for (const topic of source) {
+    const theme = themeForTopic(topic)
+    if (theme) themes.add(theme)
+  }
+  return [...themes]
+}
+
 export function confidenceForSampleSize(n: number): number {
   return Math.round((n / (n + CONFIDENCE_K)) * 100) / 100
 }
@@ -118,6 +134,8 @@ type CommentRow = {
   category: string | null
   /** The classifier's own sentiment, when it has been stored; else null. */
   sentiment?: string | null
+  /** Every topic the comment covers; falls back to [topic] for older rows. */
+  topics?: string[] | null
   topic: string | null
 }
 
@@ -125,6 +143,9 @@ type CommentRow = {
 // 20240101000026 not run); the breakdown then falls back to category-derived
 // sentiment for every comment, exactly as before.
 let sentimentColumnAvailable = true
+// Same for comment_categories.topics (migration 20240101000027): until it exists,
+// themes come from the single `topic` column exactly as before.
+let topicsColumnAvailable = true
 
 async function loadCreatorComments(supabase: SupabaseClient, creatorId: string): Promise<CommentRow[]> {
   const { data: posts, error: postsError } = await supabase.from('posts').select('id').eq('creator_id', creatorId)
@@ -137,7 +158,9 @@ async function loadCreatorComments(supabase: SupabaseClient, creatorId: string):
   for (let from = 0; ; from += pageSize) {
     const { data, error } = await supabase
       .from('comments')
-      .select(`id, post_id, text, posted_at, audience_member_id, comment_categories ( category, topic${sentimentColumnAvailable ? ', sentiment' : ''} )`)
+      .select(
+        `id, post_id, text, posted_at, audience_member_id, comment_categories ( category, topic${topicsColumnAvailable ? ', topics' : ''}${sentimentColumnAvailable ? ', sentiment' : ''} )`
+      )
       .in('post_id', postIds)
       .order('id')
       .range(from, from + pageSize - 1)
@@ -145,6 +168,12 @@ async function loadCreatorComments(supabase: SupabaseClient, creatorId: string):
       sentimentColumnAvailable = false
       console.warn('comment_categories.sentiment does not exist yet (migration 20240101000026); using category-derived sentiment')
       from -= pageSize // retry this page without the column
+      continue
+    }
+    if (error && topicsColumnAvailable && /topics/.test(error.message ?? '')) {
+      topicsColumnAvailable = false
+      console.warn('comment_categories.topics does not exist yet (migration 20240101000027); grouping themes by the single topic')
+      from -= pageSize
       continue
     }
     if (error) throw new Error(`Could not load comments: ${error.message}`)
@@ -159,6 +188,7 @@ async function loadCreatorComments(supabase: SupabaseClient, creatorId: string):
         audience_member_id: (r.audience_member_id as string | null) ?? null,
         category: cat?.category ?? null,
         sentiment: (cat as { sentiment?: string | null } | null)?.sentiment ?? null,
+        topics: (cat as { topics?: string[] | null } | null)?.topics ?? null,
         topic: cat?.topic ?? null,
       })
     }
@@ -223,9 +253,14 @@ export async function computeAudienceInsights(
 
   const byTheme = new Map<string, CommentRow[]>()
   for (const c of comments) {
-    const theme = themeForTopic(c.topic)
-    if (!theme) continue
-    byTheme.set(theme, [...(byTheme.get(theme) ?? []), c])
+    // A comment tagged "price" and "delivery" counts toward BOTH themes, so a
+    // theme's comment_count is a MENTION count: the theme counts can add up to more
+    // than the number of comments. Every total used as a denominator below
+    // (totalRecent/totalPrevious, and the channel's comment count) still counts each
+    // comment exactly once, so shares and trends stay comparable.
+    for (const theme of themesForRow(c)) {
+      byTheme.set(theme, [...(byTheme.get(theme) ?? []), c])
+    }
   }
 
   const top = [...byTheme]

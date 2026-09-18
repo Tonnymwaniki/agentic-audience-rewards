@@ -71,10 +71,32 @@ export function normalizeEmotion(value: unknown): CommentEmotion | null {
   return v ? 'none' : null
 }
 
+/** Most topics one comment can be tagged with. */
+export const MAX_TOPICS_PER_COMMENT = 3
+
+/**
+ * The comment's topics, trimmed, lower-cased, de-duplicated and capped. A comment
+ * about price AND delivery keeps both; `topic` below stays the first one.
+ */
+export function normalizeTopics(value: unknown, fallback?: unknown): string[] {
+  const raw = Array.isArray(value) ? value : [fallback]
+  const seen = new Set<string>()
+  for (const item of raw) {
+    if (typeof item !== 'string') continue
+    const topic = item.trim().toLowerCase().replace(/\s+/g, '_')
+    if (topic && !seen.has(topic)) seen.add(topic)
+    if (seen.size === MAX_TOPICS_PER_COMMENT) break
+  }
+  return [...seen]
+}
+
 export type CategorizedComment = {
   id: string
   category: string
+  /** The primary topic: topics[0], kept for anything reading a single topic. */
   topic: string
+  /** Every topic the comment covers, most important first. */
+  topics: string[]
   confidence: number
   /** Detected in the same call as the category; null when there's no language to detect. */
   language: CommentLanguage | null
@@ -380,7 +402,7 @@ async function processBatch(
       ? '\n\nYour previous response was not valid JSON. Respond with ONLY the JSON array, nothing else.'
       : ''
 
-    const prompt = `You are categorizing audience comments. For each comment, return its category and a short topic tag. Treat Sheng/Swahili/English code-switched text as meaningful, not spam.
+    const prompt = `You are categorizing audience comments. For each comment, return its category and its topics. Treat Sheng/Swahili/English code-switched text as meaningful, not spam.
 
 Categories — pick exactly one:
 - "purchase_intent": GENUINE COMMERCIAL interest in the creator's business. The person wants to buy a product or service, asks about price, cost, stock or how to order, wants delivery of something they intend to buy, or wants to buy wholesale to resell. Asking for a phone or WhatsApp number in order to buy counts. Direction matters: someone asking the creator to sell or supply THEM ("can you sell me stock", "I want to buy in bulk") is purchase_intent; someone offering the creator THEIR OWN services, skills, supplies or a collaboration is NOT purchase_intent — that is content_request.
@@ -400,6 +422,8 @@ Separately, and INDEPENDENTLY of the category, assess whether the comment needs 
 
 Judge escalation on the comment's meaning, not its category. A comment can be "praise" or "other" and still need personal attention. Do NOT escalate ordinary negative feedback — "this is overpriced", "delivery was late", "I did not like this video" are normal complaints. Include the "escalation" key on EVERY item, using null when nothing applies.
 
+Give each comment 1 to 3 "topics": short snake_case tags for what it is about, most important first. Use more than one ONLY when the comment genuinely covers more than one thing — "great video but delivery was slow" is ["video_quality", "delivery"], while "loved this episode" is just ["content_quality"]. Do not pad the list.
+
 Also judge each comment's "sentiment" — how the person feels, which is INDEPENDENT of the category above. Do not map it from the category: a "question" can be negative ("why is this so expensive?"), a "praise" can be mixed ("great episode but the audio was rough"), a "complaint" can be neutral in tone, and sarcasm is usually negative however positive the words look.
 - "positive": pleased, appreciative, enthusiastic, encouraging.
 - "negative": unhappy, critical, angry, disappointed, dismissive.
@@ -414,7 +438,7 @@ Also give each comment's "language" — the language it is WRITTEN in, not its t
 - "mixed": contains at least one whole English phrase or sentence AND at least one Swahili or Sheng phrase or sentence (e.g. "Create another channel ya wadau ya kuleta hizi updates man", or a long English comment ending in a Swahili sentence). This takes precedence: a mostly-Swahili/Sheng comment that also has a full English sentence is "mixed".
 - null: no words to judge (emoji only) or another language entirely.
 
-Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topic": "...", "confidence": 0.0-1.0, "escalation": null, "language": "english", "sentiment": "positive", "emotion": "admiration"}]
+Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topics": ["..."], "confidence": 0.0-1.0, "escalation": null, "language": "english", "sentiment": "positive", "emotion": "admiration"}]
 
 Comments:
 ${JSON.stringify(batch)}${retrySuffix}`
@@ -494,7 +518,8 @@ ${JSON.stringify(batch)}${retrySuffix}`
           batchResults.push({
             id: item.id,
             category: String(item.category),
-            topic: String(item.topic),
+            topic: normalizeTopics(item.topics, item.topic)[0] ?? String(item.topic ?? ''),
+            topics: normalizeTopics(item.topics, item.topic),
             confidence: typeof item.confidence === 'number' ? item.confidence : 0,
             language: normalizeLanguage(item.language),
             sentiment: normalizeSentiment(item.sentiment),
@@ -559,6 +584,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     comment_id: c.id,
     category: c.category,
     topic: c.topic,
+    topics: c.topics,
     confidence: c.confidence,
     // Written for EVERY comment now, not only draftable ones — which is the point
     // of folding this into the batch: crisis language in a 'praise' or 'other'
@@ -574,7 +600,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     .upsert(upsertData, { onConflict: 'comment_id' })
   // Columns added by later migrations (language: 24; sentiment/emotion: 26). Until
   // each exists, keep categorizing without it rather than failing every analysis.
-  const optionalColumns = ['language', 'sentiment', 'emotion'] as const
+  const optionalColumns = ['language', 'sentiment', 'emotion', 'topics'] as const
   const dropped: string[] = []
   for (let attempt = 0; attempt < optionalColumns.length && upsertError; attempt++) {
     const missing = optionalColumns.find(

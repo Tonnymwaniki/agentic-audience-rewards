@@ -4,7 +4,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 // the get_trending tool can never disagree about what's trending.
 import { computeTrendingGroups, computeSentiment, sentimentForRow, SENTIMENTS, type Sentiment } from '@/lib/trending'
 import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
-import { loadAudienceInsights, themeForTopic } from '@/lib/audience-insights'
+import { loadAudienceInsights, themesForRow } from '@/lib/audience-insights'
 import { COMMENT_LANGUAGES, COMMENT_EMOTIONS, type CommentLanguage, type CommentEmotion } from '@/lib/categorize'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
@@ -80,6 +80,8 @@ type RichCommentRow = {
 type CategoryInfo = {
   category: string
   topic: string | null
+  /** Every topic the comment covers (migration 20240101000027); older rows have none. */
+  topics?: string[] | null
   /** Absent until migration 20240101000024; null when none was detected. */
   language?: string | null
   /** The classifier's own sentiment and primary emotion (migration 20240101000026). */
@@ -185,6 +187,7 @@ function resolvePostId(ctx: ToolContext, idOrTitle: string): string | null {
 // missing column must degrade to "no language data", never to "no comments".
 let commentLanguageColumnAvailable = true
 let commentSentimentColumnsAvailable = true
+let commentTopicsColumnAvailable = true
 
 async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): Promise<RichCommentRow[]> {
   if (postIds.length === 0) return []
@@ -205,7 +208,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
         posted_at,
         audience_member_id,
         audience_members ( display_name ),
-        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentLanguageColumnAvailable ? ', language' : ''}${commentSentimentColumnsAvailable ? ', sentiment, emotion' : ''} )
+        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentTopicsColumnAvailable ? ', topics' : ''}${commentLanguageColumnAvailable ? ', language' : ''}${commentSentimentColumnsAvailable ? ', sentiment, emotion' : ''} )
       `
       )
       .in('post_id', postIds)
@@ -216,6 +219,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
     for (let attempt = 0; attempt < 2 && error; attempt++) {
       if (commentLanguageColumnAvailable && /language/.test(error.message ?? '')) commentLanguageColumnAvailable = false
       else if (commentSentimentColumnsAvailable && /(sentiment|emotion)/.test(error.message ?? '')) commentSentimentColumnsAvailable = false
+      else if (commentTopicsColumnAvailable && /topics/.test(error.message ?? '')) commentTopicsColumnAvailable = false
       else break
       ;({ data: batch, error } = await selectBatch(offset))
     }
@@ -246,7 +250,10 @@ function videoBreakdown(comments: RichCommentRow[]) {
     const cat = getCatInfo(c)
     if (!cat) continue
     categoryCounts[cat.category] = (categoryCounts[cat.category] || 0) + 1
-    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+    // Every topic the comment covers, not only the primary one.
+    for (const topic of cat.topics?.length ? cat.topics : [cat.topic]) {
+      if (topic) topicCounts[topic] = (topicCounts[topic] || 0) + 1
+    }
   }
 
   const topTopics = Object.fromEntries(
@@ -358,8 +365,9 @@ async function computePeriodBreakdown(
     if (!info?.category) uncategorized++
     else categories[info.category] = (categories[info.category] || 0) + 1
 
-    const theme = themeForTopic(info?.topic)
-    if (theme) {
+    // A comment covering two topics counts toward BOTH themes, so these counts are
+    // mentions and can total more than total_comments (see top_themes_note).
+    for (const theme of themesForRow({ topic: info?.topic ?? null, topics: info?.topics })) {
       const entry = themes.get(theme) ?? { count: 0, positive: 0, negative: 0, neutral: 0, mixed: 0 }
       entry.count++
       const sentiment = rowSentiment(c)
@@ -393,6 +401,8 @@ async function computePeriodBreakdown(
     // introduced. Stated explicitly so an answer can't present the emotion mix of a
     // classified subset as the mix of every comment.
     emotions_coverage: `${matching.length - (emotions.not_classified ?? 0)} of ${matching.length} comments have a classified emotion; the rest were categorized before emotion classification existed and are counted as not_classified. Say so if you report the emotion mix.`,
+    top_themes_note:
+      'Counts are MENTIONS: a comment covering two topics counts toward both themes, so these can add up to more than total_comments. total_comments counts each comment once.',
     top_themes: [...themes]
       .sort((a, b) => b[1].count - a[1].count || a[0].localeCompare(b[0]))
       .slice(0, PERIOD_BREAKDOWN_THEMES)
@@ -1119,7 +1129,10 @@ async function toolGetChannelOverview(ctx: ToolContext) {
 
     categorized++
     categoryCounts[cat.category] = (categoryCounts[cat.category] || 0) + 1
-    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+    // Every topic the comment covers, not only the primary one.
+    for (const topic of cat.topics?.length ? cat.topics : [cat.topic]) {
+      if (topic) topicCounts[topic] = (topicCounts[topic] || 0) + 1
+    }
     if (cat.draft_reply && !cat.draft_reply_approved_at) pendingInquiries++
   }
 
@@ -1157,7 +1170,10 @@ export async function toolSuggestContentIdeas(ctx: ToolContext) {
     const cat = getCatInfo(c)
     if (!cat) continue
 
-    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+    // Every topic the comment covers, not only the primary one.
+    for (const topic of cat.topics?.length ? cat.topics : [cat.topic]) {
+      if (topic) topicCounts[topic] = (topicCounts[topic] || 0) + 1
+    }
     // Only business-relevant questions (they cleared the relevance check and got
     // a drafted reply) — casual "when's the next upload" noise isn't a content signal.
     if (cat.category === 'question' && cat.draft_reply) questions.push(c)
@@ -1316,7 +1332,10 @@ async function toolGetWeeklyDigest(ctx: ToolContext) {
 
     if (!cat) continue
     categoryCounts[cat.category] = (categoryCounts[cat.category] || 0) + 1
-    if (cat.topic) topicCounts[cat.topic] = (topicCounts[cat.topic] || 0) + 1
+    // Every topic the comment covers, not only the primary one.
+    for (const topic of cat.topics?.length ? cat.topics : [cat.topic]) {
+      if (topic) topicCounts[topic] = (topicCounts[topic] || 0) + 1
+    }
   }
 
   const weekEvents = events.filter(e => {

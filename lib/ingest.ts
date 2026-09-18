@@ -27,6 +27,12 @@ const optionalColumns: Record<'like_count' | 'reply_count' | 'parent_comment_id'
   parent_comment_id: true,
 }
 
+/** Post columns added by migration 20240101000027, dropped until it has been run. */
+const optionalPostColumns: Record<'duration_seconds' | 'youtube_category', boolean> = {
+  duration_seconds: true,
+  youtube_category: true,
+}
+
 /** The column an "unknown column" error names, if it's one of the optional ones. */
 function missingOptionalColumn(error: { code?: string; message?: string } | null): keyof typeof optionalColumns | null {
   if (!error || (error.code !== 'PGRST204' && error.code !== '42703')) return null
@@ -183,28 +189,41 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     throw new Error('YouTube platform not found in platforms table')
   }
 
-  const { data: post, error: postError } = await supabase
-    .from('posts')
-    .upsert(
-      {
-        platform_id: platform.id,
-        creator_id,
-        external_post_id: videoId,
-        title: meta.title,
-        content: meta.description,
-        thumbnail_url: meta.thumbnailUrl,
-        // Refreshed on every re-ingest of the same video, since the upsert conflicts
-        // on (platform_id, external_post_id) — so counts track the video over time
-        // rather than freezing at whatever they were on first import.
-        like_count: meta.likeCount,
-        view_count: meta.viewCount,
-      },
-      {
-        onConflict: 'platform_id, external_post_id',
-      }
+  const postValues: Record<string, unknown> = {
+    platform_id: platform.id,
+    creator_id,
+    external_post_id: videoId,
+    title: meta.title,
+    content: meta.description,
+    thumbnail_url: meta.thumbnailUrl,
+    // Refreshed on every re-ingest of the same video, since the upsert conflicts
+    // on (platform_id, external_post_id) — so counts track the video over time
+    // rather than freezing at whatever they were on first import.
+    like_count: meta.likeCount,
+    view_count: meta.viewCount,
+    duration_seconds: meta.durationSeconds,
+    youtube_category: meta.youtubeCategory,
+  }
+
+  const upsertPost = () => {
+    const values = { ...postValues }
+    for (const [column, available] of Object.entries(optionalPostColumns)) {
+      if (!available) delete values[column]
+    }
+    return supabase.from('posts').upsert(values, { onConflict: 'platform_id, external_post_id' }).select('id').single()
+  }
+
+  let { data: post, error: postError } = await upsertPost()
+  // One retry per missing column, only on a database without migration 27.
+  for (let i = 0; i < 2 && postError; i++) {
+    const missing = (Object.keys(optionalPostColumns) as Array<keyof typeof optionalPostColumns>).find(
+      c => (postError!.code === 'PGRST204' || postError!.code === '42703') && (postError!.message ?? '').includes(c)
     )
-    .select('id')
-    .single()
+    if (!missing) break
+    optionalPostColumns[missing] = false
+    console.warn(`posts.${missing} does not exist yet (migration 20240101000027); ingesting without it`)
+    ;({ data: post, error: postError } = await upsertPost())
+  }
 
   if (postError || !post) {
     throw new Error('Failed to upsert post')
