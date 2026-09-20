@@ -219,8 +219,8 @@ function InsightsCard({ insights }: { insights: SidebarInsight[] }) {
     <SidebarCard
       title="Recent insights"
       action={
-        <Link href="/dashboard/highlights" className="text-[10px] text-purple-text hover:underline">
-          Highlights
+        <Link href="/dashboard/notifications" className="text-[10px] text-purple-text hover:underline">
+          Inbox
         </Link>
       }
     >

@@ -636,6 +636,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
   let postTitle = ''
   let postDescription = ''
+  let postCreatorId: string | null = null
   let businessProfile: BusinessProfile | null = null
   let styleExamples: StyleExample[] = []
 
@@ -653,6 +654,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     } else if (post) {
       postTitle = post.title || ''
       postDescription = post.content || ''
+      postCreatorId = post.creator_id || null
 
       // Once per post, not per comment. Unlike the business profile this applies to
       // every draftable category, since voice isn't category-specific.
@@ -681,6 +683,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     }
   }
 
+  // Everything that earns a notification inbox entry. Two kinds, matching what the
+  // old Highlights page surfaced:
+  //   - a comment that got a drafted reply and is waiting for approval
+  //   - a comment flagged for escalation, which deliberately gets NO draft and
+  //     needs the creator to answer personally
+  // Collected here and written in one insert after the loop rather than one insert
+  // per comment, which on a first analysis would be hundreds of round trips.
+  const notifiable: Array<{ commentId: string; category: string; text: string }> = []
+
   for (const comment of draftable) {
     const text = uncategorizedTextMap.get(comment.id)
     if (!text) continue
@@ -690,7 +701,11 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       // escalation_flag, so no extra call here — just honour it. It still overrides
       // both the relevance check and drafting: a legal threat classified as a
       // "question" must not get a helpful auto-reply however confident the model is.
-      if (comment.escalation) continue
+      if (comment.escalation) {
+        // No draft, but this is the highest-priority thing in the inbox.
+        notifiable.push({ commentId: comment.id, category: comment.category, text })
+        continue
+      }
 
       if (!comment.escalationScreened) {
         // The model omitted the escalation key for this item. No flag is written —
@@ -716,10 +731,78 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
           draft_reply_created_at: new Date().toISOString(),
         })
         .eq('comment_id', comment.id)
+
+      notifiable.push({ commentId: comment.id, category: comment.category, text })
     } catch (err) {
       console.error('Draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
     }
   }
 
+  await createDraftNotifications(supabase, postCreatorId, postTitle, notifiable)
+
   return { success: true, categorized: categorized.length }
+}
+
+/**
+ * Writes one notification per comment that now needs the creator's attention.
+ *
+ * This is the single place notifications are created for drafted or escalated
+ * comments. The cron poller used to insert its own rows after calling
+ * categorizePost, which double-notified once this moved here; it now relies on
+ * this function, so every path that produces a draft — first analysis, manual
+ * re-analysis, cron polling — produces the same inbox entry.
+ *
+ * Only comment_id is stored, not a copy of the draft: the inbox joins through to
+ * comment_categories at render time, so an edited or regenerated draft shows its
+ * current text rather than a stale snapshot.
+ *
+ * Never throws. A notification is an accessory to the draft that was already
+ * written successfully — failing the whole analysis over one is the wrong trade.
+ */
+async function createDraftNotifications(
+  supabase: SupabaseClient,
+  creatorId: string | null,
+  videoTitle: string,
+  notifiable: Array<{ commentId: string; category: string; text: string }>
+): Promise<void> {
+  if (!creatorId || notifiable.length === 0) return
+
+  try {
+    // Re-drafting an existing comment (profile edits trigger a regeneration across
+    // every video) must not add a second row for a comment already in the inbox.
+    const { data: existing, error: existingError } = await supabase
+      .from('notifications')
+      .select('comment_id')
+      .eq('creator_id', creatorId)
+      .in('comment_id', notifiable.map(n => n.commentId))
+
+    if (existingError) {
+      console.error('Notification dedupe check error:', JSON.stringify(existingError, Object.getOwnPropertyNames(existingError), 2))
+      return
+    }
+
+    const already = new Set((existing || []).map(row => row.comment_id))
+    const rows = notifiable
+      .filter(n => !already.has(n.commentId))
+      .map(n => ({
+        creator_id: creatorId,
+        comment_id: n.commentId,
+        type: n.category,
+        message: `New ${n.category.replace(/_/g, ' ')} comment${videoTitle ? ` on ${videoTitle}` : ''}: ${
+          n.text.length > 100 ? n.text.slice(0, 100) + '…' : n.text
+        }`,
+      }))
+
+    if (rows.length === 0) return
+
+    const { error: insertError } = await supabase.from('notifications').insert(rows)
+    if (insertError) {
+      console.error('Notification insert error:', JSON.stringify(insertError, Object.getOwnPropertyNames(insertError), 2))
+      return
+    }
+
+    console.log(`Categorize: created ${rows.length} notification(s) for creator ${creatorId}.`)
+  } catch (err) {
+    console.error('Notification creation crashed:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+  }
 }

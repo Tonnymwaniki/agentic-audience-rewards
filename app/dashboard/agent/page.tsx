@@ -230,12 +230,9 @@ export default async function AgentHomePage() {
     .sort()
     .pop() ?? null
 
-  // --- Needs Your Attention: the same selection Highlights uses, previewed ---
-  const { draftHighlights, escalatedHighlights, totalPendingDrafts } = await loadHighlights(
-    supabase,
-    creator.id,
-    ATTENTION_PREVIEW_LIMIT
-  )
+  // --- Pending drafts. The cards themselves now live in the notification inbox;
+  // this is still loaded because Recent Activity below is built from it. ---
+  const { draftHighlights } = await loadHighlights(supabase, creator.id, ATTENTION_PREVIEW_LIMIT)
 
   // --- Recent Activity. Built from data already loaded above rather than
   // re-querying: draftHighlights doubles as the pending-draft stream. ---
@@ -277,11 +274,8 @@ export default async function AgentHomePage() {
         totalCommentsCount={totalCommentsCount}
         totalDraftsCount={totalDraftsCount}
         totalRecognizedCount={totalRecognizedCount}
-        pendingHighlightsCount={totalPendingDrafts}
         repliesReadyCount={repliesReadyCount}
         purchaseIntentReadyCount={purchaseIntentReadyCount}
-        attentionItems={draftHighlights}
-        escalatedItems={escalatedHighlights}
         activity={activity}
         categoryCounts={categoryCounts}
       />

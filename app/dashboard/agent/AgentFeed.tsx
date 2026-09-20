@@ -1,18 +1,14 @@
 import Link from 'next/link'
-import type { Highlight } from '@/lib/highlights'
 import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
-import AttentionList from './AttentionList'
-import { ESCALATION_LABELS, ESCALATION_NOTE, normalizeEscalation } from '@/lib/escalation'
 import CategoryBreakdown, { type CategoryCounts } from './CategoryBreakdown'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
 // desktop. Nothing here is a shrunken desktop layout.
 //
-// Note: no 'use client'. Only the attention cards need interactivity (Approve /
-// Copy), and those live in AttentionList — everything else is server-rendered
-// and ships no JS.
+// Note: no 'use client'. The actionable draft cards moved to the notification
+// inbox, so nothing on this page needs interactivity and it ships no JS.
 type AgentSummaryProps = {
   greeting: string
   creatorDisplayName: string
@@ -24,11 +20,8 @@ type AgentSummaryProps = {
   categoryCounts: CategoryCounts
   totalDraftsCount: number
   totalRecognizedCount: number
-  pendingHighlightsCount: number
   repliesReadyCount: number
   purchaseIntentReadyCount: number
-  attentionItems: Highlight[]
-  escalatedItems: Highlight[]
   activity: ActivityItem[]
 }
 
@@ -182,7 +175,7 @@ function StatCard({
 
 const QUICK_ACTIONS: Array<{ href: string; label: string; description: string; tone: Tone }> = [
   {
-    href: '/dashboard/highlights',
+    href: '/dashboard/notifications',
     label: 'Review replies',
     description: 'Approve the drafts waiting on you',
     tone: 'purple',
@@ -245,11 +238,8 @@ export default function AgentSummary({
   categoryCounts,
   totalDraftsCount,
   totalRecognizedCount,
-  pendingHighlightsCount,
   repliesReadyCount,
   purchaseIntentReadyCount,
-  attentionItems,
-  escalatedItems,
   activity,
 }: AgentSummaryProps) {
   const quietDay = commentsReadCount === 0 && draftsWrittenCount === 0 && recognizedCount === 0
@@ -358,7 +348,7 @@ export default function AgentSummary({
                 : `${purchaseIntentReadyCount} people asked about buying and replies are already drafted.`}
             </p>
             <Link
-              href="/dashboard/highlights"
+              href="/dashboard/notifications"
               className="mt-4 inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-semibold text-[#151530] transition-colors hover:bg-white/90"
             >
               Check them out
@@ -395,60 +385,11 @@ export default function AgentSummary({
         </div>
       </section>
 
-      {/* --- Needs your personal attention: escalated, never drafted --- */}
-      {escalatedItems.length > 0 && (
-        <section className="card border-avax-red/30">
-          <h2 className="font-display text-base font-semibold text-text-primary">
-            Needs Your Personal Attention
-          </h2>
-          <p className="mt-1 mb-3 text-sm text-text-muted">{ESCALATION_NOTE}</p>
-          <ul className="space-y-3">
-            {escalatedItems.map(item => {
-              const flag = normalizeEscalation(item.escalationFlag)
-              return (
-                <li key={item.id} className="rounded-lg border border-white/10 bg-surface-hover p-4">
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-                    <p className="font-body text-sm font-medium text-text-primary">{item.authorName}</p>
-                    {flag && (
-                      <span className="rounded-full border border-avax-red/40 bg-avax-red/15 px-2 py-0.5 font-mono text-[10px] tracking-wide text-avax-red uppercase">
-                        {ESCALATION_LABELS[flag]}
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-1.5 text-sm leading-relaxed text-text-primary">{item.text}</p>
-                  <Link
-                    href={`/dashboard/inbox/${item.postId}`}
-                    className="mt-2 inline-block truncate text-xs text-text-muted underline"
-                  >
-                    {item.videoTitle}
-                  </Link>
-                </li>
-              )
-            })}
-          </ul>
-        </section>
-      )}
-
-      {/* --- Needs your attention (preview of Highlights) --- */}
-      <section className="card">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <h2 className="font-display text-base font-semibold text-text-primary">
-            Needs Your Attention
-            {pendingHighlightsCount > 0 && (
-              <span className="gradient-primary ml-2 rounded-full px-2 py-0.5 font-mono text-[10px] text-white">
-                {pendingHighlightsCount}
-              </span>
-            )}
-          </h2>
-          <Link
-            href="/dashboard/highlights"
-            className="flex-shrink-0 text-xs text-purple-text hover:underline"
-          >
-            View all →
-          </Link>
-        </div>
-        <AttentionList items={attentionItems} />
-      </section>
+      {/* Both "Needs Your Attention" sections that used to sit here — the drafted
+          replies and the escalated comments — now live in the notification inbox,
+          which renders the same cards with the same Approve/Copy actions. Keeping a
+          second copy on Agent Home meant approving in one place left the other
+          showing stale work. The Quick Action above is the way in. */}
 
       {/* --- Recent activity --- */}
       <section className="card">
