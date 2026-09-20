@@ -6,6 +6,9 @@ import { buildActivityFeed } from '@/lib/activity'
 import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
+import { normalizeLevel } from '@/lib/levels'
+import type { RecognizedPerson } from './RecognizedPeople'
+import RefreshOnFocus from './RefreshOnFocus'
 
 export const dynamic = 'force-dynamic'
 
@@ -13,6 +16,9 @@ const SUMMARY_WINDOW_HOURS = 24
 // Just a preview — the full set lives on Highlights, one click away.
 const ATTENTION_PREVIEW_LIMIT = 3
 const ACTIVITY_LIMIT = 5
+// A glanceable row, not a directory — Rewards is the full list.
+const RECOGNIZED_LIMIT = 6
+const RECOGNIZED_WINDOW_DAYS = 7
 
 // Server-clock based, and the server is UTC on Vercel. No per-creator timezone is
 // stored anywhere in the schema, so this is genuinely the best available signal —
@@ -141,6 +147,7 @@ export default async function AgentHomePage() {
   const categoriesByCommentId = new Map(categories.map(c => [c.comment_id, c]))
 
   const oneDayAgo = new Date(Date.now() - SUMMARY_WINDOW_HOURS * 60 * 60 * 1000)
+  const sevenDaysAgo = new Date(Date.now() - RECOGNIZED_WINDOW_DAYS * 24 * 60 * 60 * 1000)
 
   // --- Header stats (rolling 24h — no per-creator timezone is stored, so this is
   // "last 24 hours", not a calendar-aligned day) ---
@@ -174,6 +181,7 @@ export default async function AgentHomePage() {
   let totalRecognizedCount = 0
   let latestRewardAt: string | null = null
   let recentRewards: Array<{ personName: string; reason: string; at: string | null }> = []
+  let recognizedPeople: RecognizedPerson[] = []
 
   if (memberIds.length > 0) {
     // Batched: a single .in() with hundreds of member ids exceeds Supabase's URL
@@ -184,7 +192,7 @@ export default async function AgentHomePage() {
       audience_members: unknown
     }>(supabase, {
       table: 'reward_events',
-      select: 'created_at, reason, audience_members ( display_name )',
+      select: 'created_at, reason, audience_members ( id, display_name, level )',
       inColumn: 'audience_member_id',
       inValues: memberIds,
     })
@@ -196,14 +204,37 @@ export default async function AgentHomePage() {
       if (!latestRewardAt || event.created_at > latestRewardAt) latestRewardAt = event.created_at
     }
 
-    recentRewards = [...events]
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      .slice(0, ACTIVITY_LIMIT)
-      .map(event => ({
-        personName: (event.audience_members as { display_name: string } | null)?.display_name || 'Someone',
+    const sorted = [...events].sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    )
+
+    recentRewards = sorted.slice(0, ACTIVITY_LIMIT).map(event => ({
+      personName: (event.audience_members as { display_name: string } | null)?.display_name || 'Someone',
+      reason: event.reason,
+      at: event.created_at,
+    }))
+
+    // People recognized in the last 7 days, newest first, one card each: someone
+    // recognized three times this week is one person to celebrate, not three rows.
+    // `sorted` is already newest-first, so the first sighting of a member id is
+    // their most recent recognition and the reason shown is the latest one.
+    const seen = new Set<string>()
+    for (const event of sorted) {
+      if (new Date(event.created_at) < sevenDaysAgo) break
+      const member = event.audience_members as
+        | { id: string; display_name: string | null; level: string | null }
+        | null
+      if (!member?.id || seen.has(member.id)) continue
+      seen.add(member.id)
+      recognizedPeople.push({
+        id: member.id,
+        name: member.display_name || 'Someone',
+        level: normalizeLevel(member.level),
         reason: event.reason,
         at: event.created_at,
-      }))
+      })
+      if (recognizedPeople.length >= RECOGNIZED_LIMIT) break
+    }
   }
 
   const { data: recentNotifications, error: notificationError } = await supabase
@@ -244,7 +275,6 @@ export default async function AgentHomePage() {
         videoTitle: h.videoTitle,
         at: h.postedAt,
       })),
-      rewards: recentRewards,
     },
     ACTIVITY_LIMIT
   )
@@ -259,6 +289,9 @@ export default async function AgentHomePage() {
 
   return (
     <div>
+      {/* force-dynamic already makes every navigation re-render on the server; this
+          additionally refreshes a tab that was left open in the background. */}
+      <RefreshOnFocus />
       {!creator.business_category && (
         <div className="mb-6">
           <CategoryPrompt />
@@ -278,6 +311,7 @@ export default async function AgentHomePage() {
         purchaseIntentReadyCount={purchaseIntentReadyCount}
         activity={activity}
         categoryCounts={categoryCounts}
+        recognizedPeople={recognizedPeople}
       />
     </div>
   )

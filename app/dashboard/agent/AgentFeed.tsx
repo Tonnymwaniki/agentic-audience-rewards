@@ -2,6 +2,7 @@ import Link from 'next/link'
 import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
 import CategoryBreakdown, { type CategoryCounts } from './CategoryBreakdown'
+import RecognizedPeople, { type RecognizedPerson } from './RecognizedPeople'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -18,6 +19,7 @@ type AgentSummaryProps = {
   recognizedCount: number
   totalCommentsCount: number
   categoryCounts: CategoryCounts
+  recognizedPeople: RecognizedPerson[]
   totalDraftsCount: number
   totalRecognizedCount: number
   repliesReadyCount: number
@@ -236,6 +238,7 @@ export default function AgentSummary({
   recognizedCount,
   totalCommentsCount,
   categoryCounts,
+  recognizedPeople,
   totalDraftsCount,
   totalRecognizedCount,
   repliesReadyCount,
@@ -393,12 +396,19 @@ export default function AgentSummary({
 
       {/* --- Recent activity --- */}
       <section className="card">
-        <h2 className="mb-1 font-display text-base font-semibold text-text-primary">Recent Activity</h2>
-        {activity.length === 0 ? (
+        <h2 className="mb-3 font-display text-base font-semibold text-text-primary">Recent Activity</h2>
+
+        {/* People first, then the text stream. Recognitions are the part of this
+            feed a creator actually wants to look at, and a person with a level is
+            worth a card; the rest stays one line each. Reward lines are no longer
+            passed into the text feed, so nothing is said twice. */}
+        <RecognizedPeople people={recognizedPeople} />
+
+        {activity.length === 0 && recognizedPeople.length === 0 ? (
           <p className="py-3 text-sm text-text-muted">
             Nothing yet. Alerts, drafted replies and rewards will show up here as your agent works.
           </p>
-        ) : (
+        ) : activity.length === 0 ? null : (
           <ul className="divide-y divide-white/5">
             {activity.map((item, i) => (
               <ActivityRow key={i} item={item} />

@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { updateAudienceSegment } from '@/lib/segments'
+import { updateAudienceLevel } from '@/lib/levels'
 
 export async function updateAudienceProfile(audience_member_id: string) {
   console.log("AUDIENCE MEMORY: starting for member", audience_member_id)
@@ -13,6 +14,10 @@ export async function updateAudienceProfile(audience_member_id: string) {
   // would never reach the summary step.
   const segmented = await updateAudienceSegment(supabase, audience_member_id)
 
+  // Same reasoning, same placement: rule-based, no model call, and ahead of the
+  // early return so someone with a single comment still gets a level.
+  const levelled = await updateAudienceLevel(supabase, audience_member_id)
+
   try {
     const { data: comments, error: commentsError } = await supabase
       .from('comments')
@@ -24,7 +29,7 @@ export async function updateAudienceProfile(audience_member_id: string) {
     }
 
     if (!comments || comments.length < 2) {
-      return { success: true, updated: false, segment: segmented?.segment ?? null }
+      return { success: true, updated: false, segment: segmented?.segment ?? null, level: levelled?.level ?? null }
     }
 
     const commentSummaries = comments.map(c => {
