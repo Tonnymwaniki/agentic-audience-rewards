@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
+import { saveCustomProfileValues } from '@/lib/custom-profile-fields'
 
 // The save itself returns immediately; this headroom is for the after() work,
 // which re-drafts replies across every one of the creator's videos.
@@ -40,7 +41,25 @@ export async function POST(request: NextRequest) {
       updates[field] = trimmed.length > 0 ? trimmed : null
     }
 
+    // Custom field values arrive under their own key. saveCustomProfileValues only
+    // writes keys that already exist for this creator, so a crafted body cannot
+    // invent a field and inject text into the draft-reply prompt.
+    const customFieldValues: Record<string, string> = {}
+    if (body.custom_fields && typeof body.custom_fields === 'object') {
+      for (const [key, value] of Object.entries(body.custom_fields as Record<string, unknown>)) {
+        if (typeof value === 'string') customFieldValues[key] = value
+      }
+    }
+
+    const customWritten =
+      Object.keys(customFieldValues).length > 0
+        ? await saveCustomProfileValues(supabase, creatorId, customFieldValues)
+        : 0
+
     if (Object.keys(updates).length === 0) {
+      // Custom-only saves are legitimate: a creator may fill in just the
+      // personalised section and leave every fixed field blank.
+      if (customWritten > 0) return NextResponse.json({ success: true, customFieldsSaved: customWritten })
       return NextResponse.json({ error: 'No profile fields provided' }, { status: 400 })
     }
 
@@ -66,7 +85,7 @@ export async function POST(request: NextRequest) {
       }
     })
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, customFieldsSaved: customWritten })
   } catch (err) {
     console.error('Save business profile error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })

@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
+import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
 import {
   generateDraftReply,
   loadStyleExamples,
@@ -111,6 +112,9 @@ export async function regenerateDraftsForCreator(
   // identical style queries. Empty for a creator who has never edited a draft, in
   // which case the prompt is unchanged from before this feature.
   const styleExamples = await loadStyleExamples(supabase, creator_id)
+  // Regeneration must see the same facts a first-pass draft sees, custom fields
+  // included — otherwise re-drafting silently drops them from every reply.
+  const customFieldContext = customFieldsToContext(await loadCustomProfileFields(supabase, creator_id))
   if (styleExamples.length > 0) {
     console.log(`Draft regeneration: applying ${styleExamples.length} style example(s) from past edits.`)
   }
@@ -270,7 +274,7 @@ export async function regenerateDraftsForCreator(
         }
       }
 
-      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples)
+      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples, customFieldContext)
 
       const stamped = await markChecked(comment.id, {
         draft_reply: draft.text,

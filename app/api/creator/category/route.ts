@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { after } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
+import { generateCustomProfileFields } from '@/lib/custom-profile-fields'
 import { isBusinessCategory } from '@/lib/business-categories'
 
 export async function POST(request: NextRequest) {
@@ -33,6 +35,23 @@ export async function POST(request: NextRequest) {
       console.error('Update business_category error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
       return NextResponse.json({ error: 'Failed to save category' }, { status: 500 })
     }
+
+    // First time this creator has a category, they get a personalised set of extra
+    // profile fields generated from their real videos and comment topics. Runs in
+    // after() so the banner's "Thanks — that helps" is not held up by a model call,
+    // and is a no-op when fields already exist, so changing category later never
+    // wipes values the creator has typed.
+    after(async () => {
+      try {
+        const result = await generateCustomProfileFields(supabase, creatorId, business_category)
+        console.log(
+          'Custom profile field generation:',
+          JSON.stringify({ creatorId, generated: result.generated.length, skipped: result.skipped ?? null })
+        )
+      } catch (err) {
+        console.error('Custom profile field generation error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+      }
+    })
 
     return NextResponse.json({ success: true, business_category })
   } catch (err) {

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
@@ -139,16 +140,25 @@ const PROFILE_AWARE_CATEGORIES = new Set(['question', 'purchase_intent'])
 // Builds the profile context from ONLY the fields the creator has actually filled
 // in, so the model is never told about a field that's blank. Returns '' when the
 // profile is missing or entirely empty, leaving the original prompt untouched.
-function buildProfileContext(profile: BusinessProfile | null | undefined): string {
-  if (!profile) return ''
+function buildProfileContext(
+  profile: BusinessProfile | null | undefined,
+  customFields: string[] = []
+): string {
+  if (!profile && customFields.length === 0) return ''
 
   const parts: string[] = []
-  if (profile.business_phone) parts.push(`phone: ${profile.business_phone}`)
-  if (profile.business_whatsapp) parts.push(`WhatsApp: ${profile.business_whatsapp}`)
-  if (profile.business_location) parts.push(`location: ${profile.business_location}`)
-  if (profile.business_hours) parts.push(`hours: ${profile.business_hours}`)
-  if (profile.business_website) parts.push(`website: ${profile.business_website}`)
-  if (profile.delivery_info) parts.push(`delivery: ${profile.delivery_info}`)
+  if (profile?.business_phone) parts.push(`phone: ${profile.business_phone}`)
+  if (profile?.business_whatsapp) parts.push(`WhatsApp: ${profile.business_whatsapp}`)
+  if (profile?.business_location) parts.push(`location: ${profile.business_location}`)
+  if (profile?.business_hours) parts.push(`hours: ${profile.business_hours}`)
+  if (profile?.business_website) parts.push(`website: ${profile.business_website}`)
+  if (profile?.delivery_info) parts.push(`delivery: ${profile.delivery_info}`)
+
+  // The creator's AI-suggested fields, already "Label: value" and already filtered
+  // to the ones they actually filled in. Added to the same list on purpose: the
+  // model should treat "Wholesale minimum order" exactly as it treats "hours" —
+  // a real verified fact it may quote, and must not invent.
+  for (const pair of customFields) parts.push(pair)
 
   if (parts.length === 0) return ''
 
@@ -242,14 +252,17 @@ export async function generateDraftReply(
   commentText: string,
   category: string,
   profile?: BusinessProfile | null,
-  styleExamples?: StyleExample[] | null
+  styleExamples?: StyleExample[] | null,
+  customFields?: string[] | null
 ): Promise<DraftReplyResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
 
   try {
     const instruction = DRAFT_REPLY_INSTRUCTIONS[category] ?? DRAFT_REPLY_INSTRUCTIONS.purchase_intent
-    const profileContext = PROFILE_AWARE_CATEGORIES.has(category) ? buildProfileContext(profile) : ''
+    const profileContext = PROFILE_AWARE_CATEGORIES.has(category)
+      ? buildProfileContext(profile, customFields ?? [])
+      : ''
     // Style applies to every category: how someone signs off or phrases things is
     // not specific to questions or purchase intent the way business facts are.
     const styleContext = buildStyleContext(styleExamples)
@@ -639,6 +652,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   let postCreatorId: string | null = null
   let businessProfile: BusinessProfile | null = null
   let styleExamples: StyleExample[] = []
+  let customFieldContext: string[] = []
 
   // One post fetch covers both needs: title/description for the relevance check,
   // and creator_id so the business profile can be looked up below.
@@ -667,6 +681,16 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
       // Fetched once per run, not per comment — and only when there's actually a
       // question or purchase_intent draft that could use it.
+      // Fetched once per run like the profile itself, and for the same categories:
+      // a complaint's reply should not be quoting the creator's price list.
+      if (post.creator_id && draftable.some(c => PROFILE_AWARE_CATEGORIES.has(c.category))) {
+        const fields = await loadCustomProfileFields(supabase, post.creator_id)
+        customFieldContext = customFieldsToContext(fields)
+        if (customFieldContext.length > 0) {
+          console.log(`Categorize: applying ${customFieldContext.length} custom profile field(s).`)
+        }
+      }
+
       if (post.creator_id && draftable.some(c => PROFILE_AWARE_CATEGORIES.has(c.category))) {
         const { data: creator, error: profileError } = await supabase
           .from('creators')
@@ -721,7 +745,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         if (!isRelevant) continue
       }
 
-      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples)
+      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext)
       const draftReply = draft.text
       await supabase
         .from('comment_categories')

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
+import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
 import {
   generateDraftReply,
   loadStyleExamples,
@@ -72,8 +73,13 @@ export async function POST(request: NextRequest) {
     // Same reasoning as the profile above: without this, "Regenerate" would strip
     // the creator's learned voice back out of an otherwise calibrated reply.
     const styleExamples = creatorId ? await loadStyleExamples(supabase, creatorId) : []
+    // And the same for the creator's own custom fields, so a single "Regenerate"
+    // produces a reply with the same facts available as the batch path.
+    const customFieldContext = creatorId
+      ? customFieldsToContext(await loadCustomProfileFields(supabase, creatorId))
+      : []
 
-    const draft = await generateDraftReply(comment.text, category, businessProfile, styleExamples)
+    const draft = await generateDraftReply(comment.text, category, businessProfile, styleExamples, customFieldContext)
 
     await supabase
       .from('comment_categories')

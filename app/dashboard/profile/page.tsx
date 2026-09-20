@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
 import BusinessProfileForm from './BusinessProfileForm'
+import { loadCustomProfileFields } from '@/lib/custom-profile-fields'
 
 export const dynamic = 'force-dynamic'
 
@@ -39,6 +40,10 @@ export default async function BusinessProfilePage() {
     redirect('/login')
   }
 
+  // Read with the page's own RLS-scoped client: the policy on custom_profile_fields
+  // limits this to the signed-in creator's own rows.
+  const customFields = await loadCustomProfileFields(supabase, creator.id)
+
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Business Profile" backHref="/dashboard/agent" backLabel="Agent Home" />
@@ -63,6 +68,7 @@ export default async function BusinessProfilePage() {
           business_website: creator.business_website || '',
           delivery_info: creator.delivery_info || '',
         }}
+        customFields={customFields}
       />
     </div>
   )
