@@ -5,7 +5,10 @@ import PlatformGrid from './PlatformGrid'
 export const dynamic = 'force-dynamic'
 
 export const metadata = {
-  title: 'Choose a platform',
+  // Matches the on-page heading. The separator is `·`, as the Research pages
+  // already use ("Content Ideas · Research") — the root layout sets no title
+  // template, so each page spells out its own suffix.
+  title: 'Where should I work? · Notice',
 }
 
 export default async function PlatformHubPage() {
@@ -20,10 +23,11 @@ export default async function PlatformHubPage() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="mb-8">
-        <h1 className="font-display text-3xl font-semibold text-text-primary">Choose a platform</h1>
+      <div className="mb-6">
+        <h1 className="font-display text-3xl font-semibold text-text-primary">Where should I work?</h1>
         <p className="mt-2 text-sm text-text-muted">
-          Your audience agent works one platform at a time. YouTube is ready now — more are on the way.
+          I handle one platform at a time. YouTube is live and listening — the rest of my crew is
+          still in training.
         </p>
       </div>
 

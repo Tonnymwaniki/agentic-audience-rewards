@@ -75,22 +75,17 @@ export default function DashboardLayout({
       {!isFullscreenRoute && (
       <nav className="mb-6 flex flex-wrap items-center justify-between gap-y-2 border-b border-white/10 pb-4">
         <div>
-          {/* The way back out of YouTube. Lives in the shared nav rather than on
-              Agent Home alone, so it's one tap away from every YouTube page at
-              every width — the bottom tab bar has no slot for it. */}
-          {!isHub && (
-            <Link
-              href="/dashboard/hub"
-              // min-h-11 gives a 44px tap target; the matching negative margin keeps
-              // it taking up only its text height, so the title below does not move.
-              className="-my-2.5 inline-flex min-h-11 items-center gap-1 text-xs text-text-muted transition-colors hover:text-text-primary"
-            >
-              ← All platforms
-              <span aria-hidden="true" className="text-text-muted/50">·</span>
-              <span className="text-text-muted/80">YouTube</span>
-            </Link>
-          )}
-          <Link href={isHub ? '/dashboard/hub' : '/dashboard/agent'} className="block">
+          {/* The wordmark is the way back out of any platform: it always points at
+              the hub, from every page and at every width. It replaces the separate
+              "← All platforms" link that used to sit above it — one control doing
+              the job rather than two pointing at the same place.
+              min-h-11 gives it a 44px tap target without changing how tall the
+              title looks, via the matching negative margin. */}
+          <Link
+            href="/dashboard/hub"
+            aria-label="Notice home — all platforms"
+            className="-my-2 inline-flex min-h-11 items-center rounded-md transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-purple focus-visible:outline-none"
+          >
             <h1 className="text-xl font-bold font-display text-text-primary">Creator Dashboard</h1>
           </Link>
         </div>

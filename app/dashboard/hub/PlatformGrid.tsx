@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import MascotIcon from '@/components/MascotIcon'
 import { YOUTUBE_ENTRY_PATH } from '@/lib/onboarding'
 
 type PlatformId = 'youtube' | 'facebook' | 'instagram' | 'tiktok' | 'x' | 'linkedin'
@@ -9,24 +10,38 @@ type PlatformId = 'youtube' | 'facebook' | 'instagram' | 'tiktok' | 'x' | 'linke
 type Platform = {
   id: PlatformId
   name: string
-  /** Only YouTube has a real flow behind it today. */
-  available: boolean
+  /** What this platform's agent will do, in the agent's own voice. */
+  blurb: string
+  /**
+   * The platform's real brand colour, used at low alpha for the card's border and
+   * wash. Kept even on the locked cards: a fully neutral row of six greys reads as
+   * broken rather than pending, and the tint is what makes each one recognisable
+   * at a glance before the icon registers.
+   */
+  tint: string
 }
 
-const PLATFORMS: Platform[] = [
-  { id: 'youtube', name: 'YouTube', available: true },
-  { id: 'facebook', name: 'Facebook', available: false },
-  { id: 'instagram', name: 'Instagram', available: false },
-  { id: 'tiktok', name: 'TikTok', available: false },
-  { id: 'x', name: 'X', available: false },
-  { id: 'linkedin', name: 'LinkedIn', available: false },
+/** The one platform with a real flow behind it today. */
+const YOUTUBE: Platform = {
+  id: 'youtube',
+  name: 'YouTube',
+  blurb: 'Your YouTube agent — reading comments, drafting replies, recognizing loyal customers',
+  tint: '#FF0033',
+}
+
+const COMING_SOON: Platform[] = [
+  { id: 'instagram', name: 'Instagram', blurb: 'Will understand comments and DMs once available', tint: '#D62976' },
+  { id: 'tiktok', name: 'TikTok', blurb: 'Will follow comment trends on short video once available', tint: '#25F4EE' },
+  { id: 'facebook', name: 'Facebook', blurb: 'Will answer page comments and visitor posts once available', tint: '#1877F2' },
+  { id: 'x', name: 'X', blurb: 'Will track replies and mentions once available', tint: '#FFFFFF' },
+  { id: 'linkedin', name: 'LinkedIn', blurb: 'Will handle professional comments and leads once available', tint: '#0A66C2' },
 ]
 
 /** How long the "isn't connected yet" note stays up after tapping a locked card. */
 const NOTICE_MS = 2600
 
-function PlatformIcon({ id }: { id: PlatformId }) {
-  const common = { viewBox: '0 0 24 24', className: 'h-8 w-8', 'aria-hidden': true } as const
+function PlatformIcon({ id, className = 'h-8 w-8' }: { id: PlatformId; className?: string }) {
+  const common = { viewBox: '0 0 24 24', className, 'aria-hidden': true } as const
 
   switch (id) {
     case 'youtube':
@@ -105,8 +120,9 @@ function PlatformIcon({ id }: { id: PlatformId }) {
   }
 }
 
-const CARD_BASE =
-  'flex min-h-[8.5rem] flex-col items-center justify-center gap-3 rounded-2xl border p-4 text-center transition-colors'
+/** Shared shell for the five pending cards. */
+const PENDING_CARD =
+  'flex w-full items-start gap-3 rounded-xl border p-3 text-left transition-colors'
 
 export default function PlatformGrid() {
   const [notice, setNotice] = useState<string | null>(null)
@@ -121,45 +137,79 @@ export default function PlatformGrid() {
 
   return (
     <>
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4">
-        {PLATFORMS.map(platform =>
-          platform.available ? (
-            <Link
-              key={platform.id}
-              href={YOUTUBE_ENTRY_PATH}
-              className={`${CARD_BASE} border-purple/40 bg-surface hover:border-purple hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-purple focus-visible:ring-offset-2 focus-visible:ring-offset-ink focus-visible:outline-none`}
-            >
-              <PlatformIcon id={platform.id} />
-              <span className="font-body text-sm font-semibold text-text-primary">{platform.name}</span>
-              {/* Status sits in the flow under the name rather than pinned to a
-                  corner: at two-up on a 375px phone a corner badge is wide enough
-                  to collide with the centred icon. */}
-              <span className="rounded-full bg-green-dim px-2.5 py-0.5 text-xs font-medium text-green">
-                Ready · Open →
+      {/* ---------------------------------------------------------------- hero */}
+      <Link
+        href={YOUTUBE_ENTRY_PATH}
+        className="group block rounded-2xl border border-purple/40 bg-surface p-5 transition-colors hover:border-purple hover:bg-surface-hover focus-visible:ring-2 focus-visible:ring-purple focus-visible:ring-offset-2 focus-visible:ring-offset-ink focus-visible:outline-none active:bg-surface-hover"
+      >
+        {/* Stacked and centred on a phone, side-by-side from sm. The mascot is the
+            first thing read either way — it is what separates this card from the
+            five below at a glance, before any text is parsed. */}
+        <div className="flex flex-col items-center gap-4 text-center sm:flex-row sm:items-center sm:gap-5 sm:text-left">
+          <MascotIcon type="agent" size={76} className="flex-shrink-0" />
+
+          <div className="min-w-0 flex-1">
+            <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 sm:justify-start">
+              <PlatformIcon id="youtube" className="h-5 w-5 flex-shrink-0" />
+              <h2 className="font-display text-xl font-semibold text-text-primary">YouTube</h2>
+              <span className="inline-flex items-center gap-1.5 rounded-full border border-green/30 bg-green-dim px-2.5 py-0.5 font-mono text-[10px] tracking-wide text-green uppercase">
+                <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-green" />
+                Active
               </span>
-            </Link>
-          ) : (
-            // A real button rather than a dead div, so keyboard and screen-reader
-            // users reach it and hear why it does nothing. aria-disabled (not the
-            // disabled attribute) keeps it focusable and clickable for the notice.
-            <button
-              key={platform.id}
-              type="button"
-              aria-disabled="true"
-              onClick={() => setNotice(`${platform.name} isn't connected yet — it's coming soon.`)}
-              className={`${CARD_BASE} cursor-not-allowed border-white/5 bg-surface/50`}
-            >
-              {/* Grayscale + low opacity on the mark only, so the label stays legible. */}
-              <span className="opacity-40 grayscale">
-                <PlatformIcon id={platform.id} />
+            </div>
+
+            <p className="mt-2 text-sm leading-snug text-text-muted">{YOUTUBE.blurb}</p>
+
+            <span className="mt-3 inline-flex rounded-full bg-green-dim px-3 py-1 text-xs font-medium text-green transition-colors group-hover:bg-green/20">
+              Ready · Open →
+            </span>
+          </div>
+        </div>
+      </Link>
+
+      {/* -------------------------------------------------------- coming soon */}
+      {/* Deliberately a quieter block: smaller type, one column on a phone so each
+          blurb has room to read, two and three columns as width allows. */}
+      <h3 className="mt-8 mb-3 font-mono text-[11px] tracking-wider text-text-muted/70 uppercase">
+        Still in training
+      </h3>
+
+      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+        {COMING_SOON.map(platform => (
+          // A real button rather than a dead div, so keyboard and screen-reader
+          // users reach it and hear why it does nothing. aria-disabled (not the
+          // disabled attribute) keeps it focusable and clickable for the notice.
+          <button
+            key={platform.id}
+            type="button"
+            aria-disabled="true"
+            onClick={() => setNotice(`${platform.name} isn't deployed yet — it's coming soon.`)}
+            className={`${PENDING_CARD} cursor-not-allowed`}
+            // Brand tint at low alpha. Inline because the colour is per-platform
+            // data, not one of a fixed set Tailwind could scan for at build time.
+            style={{
+              borderColor: `${platform.tint}33`,
+              backgroundColor: `${platform.tint}0A`,
+            }}
+          >
+            {/* Partly desaturated rather than fully grey: enough brand colour
+                survives to identify the platform, not enough to compete with the
+                hero card above. */}
+            <span className="flex-shrink-0 opacity-70 grayscale-[0.5]">
+              <PlatformIcon id={platform.id} className="h-6 w-6" />
+            </span>
+
+            <span className="min-w-0 flex-1">
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-body text-sm font-medium text-text-muted">{platform.name}</span>
+                <span className="rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-medium text-text-muted/80">
+                  Not deployed yet
+                </span>
               </span>
-              <span className="font-body text-sm font-medium text-text-muted">{platform.name}</span>
-              <span className="rounded-full bg-white/10 px-2.5 py-0.5 text-xs font-medium text-text-muted">
-                Coming soon
-              </span>
-            </button>
-          )
-        )}
+              <span className="mt-1 block text-xs leading-snug text-text-muted/70">{platform.blurb}</span>
+            </span>
+          </button>
+        ))}
       </div>
 
       {/* Always mounted so screen readers announce the change; visually empty otherwise. */}
