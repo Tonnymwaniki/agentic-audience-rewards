@@ -18,7 +18,7 @@ export default async function BusinessProfilePage() {
   const { data: creator, error: creatorError } = await supabase
     .from('creators')
     .select(
-      'id, business_phone, business_whatsapp, business_location, business_hours, business_website, delivery_info'
+      'id, display_name, business_phone, business_whatsapp, business_location, business_hours, business_website, delivery_info'
     )
     .eq('user_id', user.id)
     .maybeSingle()
@@ -50,6 +50,12 @@ export default async function BusinessProfilePage() {
 
       <BusinessProfileForm
         initial={{
+          // A creator row is created at signup with display_name already set to
+          // the signup email, so "is it set?" cannot be a plain null check here.
+          // Showing the email pre-filled would imply the creator chose it; an
+          // empty box matches the hint ("leave blank and we'll use your email").
+          display_name:
+            creator.display_name && creator.display_name !== user.email ? creator.display_name : '',
           business_phone: creator.business_phone || '',
           business_whatsapp: creator.business_whatsapp || '',
           business_location: creator.business_location || '',

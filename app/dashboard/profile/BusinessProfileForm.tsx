@@ -3,6 +3,7 @@
 import { useState } from 'react'
 
 type ProfileFields = {
+  display_name: string
   business_phone: string
   business_whatsapp: string
   business_location: string
@@ -18,6 +19,12 @@ const FIELDS: Array<{
   hint?: string
   type?: string
 }> = [
+  {
+    key: 'display_name',
+    label: 'Your name',
+    placeholder: 'Wanjiku',
+    hint: 'Used to greet you on Agent Home. Leave blank and we’ll use your email address.',
+  },
   {
     key: 'business_phone',
     label: 'Phone number',

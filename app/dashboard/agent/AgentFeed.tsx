@@ -4,6 +4,7 @@ import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
 import AttentionList from './AttentionList'
 import { ESCALATION_LABELS, ESCALATION_NOTE, normalizeEscalation } from '@/lib/escalation'
+import CategoryBreakdown, { type CategoryCounts } from './CategoryBreakdown'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -20,6 +21,7 @@ type AgentSummaryProps = {
   draftsWrittenCount: number
   recognizedCount: number
   totalCommentsCount: number
+  categoryCounts: CategoryCounts
   totalDraftsCount: number
   totalRecognizedCount: number
   pendingHighlightsCount: number
@@ -240,6 +242,7 @@ export default function AgentSummary({
   draftsWrittenCount,
   recognizedCount,
   totalCommentsCount,
+  categoryCounts,
   totalDraftsCount,
   totalRecognizedCount,
   pendingHighlightsCount,
@@ -256,7 +259,9 @@ export default function AgentSummary({
       {/* --- Mobile hero. Desktop already leads with the "Your Agent" card beside
               the greeting, so the mascot would be a third robot up there. --- */}
       <div className="flex flex-col items-center pt-2 text-center md:hidden">
-        <MascotIcon type="agent" />
+        {/* 132px = 1.5x the component's 88px default. It is the first thing on the
+            page, so it carries the "your agent is alive" idea before any text. */}
+        <MascotIcon type="agent" size={132} />
         <p className="mt-3 text-sm text-text-muted">Your AI agent is working for you</p>
       </div>
 
@@ -290,22 +295,30 @@ export default function AgentSummary({
       </header>
 
       {/* --- Agent status: full width and prominent on mobile --- */}
-      <section className="card glow-card flex items-center gap-4">
+      <section className="card glow-card-strong flex items-center gap-4 py-5">
         {/* Hidden below md: the mascot hero above already shows the agent there,
             and two robot faces on one phone screen reads as a duplicate. */}
         <span
-          className="gradient-primary hidden h-12 w-12 flex-shrink-0 items-center justify-center rounded-xl text-white md:flex"
+          className="gradient-primary hidden h-14 w-14 flex-shrink-0 items-center justify-center rounded-xl text-white md:flex"
           aria-hidden="true"
         >
           <RobotIcon />
         </span>
         <div className="min-w-0 flex-1">
           <p className="font-mono text-[10px] tracking-widest text-text-muted uppercase">Your Agent</p>
-          <div className="mt-1 flex items-center gap-2">
-            <span aria-hidden="true" className="h-2 w-2 flex-shrink-0 rounded-full bg-green" />
-            <span className="font-body text-base font-semibold text-text-primary">Active</span>
+          <div className="mt-1.5 flex items-center gap-2.5">
+            {/* text-green rather than bg-green: .status-dot's expanding ring is
+                painted with currentColor, so the colour has to come from the text
+                colour for the ring to match the dot. */}
+            <span
+              aria-hidden="true"
+              className="status-dot h-2.5 w-2.5 flex-shrink-0 rounded-full bg-current text-green"
+            />
+            <span className="font-display text-xl leading-none font-semibold text-text-primary sm:text-2xl">
+              Active
+            </span>
           </div>
-          <p className="mt-0.5 truncate text-xs text-text-muted">
+          <p className="mt-1.5 truncate text-sm text-text-muted">
             {lastActivityAt ? `Last activity ${timeAgo(lastActivityAt)}` : 'No activity recorded yet'}
           </p>
         </div>
@@ -324,6 +337,11 @@ export default function AgentSummary({
           everything still awaiting your approval.
         </p>
       </section>
+
+      {/* --- Category mix. Sits directly under the stats because it answers the
+              obvious follow-up to "N comments read": read of what? Renders nothing
+              until something has been categorized. --- */}
+      <CategoryBreakdown counts={categoryCounts} />
 
       {/* --- Opportunities banner. Hidden entirely when there's nothing to act on,
               rather than showing an encouraging-but-empty prompt. --- */}

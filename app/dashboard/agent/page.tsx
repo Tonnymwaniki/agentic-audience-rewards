@@ -53,8 +53,10 @@ export default async function AgentHomePage() {
     redirect('/login')
   }
 
-  // Falls back to email or "there" only if this creator predates display_name being
-  // populated at signup — per product decision, an email value is shown as-is, not parsed.
+  // display_name is what the creator set on Business Profile. Signup seeds it with
+  // the email address, and clearing the field stores NULL, so both the "never set
+  // it" and the "set it then cleared it" paths land on the email — which is shown
+  // as-is, not parsed, per product decision. "there" is the last resort.
   const creatorDisplayName = creator.display_name || user.email || 'there'
 
   const { data: posts, error: postsError } = await supabase
@@ -250,6 +252,14 @@ export default async function AgentHomePage() {
     ACTIVITY_LIMIT
   )
 
+  // Every category row for this creator is already loaded above for the drafts and
+  // stats, so the breakdown is a tally over memory rather than another query.
+  const categoryCounts: Record<string, number> = {}
+  for (const row of categories) {
+    if (!row.category) continue
+    categoryCounts[row.category] = (categoryCounts[row.category] ?? 0) + 1
+  }
+
   return (
     <div>
       {!creator.business_category && (
@@ -273,6 +283,7 @@ export default async function AgentHomePage() {
         attentionItems={draftHighlights}
         escalatedItems={escalatedHighlights}
         activity={activity}
+        categoryCounts={categoryCounts}
       />
     </div>
   )
