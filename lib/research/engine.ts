@@ -3,6 +3,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 // Shared with the Research page's "Trending Topics" sidebar card, so the panel and
 // the get_trending tool can never disagree about what's trending.
 import { computeTrendingGroups, computeSentiment, sentimentForRow, SENTIMENTS, type Sentiment } from '@/lib/trending'
+import { computeActivityWindows, EAT_LABEL } from '@/lib/timing'
 import { hybridSearchComments, listFilteredComments, HybridSearchUnavailableError } from '@/lib/hybrid-search'
 import { loadAudienceInsights, themesForRow } from '@/lib/audience-insights'
 import { COMMENT_LANGUAGES, COMMENT_EMOTIONS, type CommentLanguage, type CommentEmotion } from '@/lib/categorize'
@@ -1103,31 +1104,21 @@ async function toolGetTimingInsights(ctx: ToolContext, input: { post_id?: unknow
 
   const comments = await fetchRichComments(ctx.supabase, postIds)
 
-  const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']
-  const buckets = new Map<string, number>()
+  // Shared with Agent Home's "Best Time to Post" widget (lib/timing.ts), so the
+  // chat and the dashboard can never quote different busiest hours.
+  const { totalComments, windows } = computeActivityWindows(comments, 3)
 
-  for (const c of comments) {
-    const date = new Date(c.posted_at)
-    if (isNaN(date.getTime())) continue
-    const key = `${date.getUTCDay()}-${date.getUTCHours()}`
-    buckets.set(key, (buckets.get(key) || 0) + 1)
+  return {
+    total_comments: totalComments,
+    top_windows: windows.map(w => ({
+      day: w.day,
+      hour_eat: w.hour,
+      hour_label: `${w.hourLabel} ${EAT_LABEL}`,
+      count: w.count,
+      percentage: w.percentage,
+    })),
+    note: 'Days and hours are East African Time (UTC+3), converted from the UTC timestamps comments are stored in.',
   }
-
-  const total = comments.length
-  const topWindows = Array.from(buckets.entries())
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 3)
-    .map(([key, count]) => {
-      const [day, hour] = key.split('-').map(Number)
-      return {
-        day: DAY_NAMES[day],
-        hour_utc: hour,
-        count,
-        percentage: total > 0 ? Math.round((count / total) * 100) : 0,
-      }
-    })
-
-  return { total_comments: total, top_windows: topWindows, note: 'Hours are in UTC — no per-creator timezone is stored.' }
 }
 
 async function toolGetBusinessInquiries(ctx: ToolContext, input: { category?: unknown }) {
@@ -1716,7 +1707,7 @@ const TOOLS = [
   },
   {
     name: 'get_timing_insights',
-    description: 'When this audience is most active, by day of week and hour (UTC) — optionally scoped to one video.',
+    description: 'When this audience is most active, by day of week and hour in East African Time (EAT, UTC+3) — optionally scoped to one video.',
     input_schema: {
       type: 'object',
       properties: {

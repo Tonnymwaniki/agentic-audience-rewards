@@ -3,6 +3,8 @@ import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
 import CategoryBreakdown, { type CategoryCounts } from './CategoryBreakdown'
 import RecognizedPeople, { type RecognizedPerson } from './RecognizedPeople'
+import BestTimeToPost from './BestTimeToPost'
+import type { ActivityWindow } from '@/lib/timing'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -20,6 +22,8 @@ type AgentSummaryProps = {
   totalCommentsCount: number
   categoryCounts: CategoryCounts
   recognizedPeople: RecognizedPerson[]
+  activityWindows: ActivityWindow[]
+  datedCommentCount: number
   totalDraftsCount: number
   totalRecognizedCount: number
   repliesReadyCount: number
@@ -189,12 +193,6 @@ const QUICK_ACTIONS: Array<{ href: string; label: string; description: string; t
     tone: 'pink',
   },
   {
-    href: '/dashboard/brain',
-    label: 'View audience insights',
-    description: 'Themes, timing and who keeps showing up',
-    tone: 'teal',
-  },
-  {
     // The connect flow is otherwise only reachable from the Me page, which is a
     // detour for the common case of pulling in new uploads. Agent Home is where a
     // returning creator lands, so the route back to Connect belongs here too.
@@ -239,6 +237,8 @@ export default function AgentSummary({
   totalCommentsCount,
   categoryCounts,
   recognizedPeople,
+  activityWindows,
+  datedCommentCount,
   totalDraftsCount,
   totalRecognizedCount,
   repliesReadyCount,
@@ -335,6 +335,10 @@ export default function AgentSummary({
               obvious follow-up to "N comments read": read of what? Renders nothing
               until something has been categorized. --- */}
       <CategoryBreakdown counts={categoryCounts} />
+
+      {/* --- Best time to post. Same shared computation the Research chat's
+              get_timing_insights tool uses, so the two always agree. --- */}
+      <BestTimeToPost windows={activityWindows} totalComments={datedCommentCount} />
 
       {/* --- Opportunities banner. Hidden entirely when there's nothing to act on,
               rather than showing an encouraging-but-empty prompt. --- */}

@@ -7,6 +7,7 @@ import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
 import { normalizeLevel } from '@/lib/levels'
+import { computeActivityWindows } from '@/lib/timing'
 import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
 
@@ -279,6 +280,10 @@ export default async function AgentHomePage() {
     ACTIVITY_LIMIT
   )
 
+  // Busiest posting windows, in EAT. allComments already carries posted_at for the
+  // 24h stats, so this is arithmetic over memory rather than another query.
+  const activityWindows = computeActivityWindows(allComments, 3)
+
   // Every category row for this creator is already loaded above for the drafts and
   // stats, so the breakdown is a tally over memory rather than another query.
   const categoryCounts: Record<string, number> = {}
@@ -312,6 +317,8 @@ export default async function AgentHomePage() {
         activity={activity}
         categoryCounts={categoryCounts}
         recognizedPeople={recognizedPeople}
+        activityWindows={activityWindows.windows}
+        datedCommentCount={activityWindows.totalComments}
       />
     </div>
   )
