@@ -90,9 +90,86 @@ function RegenerateButton({ onClick, disabled }: { onClick: () => void; disabled
   )
 }
 
+/**
+ * Progressive reveal of an answer that is ALREADY complete and already verified.
+ *
+ * Not token streaming: the route returns the finished answer only after the
+ * verification pass has run on the whole thing, so there is nothing to stream.
+ * This animates text the client already holds, purely so the answer arrives at a
+ * readable pace instead of appearing as a wall.
+ *
+ * Time-based via requestAnimationFrame rather than a setInterval per character:
+ * a long answer would otherwise queue hundreds of timers, and a backgrounded tab
+ * would replay them in a burst on return.
+ */
+// Roughly the pace a streaming model reads at, and deliberately not faster: at
+// 1100 the whole answer landed in ~0.4s, which reads as a flicker rather than a
+// reveal. At 420 an 850-character answer takes about two seconds — progressive
+// enough to follow, short enough not to make anyone wait to re-read it.
+const REVEAL_CHARS_PER_SECOND = 420
+
+/**
+ * Cuts the partially revealed text at a point where the markdown is still valid.
+ *
+ * Without this, the reveal passes through states like "...as shown in [evidence](#agg-"
+ * and react-markdown renders the raw half-written link for a frame or two. Any
+ * unclosed [ ] or ]( ) is held back until its closing character is revealed, so
+ * citation chips and evidence lines pop in whole rather than assembling visibly.
+ */
+function markdownSafeSlice(text: string, count: number): string {
+  const slice = text.slice(0, count)
+  const lastOpen = slice.lastIndexOf('[')
+  if (lastOpen === -1) return slice
+
+  const closeBracket = slice.indexOf(']', lastOpen)
+  if (closeBracket === -1) return slice.slice(0, lastOpen)
+
+  const afterBracket = slice.slice(closeBracket + 1)
+  if (afterBracket.startsWith('(') && !afterBracket.includes(')')) return slice.slice(0, lastOpen)
+
+  return slice
+}
+
+function useTypewriter(text: string, active: boolean): { visible: string; done: boolean } {
+  const [count, setCount] = useState(() => (active ? 0 : text.length))
+
+  useEffect(() => {
+    if (!active) {
+      setCount(text.length)
+      return
+    }
+
+    // Someone who has asked for less motion gets the answer immediately; the
+    // reveal is a nicety, never the only way to read it.
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
+    if (reduced) {
+      setCount(text.length)
+      return
+    }
+
+    let frame = 0
+    const started = performance.now()
+    const step = (now: number) => {
+      const elapsed = (now - started) / 1000
+      const next = Math.min(text.length, Math.ceil(elapsed * REVEAL_CHARS_PER_SECOND))
+      setCount(next)
+      if (next < text.length) frame = requestAnimationFrame(step)
+    }
+    frame = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(frame)
+  }, [text, active])
+
+  const done = count >= text.length
+  return { visible: done ? text : markdownSafeSlice(text, count), done }
+}
+
 function TypingIndicator() {
   return (
-    <div className="card mr-auto rounded-tl-sm border-l-2 border-pink">
+    // Unboxed, like the answer that replaces it — otherwise a card appears while
+    // thinking and then vanishes into plain text, which reads as a layout glitch.
+    <div className="mr-auto py-2">
       <div className="flex items-center gap-1.5" role="status" aria-label="Thinking">
         {[0, 1, 2].map(i => (
           <span
@@ -579,6 +656,91 @@ function MobileResearchLanding({
 // The message list itself — every card renderer, the typing indicator and the
 // inline error. Shared verbatim by the desktop panel and the full-screen mobile
 // view so there is exactly ONE rendering of a conversation in the app.
+/**
+ * Answers already revealed once, so remounting the thread — switching between the
+ * desktop panel and the full-screen mobile view, or scrolling back — replays
+ * nothing. Module-level on purpose: component state would reset on that remount,
+ * which is exactly the case this guards against.
+ */
+const revealedAnswers = new Set<string>()
+
+const answerKey = (message: ChatMessage) => `${message.createdAt}:${message.content.length}`
+
+/**
+ * One assistant turn.
+ *
+ * Deliberately NOT a card: the answer is the conversation, so it flows as text
+ * directly under the question the way every chat UI renders a reply. The boxed
+ * container it used to sit in (card + left border + 75% width) made a three-line
+ * answer look like a widget and gave the prose a quarter less room than the page
+ * had available.
+ *
+ * Structured output — stat grids, person/idea/video cards, the sources list — keeps
+ * its own cards and is held back until the prose finishes revealing, so nothing is
+ * animated that should not be.
+ */
+function AssistantMessage({
+  message,
+  index,
+  animate,
+  isLast,
+  loading,
+  onRegenerate,
+}: {
+  message: ChatMessage
+  index: number
+  animate: boolean
+  isLast: boolean
+  loading: boolean
+  onRegenerate: () => void
+}) {
+  const { visible, done } = useTypewriter(message.content, animate)
+
+  useEffect(() => {
+    if (done) revealedAnswers.add(answerKey(message))
+  }, [done, message])
+
+  return (
+    <div className="flex w-full flex-col items-start gap-1">
+      <div className="w-full">
+        {message.statsCards?.map(card => (
+          <StatsCardDisplay key={card.title} card={card} />
+        ))}
+        {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
+
+        <MarkdownMessage content={visible} sources={message.sources} scope={`msg-${index}`} />
+
+        {done && (
+          <>
+            {message.personCards?.map(card => (
+              <PersonCardDisplay key={card.display_name} card={card} />
+            ))}
+            {message.ideaCards?.map(card => (
+              <IdeaCardDisplay key={card.number} card={card} />
+            ))}
+            {message.videoCards?.map(card => (
+              <VideoCardDisplay key={card.post_id} card={card} />
+            ))}
+            {message.sources && message.sources.length > 0 && (
+              <SourcesList sources={message.sources} scope={`msg-${index}`} />
+            )}
+          </>
+        )}
+      </div>
+
+      {/* Actions wait for the reveal: copying half an answer is never wanted. */}
+      {done && (
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
+          {/* Copied without citation markers — "[C3]" means nothing outside this view. */}
+          <CopyResponseButton text={message.content.replace(/\s?\[[CV]\d+\]/g, '')} />
+          {isLast && <RegenerateButton onClick={onRegenerate} disabled={loading} />}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ChatThread({
   messages,
   loading,
@@ -603,35 +765,17 @@ function ChatThread({
             <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
           </div>
         ) : (
-          <div key={index} className="flex flex-col items-start gap-1">
-            <div className="card max-w-[75%] rounded-tl-sm border-l-2 border-pink">
-              {message.statsCards?.map(card => (
-                <StatsCardDisplay key={card.title} card={card} />
-              ))}
-              {message.anomalyCard && <AnomalyCardDisplay card={message.anomalyCard} />}
-              <MarkdownMessage content={message.content} sources={message.sources} scope={`msg-${index}`} />
-              {message.personCards?.map(card => (
-                <PersonCardDisplay key={card.display_name} card={card} />
-              ))}
-              {message.ideaCards?.map(card => (
-                <IdeaCardDisplay key={card.number} card={card} />
-              ))}
-              {message.videoCards?.map(card => (
-                <VideoCardDisplay key={card.post_id} card={card} />
-              ))}
-              {message.sources && message.sources.length > 0 && (
-                <SourcesList sources={message.sources} scope={`msg-${index}`} />
-              )}
-            </div>
-            <div className="flex items-center gap-3">
-              <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
-              {/* Copied without citation markers — "[C3]" means nothing outside this view. */}
-              <CopyResponseButton text={message.content.replace(/\s?\[[CV]\d+\]/g, '')} />
-              {index === lastAssistantIndex && (
-                <RegenerateButton onClick={onRegenerate} disabled={loading} />
-              )}
-            </div>
-          </div>
+          <AssistantMessage
+            key={index}
+            message={message}
+            index={index}
+            // Only the newest answer animates, and only the first time it is seen.
+            // Everything already in the transcript renders instantly.
+            animate={index === lastAssistantIndex && !revealedAnswers.has(answerKey(message))}
+            isLast={index === lastAssistantIndex}
+            loading={loading}
+            onRegenerate={onRegenerate}
+          />
         )
       )}
 
