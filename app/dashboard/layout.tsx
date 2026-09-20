@@ -42,6 +42,17 @@ export default function DashboardLayout({
   // at all — picking a platform comes before any of them apply.
   const isHub = pathname === '/dashboard/hub'
 
+  // The bell lives on Agent Home only. Everywhere else it was a permanent icon
+  // for something the creator was not doing on that page; Agent Home is where they
+  // actually triage, and the inbox is one tap away from it.
+  const isAgentHome = pathname === '/dashboard/agent'
+
+  // Below md the only header controls that exist are the bell (Agent Home) and the
+  // account gear (hub). On every other route the desktop links and the gear are
+  // md-only, so the bar would render as an empty bordered strip — it is hidden
+  // outright there instead, and the page starts at the container padding.
+  const headerHasMobileControls = isHub || isAgentHome
+
   return (
     // The bottom padding below reserves room for the fixed tab bar so the last
     // element of every page isn't hidden underneath it, and returns to normal at md
@@ -72,26 +83,16 @@ export default function DashboardLayout({
             } ${isWide ? 'max-w-7xl' : 'max-w-5xl'}`
       }
     >
+      {/* Controls only. The "Creator Dashboard" wordmark that used to sit on the
+          left was removed: it said the same thing on every page, cost 28px of type
+          plus its tap target, and left a third of the row empty. Sizing is now set
+          by the 36px controls rather than by a 20px serif heading. */}
       {!isFullscreenRoute && (
-      <nav className="mb-6 flex flex-wrap items-center justify-between gap-y-2 border-b border-white/10 pb-4">
-        <div>
-          {/* The wordmark is the way back out of any platform: it always points at
-              the hub, from every page and at every width. It replaces the separate
-              "← All platforms" link that used to sit above it — one control doing
-              the job rather than two pointing at the same place.
-              min-h-11 gives it a 44px tap target without changing how tall the
-              title looks, via the matching negative margin. */}
-          <Link
-            href="/dashboard/hub"
-            aria-label="Notice home — all platforms"
-            className="-my-2 inline-flex min-h-11 items-center rounded-md transition-colors hover:text-text-primary focus-visible:ring-2 focus-visible:ring-purple focus-visible:outline-none"
-          >
-            <h1 className="text-xl font-bold font-display text-text-primary">Creator Dashboard</h1>
-          </Link>
-        </div>
-        {/* The link row is the desktop navigation; below md the bottom tab bar
-            replaces it. The notification bell stays visible at every width — it has
-            no equivalent tab. */}
+      <nav
+        className={`${
+          headerHasMobileControls ? 'flex' : 'hidden md:flex'
+        } mb-3 items-center justify-end gap-1 border-b border-white/10 pb-2`}
+      >
         <div className="flex items-center gap-1">
           {!isHub && (
           <div className="hidden flex-wrap items-center gap-1 md:flex">
@@ -114,7 +115,7 @@ export default function DashboardLayout({
           </div>
           )}
 
-          {!isHub && <NotificationBell />}
+          {isAgentHome && <NotificationBell />}
 
           {/* Duplicated by the "Me" tab below md, so it hides with the link row.
               Points at the account page rather than straight to Business Profile —
