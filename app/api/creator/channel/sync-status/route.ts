@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { requireCreator } from '@/lib/api-auth'
 
 /**
  * Polled by the connect UI while a background channel sync runs.
@@ -11,22 +10,14 @@ import { cookies } from 'next/headers'
  */
 export async function GET() {
   try {
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      { cookies: { getAll: () => cookieStore.getAll(), setAll() {} } }
-    )
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const { supabase, creatorId } = authResult.auth
 
     const { data: creator, error } = await supabase
       .from('creators')
       .select('channel_sync_status, channel_videos_synced_count, channel_sync_hit_cap, last_channel_check_at')
-      .eq('user_id', user.id)
+      .eq('id', creatorId)
       .maybeSingle()
 
     if (error || !creator) {

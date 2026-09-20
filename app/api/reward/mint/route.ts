@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { createServiceClient } from '@/lib/supabase/service'
 import { createThirdwebClient, getContract, sendAndConfirmTransaction } from 'thirdweb'
 import { avalancheFuji } from 'thirdweb/chains'
 import { claimTo } from 'thirdweb/extensions/erc721'
@@ -19,20 +18,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const cookieStore = await cookies()
-
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
+    // Deliberately NOT cookie-bound. This endpoint is authorized by the claim
+    // token in the request, not by a session — the claimant is an audience
+    // member, who has no account here. Passing cookies as well used to mean that
+    // if a signed-in creator happened to open a claim link, the client ran as
+    // that user and RLS silently dropped the status write, failing the claim.
+    const supabase = createServiceClient()
 
     const { data: rewardEvent, error: rewardError } = await supabase
       .from('reward_events')

@@ -452,7 +452,9 @@ const MAX_TEXTAREA_HEIGHT = 200
 const SUGGESTIONS: Array<{ label: string; href?: string }> = [
   { label: "What's trending?", href: '/dashboard/research/trends' },
   { label: 'What should I post next?', href: '/dashboard/research/ideas' },
-  { label: 'What does my audience want?', href: '/dashboard/research/insights' },
+  // No href: the Audience Insights report page was removed, but the question
+  // itself is a good one, so it now runs through the chat like any other prompt.
+  { label: 'What does my audience want?' },
   { label: 'Show me repeated comments' },
 ]
 

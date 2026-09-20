@@ -35,13 +35,13 @@ export default async function TrendsReportPage() {
           <p className="font-display text-lg font-semibold text-text-primary">Nothing is repeating yet</p>
           <p className="mx-auto mt-2 max-w-md text-sm text-text-muted">
             No comment has been posted by two or more different people so far. That usually changes as more videos are
-            analyzed. For the broader themes your audience keeps coming back to, see Audience Insights.
+            analyzed. To dig into the themes your audience keeps coming back to, ask in Research chat.
           </p>
           <Link
-            href="/dashboard/research/insights"
+            href="/dashboard/research"
             className="mt-4 inline-flex min-h-11 items-center text-sm text-purple-text underline hover:text-purple-hover"
           >
-            Open Audience Insights
+            Ask a research question
           </Link>
         </section>
       ) : (

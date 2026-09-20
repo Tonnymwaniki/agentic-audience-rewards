@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { after } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { requireCreator } from '@/lib/api-auth'
 import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
 
 // The save itself returns immediately; this headroom is for the after() work,
@@ -9,6 +8,9 @@ import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
 export const maxDuration = 300
 
 const PROFILE_FIELDS = [
+  // Cleared to NULL like the rest, which is what makes Agent Home's greeting fall
+  // back to the email address.
+  'display_name',
   'business_phone',
   'business_whatsapp',
   'business_location',
@@ -21,35 +23,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
-
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    const { data: creator, error: creatorError } = await supabase
-      .from('creators')
-      .select('id')
-      .eq('user_id', user.id)
-      .single()
-
-    if (creatorError || !creator) {
-      return NextResponse.json({ error: 'Creator not found' }, { status: 404 })
-    }
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const { supabase, creatorId } = authResult.auth
 
     // Only the known profile columns are writable here — anything else in the
     // body is ignored rather than passed through to the update.
@@ -71,7 +47,7 @@ export async function POST(request: NextRequest) {
     const { error: updateError } = await supabase
       .from('creators')
       .update(updates)
-      .eq('id', creator.id)
+      .eq('id', creatorId)
 
     if (updateError) {
       console.error('Update business profile error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
@@ -83,7 +59,7 @@ export async function POST(request: NextRequest) {
     // can touch many comments and must not block (or time out) the save response.
     after(async () => {
       try {
-        const result = await regenerateDraftsForCreator(creator.id)
+        const result = await regenerateDraftsForCreator(creatorId)
         console.log('Profile save draft regeneration:', JSON.stringify(result))
       } catch (regenError) {
         console.error('Profile save draft regeneration error:', JSON.stringify(regenError, Object.getOwnPropertyNames(regenError), 2))

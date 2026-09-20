@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createClient as createCookieClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 
 export type AuthedCreator = {
   supabase: SupabaseClient
@@ -28,31 +28,33 @@ type AuthResult =
  *     attacker-supplied value: honouring it lets anyone run ingestion, LLM
  *     spend and writes against any account by guessing a UUID.
  *
- * Note the service-role key: it mirrors what the already-authenticated routes in
- * this project do, and matters because the database has no RLS policies. The
- * consequence is that authorization is entirely the responsibility of this
- * function and the ownership checks its callers perform — the database will not
- * catch a mistake.
+ * TWO SEPARATE CLIENTS, and the split is the whole point:
+ *
+ *   - `createCookieClient()` reads the session from cookies. Identity only.
+ *   - `createServiceClient()` is what callers get back for data access.
+ *
+ * This used to be one client — `createServerClient(url, SERVICE_ROLE_KEY,
+ * { cookies })` — which looks like a service-role client but is not one once a
+ * user session exists: supabase-js sends the user's JWT instead of the key, so
+ * every query ran as `authenticated` and RLS applied. RLS IS enabled on this
+ * project's tables (`creators`, `posts`, `channel_videos` at least) with policies
+ * that let an owner SELECT but not write, so reads worked and every write was
+ * silently discarded: an UPDATE matching no rows under RLS returns success with
+ * zero rows changed and no error. Routes therefore returned 200 while saving
+ * nothing — that was the cause of channel connect never persisting and of the
+ * business-category prompt re-asking forever.
+ *
+ * Because the returned client is genuinely service-role, RLS will not catch a
+ * mistake: the `creator_id` filters callers write, plus requirePostOwnership()
+ * below, are the only barrier. That is unchanged from the original design — it
+ * simply now actually holds.
  */
 export async function requireCreator(): Promise<AuthResult> {
-  const cookieStore = await cookies()
-
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll() {},
-      },
-    }
-  )
+  const authClient = await createCookieClient()
 
   const {
     data: { user },
-  } = await supabase.auth.getUser()
+  } = await authClient.auth.getUser()
 
   if (!user) {
     return {
@@ -60,6 +62,8 @@ export async function requireCreator(): Promise<AuthResult> {
       response: NextResponse.json({ error: 'Not authenticated' }, { status: 401 }),
     }
   }
+
+  const supabase = createServiceClient()
 
   const { data: creator } = await supabase
     .from('creators')

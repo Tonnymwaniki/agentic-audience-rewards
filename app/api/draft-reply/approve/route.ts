@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { requireCreator } from '@/lib/api-auth'
 
 export async function POST(request: NextRequest) {
   try {
@@ -14,34 +13,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'final_reply_text must be a string' }, { status: 400 })
     }
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    const { data: creator } = await supabase
-      .from('creators')
-      .select('id')
-      .eq('user_id', user.id)
-      .single()
-
-    if (!creator) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const { supabase, creatorId } = authResult.auth
 
     // Confirm the comment belongs to one of this creator's posts before touching it.
     const { data: comment, error: commentError } = await supabase
@@ -52,7 +26,7 @@ export async function POST(request: NextRequest) {
 
     const ownerCreatorId = (comment?.posts as unknown as { creator_id: string } | null)?.creator_id
 
-    if (commentError || !comment || ownerCreatorId !== creator.id) {
+    if (commentError || !comment || ownerCreatorId !== creatorId) {
       return NextResponse.json({ error: 'Comment not found' }, { status: 404 })
     }
 

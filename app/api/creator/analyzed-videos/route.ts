@@ -1,42 +1,16 @@
-import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { NextResponse } from 'next/server'
+import { requireCreator } from '@/lib/api-auth'
 
-export async function GET(request: NextRequest) {
+export async function GET() {
   try {
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
-
-    const { data: { user } } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    const { data: creator } = await supabase
-      .from('creators')
-      .select('id')
-      .eq('user_id', user.id)
-      .single()
-
-    if (!creator) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const { supabase, creatorId } = authResult.auth
 
     const { data: posts, error } = await supabase
       .from('posts')
       .select('external_post_id')
-      .eq('creator_id', creator.id)
+      .eq('creator_id', creatorId)
 
     if (error) {
       console.error('Analyzed videos fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))

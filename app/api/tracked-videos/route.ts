@@ -1,34 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { requireCreator } from '@/lib/api-auth'
+import { createServiceClient } from '@/lib/supabase/service'
 
+// Delegates to requireCreator(), which authenticates with a cookie-bound client
+// and hands back a genuine service-role client for data access. Building one
+// client from the service key AND the cookies — as this used to — yields a client
+// that runs as the signed-in user once a session exists, so RLS silently drops
+// every write.
 async function getAuthedSupabaseAndCreator() {
-  const cookieStore = await cookies()
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    {
-      cookies: {
-        getAll() {
-          return cookieStore.getAll()
-        },
-        setAll() {},
-      },
-    }
-  )
+  const authResult = await requireCreator()
 
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user) {
-    return { supabase, creator: null }
+  if (!authResult.ok) {
+    return { supabase: createServiceClient(), creator: null }
   }
 
-  const { data: creator } = await supabase
-    .from('creators')
-    .select('id')
-    .eq('user_id', user.id)
-    .single()
-
-  return { supabase, creator }
+  return { supabase: authResult.auth.supabase, creator: { id: authResult.auth.creatorId } }
 }
 
 export async function GET(request: NextRequest) {

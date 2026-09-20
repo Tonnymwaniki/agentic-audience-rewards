@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
-import { cookies } from 'next/headers'
+import { requireCreator } from '@/lib/api-auth'
 import { isBusinessCategory } from '@/lib/business-categories'
 
 export async function POST(request: NextRequest) {
@@ -13,40 +12,22 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid business_category' }, { status: 400 })
     }
 
-    const cookieStore = await cookies()
-    const supabase = createServerClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-      {
-        cookies: {
-          getAll() {
-            return cookieStore.getAll()
-          },
-          setAll() {},
-        },
-      }
-    )
+    const authResult = await requireCreator()
+    if (!authResult.ok) return authResult.response
+    const { supabase, creatorId } = authResult.auth
 
-    const { data: { user } } = await supabase.auth.getUser()
-
-    if (!user) {
-      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
-    }
-
-    const { data: creator, error: creatorError } = await supabase
-      .from('creators')
-      .select('id')
-      .eq('user_id', user.id)
-      .single()
-
-    if (creatorError || !creator) {
-      return NextResponse.json({ error: 'Creator not found' }, { status: 404 })
-    }
-
-    const { error: updateError } = await supabase
+    // .select() so the response proves a row was actually written. Without it a
+    // zero-row update is indistinguishable from a successful one.
+    const { data: updated, error: updateError } = await supabase
       .from('creators')
       .update({ business_category })
-      .eq('id', creator.id)
+      .eq('id', creatorId)
+      .select('id')
+
+    if (!updateError && (updated?.length ?? 0) === 0) {
+      console.error('Update business_category wrote no rows for creator', creatorId)
+      return NextResponse.json({ error: 'Failed to save category' }, { status: 500 })
+    }
 
     if (updateError) {
       console.error('Update business_category error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
