@@ -24,7 +24,7 @@ export default async function ResearchLayout({ children }: { children: React.Rea
 
   const { data: creator, error } = await supabase
     .from('creators')
-    .select('id')
+    .select('id, display_name')
     .eq('user_id', user.id)
     .maybeSingle()
 
@@ -36,5 +36,13 @@ export default async function ResearchLayout({ children }: { children: React.Rea
     redirect('/login')
   }
 
-  return <ResearchChatProvider creatorId={creator.id}>{children}</ResearchChatProvider>
+  // The greeting is shown by the chat's empty state, so the name is provided here
+  // rather than fetched again inside it. Same fallback chain as Agent Home.
+  const creatorName = creator.display_name || user.email || 'there'
+
+  return (
+    <ResearchChatProvider creatorId={creator.id} creatorName={creatorName}>
+      {children}
+    </ResearchChatProvider>
+  )
 }

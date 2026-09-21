@@ -115,6 +115,53 @@ export async function appendMessage(
   if (touchError) console.error('Conversation touch error:', touchError.message)
 }
 
+/**
+ * Drops every stored message after the first `keepCount`, oldest-first.
+ *
+ * Used when a creator edits an earlier question: the old answer, and everything
+ * that followed it, stop being part of the conversation and must stop being part
+ * of the transcript too. Leaving them would mean a resumed conversation replayed
+ * a branch the creator had already discarded, and would feed that dead branch back
+ * as context on the next question.
+ *
+ * Truncates by POSITION rather than timestamp: the client knows which turn is being
+ * edited by its index, and client-generated createdAt values do not match the
+ * server-generated created_at stored here.
+ */
+export async function truncateMessages(
+  supabase: SupabaseClient,
+  conversationId: string,
+  keepCount: number
+): Promise<number> {
+  if (!tablesAvailable || keepCount < 0) return 0
+
+  const { data, error } = await supabase
+    .from('research_messages')
+    .select('id')
+    .eq('conversation_id', conversationId)
+    .order('created_at', { ascending: true })
+
+  if (error) {
+    if (!markUnavailable(error)) console.error('Truncate read error:', error.message)
+    return 0
+  }
+
+  const doomed = (data ?? []).slice(keepCount).map(r => r.id as string)
+  if (doomed.length === 0) return 0
+
+  const { error: deleteError } = await supabase
+    .from('research_messages')
+    .delete()
+    .in('id', doomed)
+
+  if (deleteError) {
+    console.error('Truncate delete error:', deleteError.message)
+    return 0
+  }
+
+  return doomed.length
+}
+
 /** This creator's conversations, most recently active first. */
 export async function listConversations(
   supabase: SupabaseClient,

@@ -10,6 +10,7 @@ import Avatar from '@/components/Avatar'
 import { InterestBars, TrendingList } from './AudienceInsights'
 import type { SidebarInterest, SidebarTrendingTopic } from './ResearchSidebar'
 import ConversationHistory from './ConversationHistory'
+import MascotIcon from '@/components/MascotIcon'
 
 // Messages are only ever created client-side (the list starts empty on both
 // server and client), so formatting a local time here can't cause a hydration
@@ -658,6 +659,119 @@ function MobileResearchLanding({
 // inline error. Shared verbatim by the desktop panel and the full-screen mobile
 // view so there is exactly ONE rendering of a conversation in the app.
 /**
+ * A question the creator asked, with an edit affordance.
+ *
+ * Editing rewrites history rather than branching: submitting drops this turn's
+ * answer and everything after it, on screen and in research_messages, then
+ * re-answers from the edited wording. That is what every chat app does, and the
+ * alternative — appending a second answer below the first — leaves the creator
+ * reading two replies to two different questions with no indication which is current.
+ */
+function UserMessage({
+  message,
+  index,
+  onEdit,
+  disabled,
+}: {
+  message: ChatMessage
+  index: number
+  onEdit: (index: number, text: string) => void
+  disabled: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(message.content)
+
+  function begin() {
+    setDraft(message.content)
+    setEditing(true)
+  }
+
+  function submit() {
+    const trimmed = draft.trim()
+    if (!trimmed || trimmed === message.content.trim()) {
+      setEditing(false)
+      return
+    }
+    setEditing(false)
+    onEdit(index, trimmed)
+  }
+
+  if (editing) {
+    return (
+      <div className="flex w-full flex-col items-end gap-2">
+        <textarea
+          autoFocus
+          rows={2}
+          value={draft}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => {
+            // Enter submits, Shift+Enter adds a line, Escape abandons — the same
+            // keys the composer below already uses.
+            if (e.key === 'Enter' && !e.shiftKey) {
+              e.preventDefault()
+              submit()
+            }
+            if (e.key === 'Escape') setEditing(false)
+          }}
+          className="w-full resize-none rounded-2xl border border-purple/50 bg-surface px-4 py-3 text-sm leading-relaxed text-text-primary focus:ring-2 focus:ring-purple focus:outline-none"
+        />
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setEditing(false)}
+            className="rounded-lg px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text-primary"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={disabled || !draft.trim()}
+            className="btn-primary rounded-lg px-3 py-1.5 text-xs disabled:opacity-40"
+          >
+            Send
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="group flex flex-col items-end gap-1">
+      <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-purple px-4 py-3 text-sm whitespace-pre-wrap text-white">
+        {message.content}
+      </div>
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={begin}
+          disabled={disabled}
+          aria-label="Edit this message"
+          className="inline-flex items-center gap-1 text-[10px] text-text-muted transition-colors hover:text-text-primary disabled:opacity-40"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={1.8}
+            className="h-3 w-3"
+          >
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z"
+            />
+          </svg>
+          Edit
+        </button>
+        <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
+      </div>
+    </div>
+  )
+}
+
+/**
  * Answers already revealed once, so remounting the thread — switching between the
  * desktop panel and the full-screen mobile view, or scrolling back — replays
  * nothing. Module-level on purpose: component state would reset on that remount,
@@ -742,29 +856,101 @@ function AssistantMessage({
   )
 }
 
+/**
+ * The opening moment of a new conversation.
+ *
+ * Replaces a single muted line ("Ask anything about your audience.") that read as
+ * a placeholder rather than an invitation. The mascot and the named greeting do
+ * the same job here that the landing hero does on desktop, so the full-screen
+ * mobile chat — which had the more minimal version of the two — no longer feels
+ * like the lesser room.
+ *
+ * `size` exists because this renders in two very different boxes: a whole phone
+ * screen, and a 70vh desktop panel sitting under a hero that already greets the
+ * creator.
+ */
+function ChatWelcome({
+  creatorName,
+  onAsk,
+  size = 'full',
+}: {
+  creatorName: string
+  onAsk: (text: string) => void
+  size?: 'full' | 'compact'
+}) {
+  const full = size === 'full'
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-5 py-8 text-center">
+      <MascotIcon type="agent" size={full ? 92 : 64} />
+
+      <div>
+        {/* break-words: creatorName falls back to the signup email, which is one
+            unbreakable token and overran a 320px screen at this size. */}
+        <h2
+          className={`font-display font-semibold break-words text-text-primary ${
+            full ? 'text-2xl leading-tight' : 'text-xl'
+          }`}
+        >
+          Hi {creatorName},
+        </h2>
+        <p
+          className={`mt-1 font-display font-semibold text-purple-text ${
+            full ? 'text-2xl leading-tight' : 'text-xl'
+          }`}
+        >
+          what do you want to know?
+        </p>
+        <p className="mx-auto mt-3 max-w-xs text-sm leading-relaxed text-text-muted">
+          I have read every comment on your videos. Ask me anything about the people
+          watching.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap justify-center gap-2">
+        {SUGGESTIONS.map(suggestion => (
+          <SuggestionPill
+            key={suggestion.label}
+            suggestion={suggestion}
+            onAsk={onAsk}
+            className={
+              full
+                ? 'min-h-11 rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover'
+                : 'rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors hover:bg-surface-hover'
+            }
+          />
+        ))}
+      </div>
+    </div>
+  )
+}
+
 function ChatThread({
   messages,
   loading,
   error,
   lastAssistantIndex,
   onRegenerate,
+  onEditMessage,
 }: {
   messages: ChatMessage[]
   loading: boolean
   error: string | null
   lastAssistantIndex: number
   onRegenerate: () => void
+  onEditMessage: (index: number, text: string) => void
 }) {
   return (
     <>
           {messages.map((message, index) =>
         message.role === 'user' ? (
-          <div key={index} className="flex flex-col items-end gap-1">
-            <div className="max-w-[75%] rounded-2xl rounded-br-sm bg-purple px-4 py-3 text-sm whitespace-pre-wrap text-white">
-              {message.content}
-            </div>
-            <span className="font-mono text-[10px] text-text-muted">{formatTime(message.createdAt)}</span>
-          </div>
+          <UserMessage
+            key={index}
+            message={message}
+            index={index}
+            onEdit={onEditMessage}
+            disabled={loading}
+          />
         ) : (
           <AssistantMessage
             key={index}
@@ -810,6 +996,8 @@ export default function ResearchChat({
     sendMessage,
     regenerate,
     startNewChat,
+    creatorName,
+    editMessage,
   } = useResearchChat()
 
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -911,21 +1099,7 @@ export default function ResearchChat({
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4">
           {!hasMessages && (
-            <div className="flex h-full flex-col items-center justify-center gap-5 py-8 text-center">
-              <p className="font-display text-lg font-semibold text-text-primary">
-                Ask anything about your audience.
-              </p>
-              <div className="flex flex-wrap justify-center gap-2">
-                {SUGGESTIONS.map(suggestion => (
-                  <SuggestionPill
-                    key={suggestion.label}
-                    suggestion={suggestion}
-                    onAsk={sendMessage}
-                    className="min-h-11 rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors active:bg-surface-hover"
-                  />
-                ))}
-              </div>
-            </div>
+            <ChatWelcome creatorName={creatorName} onAsk={sendMessage} size="full" />
           )}
 
           <div className={`mx-auto max-w-2xl flex-col gap-5 py-5 ${hasMessages || loading || error ? 'flex' : 'hidden'}`}>
@@ -935,6 +1109,7 @@ export default function ResearchChat({
               error={error}
               lastAssistantIndex={lastAssistantIndex}
               onRegenerate={regenerate}
+              onEditMessage={editMessage}
             />
           </div>
         </div>
@@ -1011,21 +1186,7 @@ export default function ResearchChat({
           // The opening state lives inside the scroll area — the composer stays
           // bottom-anchored in the panel, so the old collapsing-spacer trick that
           // floated it to screen-centre no longer applies.
-          <div className="flex h-full flex-col items-center justify-center gap-5 py-8 text-center">
-            <p className="font-display text-lg font-semibold text-text-primary">
-              Ask anything about your audience.
-            </p>
-            <div className="flex flex-wrap justify-center gap-2">
-              {SUGGESTIONS.map(suggestion => (
-                <SuggestionPill
-                  key={suggestion.label}
-                  suggestion={suggestion}
-                  onAsk={sendMessage}
-                  className="rounded-full border border-white/10 bg-surface px-4 py-2 text-sm text-text-primary transition-colors hover:bg-surface-hover"
-                />
-              ))}
-            </div>
-          </div>
+          <ChatWelcome creatorName={creatorName} onAsk={sendMessage} size="compact" />
         )}
 
         {/* Collapsed while empty so its vertical padding can't push the h-full opening
@@ -1037,6 +1198,7 @@ export default function ResearchChat({
             error={error}
             lastAssistantIndex={lastAssistantIndex}
             onRegenerate={regenerate}
+            onEditMessage={editMessage}
           />
         </div>
       </div>

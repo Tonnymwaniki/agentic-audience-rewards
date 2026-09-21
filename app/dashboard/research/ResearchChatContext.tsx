@@ -78,12 +78,16 @@ type ResearchChatValue = {
   hasMessages: boolean
   lastAssistantIndex: number
   /** The row this conversation is being saved to; null until the first answer. */
+  /** Shown in the chat's opening greeting. */
+  creatorName: string
   conversationId: string | null
   /** True while a saved conversation is being fetched back. */
   loadingConversation: boolean
   setInput: (value: string) => void
   sendMessage: (text: string) => Promise<void>
   regenerate: () => Promise<void>
+  /** Rewrites the user message at `index` and re-answers, dropping everything after it. */
+  editMessage: (index: number, text: string) => Promise<void>
   startNewChat: () => void
   loadConversation: (id: string) => Promise<void>
 }
@@ -100,9 +104,11 @@ export function useResearchChat(): ResearchChatValue {
 
 export function ResearchChatProvider({
   creatorId,
+  creatorName,
   children,
 }: {
   creatorId: string
+  creatorName: string
   children: React.ReactNode
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -124,7 +130,7 @@ export function ResearchChatProvider({
   // append whatever the assistant returns", they just differ in what history and
   // message they start from.
   const requestAssistant = useCallback(
-    async (history: ChatMessage[], userText: string) => {
+    async (history: ChatMessage[], userText: string, truncateTo?: number) => {
       setLoading(true)
       setError(null)
 
@@ -139,6 +145,9 @@ export function ResearchChatProvider({
             // Absent on the first turn: the server opens a conversation and
             // returns its id, which every later turn then appends to.
             conversation_id: conversationIdRef.current,
+            // Set only when an earlier question was edited: tells the server how
+            // many stored turns to keep before appending this one.
+            truncate_to: truncateTo,
           }),
         })
 
@@ -218,6 +227,34 @@ export function ResearchChatProvider({
 
   // Clearing the id is what makes this a NEW conversation rather than a reset of
   // the old one: the previous rows stay in the database, reachable from history.
+  /**
+   * Replaces an earlier question with an edited one and re-answers from there.
+   *
+   * Standard chat behaviour: everything from that turn onward is discarded — the
+   * old answer and any turns after it — rather than a new branch being appended.
+   * The same cut is applied to research_messages via truncate_to, so the stored
+   * transcript can never disagree with what is on screen.
+   */
+  const editMessage = useCallback(
+    async (index: number, text: string) => {
+      const trimmed = text.trim()
+      if (!trimmed || loading) return
+      if (index < 0 || index >= messages.length || messages[index].role !== 'user') return
+
+      // Everything before the edited turn is the context the new answer is built
+      // from; index is also exactly how many stored turns the server should keep.
+      const history = messages.slice(0, index)
+      setMessages([
+        ...history,
+        { role: 'user', content: trimmed, createdAt: new Date().toISOString() },
+      ])
+      setInput('')
+
+      await requestAssistant(history, trimmed, index)
+    },
+    [loading, messages, requestAssistant]
+  )
+
   const startNewChat = useCallback(() => {
     setMessages([])
     setInput('')
@@ -271,15 +308,17 @@ export function ResearchChatProvider({
       error,
       hasMessages,
       lastAssistantIndex,
+      creatorName,
       conversationId,
       loadingConversation,
       setInput,
       sendMessage,
       regenerate,
+      editMessage,
       startNewChat,
       loadConversation,
     }),
-    [messages, input, loading, error, hasMessages, lastAssistantIndex, conversationId, loadingConversation, sendMessage, regenerate, startNewChat, loadConversation]
+    [messages, input, loading, error, hasMessages, lastAssistantIndex, creatorName, conversationId, loadingConversation, sendMessage, regenerate, editMessage, startNewChat, loadConversation]
   )
 
   return <ResearchChatContext.Provider value={value}>{children}</ResearchChatContext.Provider>

@@ -7,6 +7,7 @@ import {
   conversationBelongsTo,
   createConversation,
   generateConversationTitle,
+  truncateMessages,
 } from '@/lib/research/conversations'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
 
     const { supabase, creatorId } = authResult.auth
 
-    const { message, conversation_history, conversation_id } = await request.json()
+    const { message, conversation_history, conversation_id, truncate_to } = await request.json()
 
     if (!message) {
       return NextResponse.json({ error: 'Missing message' }, { status: 400 })
@@ -55,6 +56,13 @@ export async function POST(request: NextRequest) {
     } else {
       conversationId = await createConversation(supabase, creatorId)
       isNewConversation = Boolean(conversationId)
+    }
+
+    // An edited question replaces everything from that turn onward, so the stored
+    // transcript is cut back to match before the new turn is appended.
+    if (conversationId && typeof truncate_to === 'number' && truncate_to >= 0) {
+      const removed = await truncateMessages(supabase, conversationId, truncate_to)
+      console.log('Research conversation truncated:', JSON.stringify({ conversationId, keep: truncate_to, removed }))
     }
 
     if (conversationId) await appendMessage(supabase, conversationId, 'user', message)
