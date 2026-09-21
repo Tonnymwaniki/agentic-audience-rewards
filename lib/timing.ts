@@ -105,3 +105,56 @@ export function computeActivityWindows(
 
   return { totalComments, windows }
 }
+
+export type WeekdayActivity = {
+  /** 0 = Sunday, matching Date semantics, even though the list starts on Monday. */
+  dayIndex: number
+  /** "Mon" */
+  short: string
+  /** "Monday" */
+  day: string
+  count: number
+  /** Share of all dated comments, 0-100, rounded. */
+  percentage: number
+}
+
+/** Monday first: a creator planning a week reads it that way, not Sunday-first. */
+const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0]
+const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+/**
+ * Comment volume for each day of the week, in EAT, Monday through Sunday.
+ *
+ * Always returns all seven days, including empty ones — a chart that silently
+ * omits a quiet Sunday would draw a line straight from Saturday to Monday and
+ * imply activity that was never there.
+ *
+ * Shares the same toEat() conversion as computeActivityWindows, so the curve and
+ * the "most active" headline above it can never disagree about which day is which.
+ */
+export function computeWeeklyActivity(
+  comments: Array<{ posted_at: string | null }>
+): { totalComments: number; days: WeekdayActivity[] } {
+  const counts = new Array(7).fill(0)
+  let totalComments = 0
+
+  for (const comment of comments) {
+    if (!comment.posted_at) continue
+    const date = new Date(comment.posted_at)
+    if (isNaN(date.getTime())) continue
+    const { dayIndex } = toEat(date)
+    counts[dayIndex]++
+    totalComments++
+  }
+
+  return {
+    totalComments,
+    days: WEEK_ORDER.map(dayIndex => ({
+      dayIndex,
+      short: DAY_SHORT[dayIndex],
+      day: DAY_NAMES[dayIndex],
+      count: counts[dayIndex],
+      percentage: totalComments > 0 ? Math.round((counts[dayIndex] / totalComments) * 100) : 0,
+    })),
+  }
+}

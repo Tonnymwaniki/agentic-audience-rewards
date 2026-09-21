@@ -102,6 +102,12 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
               <span aria-hidden="true" className="gradient-primary absolute inset-y-0 left-0 w-1" />
             )}
 
+            {/* Identity row only. Everything below sits at the card's full content
+                width rather than indented under the avatar: nested inside it, the
+                draft textarea measured 158px of a 320px screen — page padding, card
+                padding, the avatar, the gap and the draft panel's own padding took
+                104px off the left before any text. The reply is the thing being
+                read and edited, so it gets the width. */}
             <div className="flex items-start gap-3">
               <Avatar name={comment?.authorName || 'Unknown'} size={36} />
 
@@ -124,61 +130,62 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                   <span className="text-xs text-text-muted">{timeAgo(item.createdAt)}</span>
                 </div>
 
-                {comment ? (
-                  <>
-                    <p className="mt-1.5 text-sm leading-relaxed text-text-primary">{comment.text}</p>
-                    <p className="mt-1 truncate text-xs text-text-muted">on {comment.videoTitle}</p>
-                  </>
-                ) : (
-                  <p className="mt-1.5 text-sm leading-relaxed text-text-primary">{item.message}</p>
-                )}
+              </div>
+            </div>
+
+            <div className="mt-2">
+              {comment ? (
+                <>
+                  <p className="text-sm leading-relaxed text-text-primary">{comment.text}</p>
+                  <p className="mt-1 truncate text-xs text-text-muted">on {comment.videoTitle}</p>
+                </>
+              ) : (
+                <p className="text-sm leading-relaxed text-text-primary">{item.message}</p>
+              )}
 
                 {/* Escalated comments deliberately carry no draft — the creator has
                     to answer personally, so the card says why instead of offering
                     a reply to approve. */}
-                {escalation && (
-                  <div className="mt-2 rounded-md border border-avax-red/30 bg-avax-red/10 p-3">
-                    <p className="text-xs font-medium text-avax-red">
-                      {ESCALATION_LABELS[escalation] ?? 'Needs your personal reply'}
-                    </p>
-                    <p className="mt-1 text-xs leading-snug text-text-muted">{ESCALATION_NOTE}</p>
-                  </div>
-                )}
-
-                {actionable && comment && (
-                  <DraftReplyEditor
-                    className="mt-2"
-                    commentId={comment.id}
-                    draftReply={comment.draftReply!}
-                    finalReplyText={comment.finalReplyText}
-                    onApproved={() => void markRead(item.id)}
-                  />
-                )}
-
-                {comment?.approved && (
-                  <p className="mt-2 text-xs text-green">Reply approved</p>
-                )}
-
-                <div className="mt-3 flex flex-wrap items-center gap-2">
-                  {comment && (
-                    <Link
-                      href={`/dashboard/inbox/${comment.postId}`}
-                      onClick={() => void markRead(item.id)}
-                      className="inline-flex min-h-11 items-center text-xs text-purple-text hover:underline"
-                    >
-                      Open video →
-                    </Link>
-                  )}
-                  {!isRead && (
-                    <button
-                      type="button"
-                      onClick={() => void markRead(item.id)}
-                      className="inline-flex min-h-11 items-center rounded-lg border border-white/10 px-3 text-xs font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary"
-                    >
-                      Mark as read
-                    </button>
-                  )}
+              {escalation && (
+                <div className="mt-2 rounded-md border border-avax-red/30 bg-avax-red/10 p-3">
+                  <p className="text-xs font-medium text-avax-red">
+                    {ESCALATION_LABELS[escalation] ?? 'Needs your personal reply'}
+                  </p>
+                  <p className="mt-1 text-xs leading-snug text-text-muted">{ESCALATION_NOTE}</p>
                 </div>
+              )}
+
+              {actionable && comment && (
+                <DraftReplyEditor
+                  className="mt-2"
+                  commentId={comment.id}
+                  draftReply={comment.draftReply!}
+                  finalReplyText={comment.finalReplyText}
+                  onApproved={() => void markRead(item.id)}
+                />
+              )}
+
+              {comment?.approved && <p className="mt-2 text-xs text-green">Reply approved</p>}
+
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                {comment && (
+                  <Link
+                    href={`/dashboard/inbox/${comment.postId}`}
+                    onClick={() => void markRead(item.id)}
+                    className="inline-flex min-h-11 items-center text-xs text-purple-text hover:underline"
+                  >
+                    Open video →
+                  </Link>
+                )}
+                {!isRead && (
+                  <button
+                    type="button"
+                    onClick={() => void markRead(item.id)}
+                    className="inline-flex min-h-11 items-center rounded-lg border border-white/10 px-3 text-xs font-medium text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary"
+                  >
+                    Mark as read
+                  </button>
+                )}
               </div>
             </div>
           </li>

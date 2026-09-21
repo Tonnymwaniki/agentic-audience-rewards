@@ -1,10 +1,10 @@
 import Link from 'next/link'
 import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
-import CategoryBreakdown, { type CategoryCounts } from './CategoryBreakdown'
+import CategoryBreakdown, { type CategoryCounts, type VideoBreakdown } from './CategoryBreakdown'
 import RecognizedPeople, { type RecognizedPerson } from './RecognizedPeople'
 import BestTimeToPost from './BestTimeToPost'
-import type { ActivityWindow } from '@/lib/timing'
+import type { ActivityWindow, WeekdayActivity } from '@/lib/timing'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -21,9 +21,11 @@ type AgentSummaryProps = {
   recognizedCount: number
   totalCommentsCount: number
   categoryCounts: CategoryCounts
+  videoBreakdowns: VideoBreakdown[]
   recognizedPeople: RecognizedPerson[]
   activityWindows: ActivityWindow[]
   datedCommentCount: number
+  weekdayActivity: WeekdayActivity[]
   totalDraftsCount: number
   totalRecognizedCount: number
   repliesReadyCount: number
@@ -236,9 +238,11 @@ export default function AgentSummary({
   recognizedCount,
   totalCommentsCount,
   categoryCounts,
+  videoBreakdowns,
   recognizedPeople,
   activityWindows,
   datedCommentCount,
+  weekdayActivity,
   totalDraftsCount,
   totalRecognizedCount,
   repliesReadyCount,
@@ -249,6 +253,11 @@ export default function AgentSummary({
 
   return (
     <div className="space-y-5">
+      {/* Page title. The shared header no longer carries one — it was the same
+          "Creator Dashboard" on every screen — so each page names itself. This is
+          Agent Home's, and belongs to this page alone. */}
+      <h1 className="font-display text-2xl font-semibold text-text-primary">Your Agent</h1>
+
       {/* --- Mobile hero. Desktop already leads with the "Your Agent" card beside
               the greeting, so the mascot would be a third robot up there. --- */}
       <div className="flex flex-col items-center pt-2 text-center md:hidden">
@@ -334,11 +343,15 @@ export default function AgentSummary({
       {/* --- Category mix. Sits directly under the stats because it answers the
               obvious follow-up to "N comments read": read of what? Renders nothing
               until something has been categorized. --- */}
-      <CategoryBreakdown counts={categoryCounts} />
+      <CategoryBreakdown counts={categoryCounts} videos={videoBreakdowns} />
 
       {/* --- Best time to post. Same shared computation the Research chat's
               get_timing_insights tool uses, so the two always agree. --- */}
-      <BestTimeToPost windows={activityWindows} totalComments={datedCommentCount} />
+      <BestTimeToPost
+        windows={activityWindows}
+        weekdays={weekdayActivity}
+        totalComments={datedCommentCount}
+      />
 
       {/* --- Opportunities banner. Hidden entirely when there's nothing to act on,
               rather than showing an encouraging-but-empty prompt. --- */}

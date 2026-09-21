@@ -47,7 +47,9 @@ export default function NotificationBell() {
       href="/dashboard/notifications"
       aria-label={label}
       title={label}
-      className={`relative rounded-md p-2 transition-colors hover:text-text-primary ${
+      // Larger than the old 20px glyph in a 36px box: it is now the only control
+      // in the header on Agent Home, and at that size it was easy to skim past.
+      className={`relative rounded-lg p-2.5 transition-colors hover:text-text-primary ${
         pathname === '/dashboard/notifications' ? 'text-purple-text' : 'text-text-muted'
       }`}
     >
@@ -57,7 +59,7 @@ export default function NotificationBell() {
         fill="none"
         stroke="currentColor"
         strokeWidth={1.75}
-        className="h-5 w-5"
+        className="h-7 w-7"
       >
         <path
           strokeLinecap="round"
@@ -66,7 +68,7 @@ export default function NotificationBell() {
         />
       </svg>
       {unreadCount > 0 && (
-        <span className="absolute -top-0.5 -right-0.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-avax-red px-1 text-[10px] font-medium text-white">
+        <span className="absolute -top-1 -right-1 flex h-5 min-w-[1.25rem] items-center justify-center rounded-full bg-avax-red px-1 text-[11px] font-semibold text-white">
           {unreadCount > 9 ? '9+' : unreadCount}
         </span>
       )}

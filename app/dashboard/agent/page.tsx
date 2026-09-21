@@ -7,7 +7,7 @@ import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
 import { normalizeLevel } from '@/lib/levels'
-import { computeActivityWindows } from '@/lib/timing'
+import { computeActivityWindows, computeWeeklyActivity } from '@/lib/timing'
 import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
 
@@ -68,7 +68,7 @@ export default async function AgentHomePage() {
 
   const { data: posts, error: postsError } = await supabase
     .from('posts')
-    .select('id')
+    .select('id, title')
     .eq('creator_id', creator.id)
 
   if (postsError) {
@@ -96,7 +96,7 @@ export default async function AgentHomePage() {
     redirect(CONNECT_PATH)
   }
 
-  type CommentRow = { id: string; posted_at: string }
+  type CommentRow = { id: string; posted_at: string; post_id: string }
   const allComments: CommentRow[] = []
 
   if (postIds.length > 0) {
@@ -107,7 +107,7 @@ export default async function AgentHomePage() {
     while (hasMore) {
       const { data: batch, error: commentsError } = await supabase
         .from('comments')
-        .select('id, posted_at')
+        .select('id, posted_at, post_id')
         .in('post_id', postIds)
         .range(offset, offset + batchSize - 1)
 
@@ -283,6 +283,7 @@ export default async function AgentHomePage() {
   // Busiest posting windows, in EAT. allComments already carries posted_at for the
   // 24h stats, so this is arithmetic over memory rather than another query.
   const activityWindows = computeActivityWindows(allComments, 3)
+  const weeklyActivity = computeWeeklyActivity(allComments)
 
   // Every category row for this creator is already loaded above for the drafts and
   // stats, so the breakdown is a tally over memory rather than another query.
@@ -291,6 +292,32 @@ export default async function AgentHomePage() {
     if (!row.category) continue
     categoryCounts[row.category] = (categoryCounts[row.category] ?? 0) + 1
   }
+
+  // The same tally again, split per video, so the breakdown widget can cycle
+  // through them. Built from the two arrays already in memory — commentsById maps
+  // a category row back to the video its comment belongs to.
+  const postById = new Map((posts || []).map(p => [p.id, (p.title as string | null) || 'Untitled video']))
+  const postIdByCommentId = new Map(allComments.map(c => [c.id, c.post_id]))
+  const countsByPost = new Map<string, Record<string, number>>()
+
+  for (const row of categories) {
+    if (!row.category) continue
+    const postId = postIdByCommentId.get(row.comment_id)
+    if (!postId) continue
+    const bucket = countsByPost.get(postId) ?? {}
+    bucket[row.category] = (bucket[row.category] ?? 0) + 1
+    countsByPost.set(postId, bucket)
+  }
+
+  // Busiest video first, so the cycle opens on the one with the most to say.
+  const videoBreakdowns = [...countsByPost.entries()]
+    .map(([postId, counts]) => ({
+      postId,
+      title: postById.get(postId) ?? 'Untitled video',
+      counts,
+      total: Object.values(counts).reduce((sum, n) => sum + n, 0),
+    }))
+    .sort((a, b) => b.total - a.total)
 
   return (
     <div>
@@ -316,9 +343,11 @@ export default async function AgentHomePage() {
         purchaseIntentReadyCount={purchaseIntentReadyCount}
         activity={activity}
         categoryCounts={categoryCounts}
+        videoBreakdowns={videoBreakdowns}
         recognizedPeople={recognizedPeople}
         activityWindows={activityWindows.windows}
         datedCommentCount={activityWindows.totalComments}
+        weekdayActivity={weeklyActivity.days}
       />
     </div>
   )
