@@ -9,6 +9,7 @@ import { formatAggregateEvidence } from '@/lib/research/aggregate-evidence'
 import Avatar from '@/components/Avatar'
 import { InterestBars, TrendingList } from './AudienceInsights'
 import type { SidebarInterest, SidebarTrendingTopic } from './ResearchSidebar'
+import ConversationHistory from './ConversationHistory'
 
 // Messages are only ever created client-side (the list starts empty on both
 // server and client), so formatting a local time here can't cause a hydration
@@ -811,6 +812,7 @@ export default function ResearchChat({
     startNewChat,
   } = useResearchChat()
 
+  const [historyOpen, setHistoryOpen] = useState(false)
   const router = useRouter()
   const scrollRef = useRef<HTMLDivElement>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -887,17 +889,24 @@ export default function ResearchChat({
             Back
           </Link>
           <h1 className="font-display text-base font-semibold text-text-primary">Research</h1>
-          {hasMessages ? (
+          {/* Both always rendered. "New" used to appear only once a conversation
+              existed, which meant the one moment you could not start a fresh chat
+              was while looking at a stale one. */}
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => setHistoryOpen(true)}
+              aria-label="Your conversations"
+              className="rounded-full border border-white/10 bg-surface px-3 py-1.5 text-xs text-text-muted transition-colors active:bg-surface-hover"
+            >
+              History
+            </button>
             <button
               onClick={startNewChat}
               className="rounded-full border border-white/10 bg-surface px-3 py-1.5 text-xs text-text-muted transition-colors active:bg-surface-hover"
             >
               + New
             </button>
-          ) : (
-            // Keeps the title optically centred when there's no button yet.
-            <span aria-hidden="true" className="w-14" />
-          )}
+          </div>
         </header>
 
         <div ref={scrollRef} className="flex-1 overflow-y-auto px-4">
@@ -956,6 +965,8 @@ export default function ResearchChat({
             </button>
           </form>
         </div>
+
+        <ConversationHistory open={historyOpen} onClose={() => setHistoryOpen(false)} />
       </div>
     )
   }
@@ -979,14 +990,20 @@ export default function ResearchChat({
       >
       <header className="flex flex-shrink-0 items-center justify-between gap-4 border-b border-white/10 px-5 py-3">
         <h2 className="font-display text-base font-semibold text-text-primary">Research</h2>
-        {hasMessages && (
+        <div className="flex items-center gap-1.5">
+          <button
+            onClick={() => setHistoryOpen(true)}
+            className="rounded-full border border-white/10 bg-surface px-3 py-1.5 text-xs text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary"
+          >
+            History
+          </button>
           <button
             onClick={startNewChat}
             className="rounded-full border border-white/10 bg-surface px-3 py-1.5 text-xs text-text-muted transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
             + New chat
           </button>
-        )}
+        </div>
       </header>
 
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-5">
@@ -1050,6 +1067,14 @@ export default function ResearchChat({
         </div>
       </div>
       </div>
+
+      <ConversationHistory
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        // On a phone this view is the landing screen, so a resumed conversation
+        // has to continue in the full-screen chat rather than behind the hero.
+        onOpened={() => router.push('/dashboard/research/chat')}
+      />
     </>
   )
 }

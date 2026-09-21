@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react'
 
 // The conversation lives here rather than inside ResearchChat, because on mobile the
 // landing screen and the full-screen chat are now two ROUTES. Component state would
@@ -77,10 +77,15 @@ type ResearchChatValue = {
   error: string | null
   hasMessages: boolean
   lastAssistantIndex: number
+  /** The row this conversation is being saved to; null until the first answer. */
+  conversationId: string | null
+  /** True while a saved conversation is being fetched back. */
+  loadingConversation: boolean
   setInput: (value: string) => void
   sendMessage: (text: string) => Promise<void>
   regenerate: () => Promise<void>
   startNewChat: () => void
+  loadConversation: (id: string) => Promise<void>
 }
 
 const ResearchChatContext = createContext<ResearchChatValue | null>(null)
@@ -104,6 +109,13 @@ export function ResearchChatProvider({
   const [input, setInput] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [conversationId, setConversationId] = useState<string | null>(null)
+  const [loadingConversation, setLoadingConversation] = useState(false)
+
+  // Read inside requestAssistant without making it a dependency: adding the id to
+  // the dep array would rebuild the callback the moment the first answer assigns
+  // one, and sendMessage's own deps with it, for no behavioural gain.
+  const conversationIdRef = useRef<string | null>(null)
 
   const hasMessages = messages.length > 0
   const lastAssistantIndex = messages.map(m => m.role).lastIndexOf('assistant')
@@ -124,6 +136,9 @@ export function ResearchChatProvider({
             creator_id: creatorId,
             message: userText,
             conversation_history: history,
+            // Absent on the first turn: the server opens a conversation and
+            // returns its id, which every later turn then appends to.
+            conversation_id: conversationIdRef.current,
           }),
         })
 
@@ -131,6 +146,11 @@ export function ResearchChatProvider({
 
         if (!res.ok) {
           throw new Error(data.error || 'Failed to get a response')
+        }
+
+        if (data.conversation_id && conversationIdRef.current !== data.conversation_id) {
+          conversationIdRef.current = data.conversation_id
+          setConversationId(data.conversation_id)
         }
 
         setMessages(prev => [
@@ -196,11 +216,51 @@ export function ResearchChatProvider({
     await requestAssistant(history, userText)
   }, [loading, lastAssistantIndex, messages, requestAssistant])
 
+  // Clearing the id is what makes this a NEW conversation rather than a reset of
+  // the old one: the previous rows stay in the database, reachable from history.
   const startNewChat = useCallback(() => {
     setMessages([])
     setInput('')
     setError(null)
     setLoading(false)
+    conversationIdRef.current = null
+    setConversationId(null)
+  }, [])
+
+  /**
+   * Pulls a saved conversation back into the chat.
+   *
+   * The restored messages become the real conversation_history sent with the next
+   * question, so a follow-up is answered with the full prior context rather than
+   * as if it were a fresh first turn.
+   *
+   * Cards and citation chips are not restored — they are not persisted, because a
+   * chip rebuilt from ids that may have changed would be a quiet lie. The prose
+   * comes back; any new answer in the resumed conversation gets fresh cards.
+   */
+  const loadConversation = useCallback(async (id: string) => {
+    setLoadingConversation(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/research/conversations/${id}`)
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Could not open that conversation')
+
+      setMessages(
+        (data.messages ?? []).map((m: { role: string; content: string; createdAt: string }) => ({
+          role: m.role === 'assistant' ? 'assistant' : 'user',
+          content: m.content,
+          createdAt: m.createdAt,
+        }))
+      )
+      conversationIdRef.current = id
+      setConversationId(id)
+      setInput('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not open that conversation')
+    } finally {
+      setLoadingConversation(false)
+    }
   }, [])
 
   const value = useMemo(
@@ -211,12 +271,15 @@ export function ResearchChatProvider({
       error,
       hasMessages,
       lastAssistantIndex,
+      conversationId,
+      loadingConversation,
       setInput,
       sendMessage,
       regenerate,
       startNewChat,
+      loadConversation,
     }),
-    [messages, input, loading, error, hasMessages, lastAssistantIndex, sendMessage, regenerate, startNewChat]
+    [messages, input, loading, error, hasMessages, lastAssistantIndex, conversationId, loadingConversation, sendMessage, regenerate, startNewChat, loadConversation]
   )
 
   return <ResearchChatContext.Provider value={value}>{children}</ResearchChatContext.Provider>
