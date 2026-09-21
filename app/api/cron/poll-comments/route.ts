@@ -4,6 +4,7 @@ import { embedPostCommentsSafely } from '@/lib/embeddings'
 import { categorizePost } from '@/lib/categorize'
 import { createServiceClient } from '@/lib/supabase/service'
 import { isCronAuthorized } from '@/lib/cron-auth'
+import { logError } from '@/lib/logger'
 
 // Gives the loop over all tracked videos room to finish within one invocation.
 // Vercel Hobby caps this at 60s, Pro at 300s — raise the plan if this route
@@ -18,7 +19,7 @@ const POLL_INTERVAL_MS = 20 * 60 * 1000
 
 export async function GET(request: NextRequest) {
   if (!process.env.CRON_SECRET) {
-    console.error('Poll comments: CRON_SECRET is not configured')
+    logError('api/cron/poll-comments', new Error('CRON_SECRET is not configured'), { stage: 'auth_precondition' })
     return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 })
   }
 
@@ -37,7 +38,7 @@ export async function GET(request: NextRequest) {
       .lt('last_checked_at', threshold)
 
     if (error) {
-      console.error('Poll comments: fetch tracked_videos error', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+      logError('api/cron/poll-comments', error, { stage: 'fetch_tracked_videos' })
       return NextResponse.json({ error: 'Failed to fetch tracked videos' }, { status: 500 })
     }
 
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
 
         results.push({ post_id: track.post_id, success: true, newComments: ingestResult.commentsIngested })
       } catch (err) {
-        console.error('Poll comments: error processing post', track.post_id, JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        logError('api/cron/poll-comments', err, { post_id: track.post_id, stage: 'process_post' })
         results.push({
           post_id: track.post_id,
           success: false,
@@ -80,7 +81,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({ success: true, checked: results.length, results })
   } catch (error) {
-    console.error("CRON POLL ERROR:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('api/cron/poll-comments', error, { stage: 'request' })
     return NextResponse.json({ error: "Internal error" }, { status: 500 })
   }
 }

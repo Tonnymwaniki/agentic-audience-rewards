@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logError, logWarn } from '@/lib/logger'
 
 /**
  * Durable storage for Research chat conversations.
@@ -55,7 +56,7 @@ export async function createConversation(
     .single()
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Create conversation error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.create', error, { creator_id: creatorId })
     return null
   }
   return data.id as string
@@ -83,7 +84,7 @@ export async function conversationBelongsTo(
     .maybeSingle()
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Conversation ownership check error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.ownership', error, { conversation_id: conversationId, creator_id: creatorId })
     return false
   }
   return Boolean(data)
@@ -103,7 +104,7 @@ export async function appendMessage(
     .insert([{ conversation_id: conversationId, role, content }])
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Append message error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.appendMessage', error, { conversation_id: conversationId, role })
     return
   }
 
@@ -112,7 +113,7 @@ export async function appendMessage(
     .update({ updated_at: new Date().toISOString() })
     .eq('id', conversationId)
 
-  if (touchError) console.error('Conversation touch error:', touchError.message)
+  if (touchError) logError('research.conversations.appendMessage', touchError, { conversation_id: conversationId, stage: 'touch_updated_at' })
 }
 
 /**
@@ -142,7 +143,7 @@ export async function truncateMessages(
     .order('created_at', { ascending: true })
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Truncate read error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.truncate', error, { conversation_id: conversationId, stage: 'read' })
     return 0
   }
 
@@ -155,7 +156,7 @@ export async function truncateMessages(
     .in('id', doomed)
 
   if (deleteError) {
-    console.error('Truncate delete error:', deleteError.message)
+    logError('research.conversations.truncate', deleteError, { conversation_id: conversationId, stage: 'delete', doomed_count: doomed.length })
     return 0
   }
 
@@ -178,7 +179,7 @@ export async function listConversations(
     .limit(limit)
 
   if (error) {
-    if (!markUnavailable(error)) console.error('List conversations error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.list', error, { creator_id: creatorId })
     return []
   }
 
@@ -220,7 +221,7 @@ export async function loadMessages(
     .order('created_at', { ascending: true })
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Load messages error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.loadMessages', error, { conversation_id: conversationId })
     return []
   }
 
@@ -286,11 +287,11 @@ export async function generateConversationTitle(
         : null
       if (typeof text === 'string' && text.trim().length > 0) title = tidyTitle(text)
     } else {
-      console.error('Conversation title API error:', response.status)
+      logWarn('research.conversations.title', 'Title API returned a non-OK status; falling back to the question', { conversation_id: conversationId, status: response.status })
     }
   } catch (err) {
     const reason = err instanceof Error && err.name === 'AbortError' ? 'timed out' : String(err)
-    console.error('Conversation title generation failed, using the question:', reason)
+    logWarn('research.conversations.title', 'Title generation failed; falling back to the question', { conversation_id: conversationId, reason })
   } finally {
     clearTimeout(timeoutId)
   }
@@ -301,7 +302,7 @@ export async function generateConversationTitle(
     .eq('id', conversationId)
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Conversation title write error:', error.message)
+    if (!markUnavailable(error)) logError('research.conversations.title', error, { conversation_id: conversationId, stage: 'write' })
     return null
   }
 

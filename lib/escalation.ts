@@ -1,3 +1,4 @@
+import { logWarn } from '@/lib/logger'
 /**
  * Comments a human has to answer themselves.
  *
@@ -107,7 +108,7 @@ export async function detectEscalation(commentText: string): Promise<EscalationR
     const parsed = JSON.parse(match[0])
     return { escalation: normalizeEscalation(parsed.escalation), checkFailed: false }
   } catch (err) {
-    console.error('Escalation check error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logWarn('escalation.check', 'Escalation check failed; comment left unscreened', { reason: err instanceof Error ? err.message : String(err) })
     return { escalation: null, checkFailed: true }
   } finally {
     clearTimeout(timeoutId)

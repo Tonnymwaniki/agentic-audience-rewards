@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { createServiceClient } from '@/lib/supabase/service'
+import { logError } from '@/lib/logger'
 
 // Delegates to requireCreator(), which authenticates with a cookie-bound client
 // and hands back a genuine service-role client for data access. Building one
@@ -32,7 +33,7 @@ export async function GET(request: NextRequest) {
     .limit(20)
 
   if (error) {
-    console.error('Notifications fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('api/notifications', error, { creator_id: creator.id, stage: 'fetch' })
     return NextResponse.json({ error: 'Failed to fetch notifications' }, { status: 500 })
   }
 
@@ -43,7 +44,7 @@ export async function GET(request: NextRequest) {
     .eq('read', false)
 
   if (countError) {
-    console.error('Notifications unread count error:', JSON.stringify(countError, Object.getOwnPropertyNames(countError), 2))
+    logError('api/notifications', countError, { creator_id: creator.id, stage: 'unread_count' })
   }
 
   return NextResponse.json({

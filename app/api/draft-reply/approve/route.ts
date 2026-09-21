@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
+import { logError } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -41,7 +42,7 @@ export async function POST(request: NextRequest) {
       .maybeSingle()
 
     if (categoryError) {
-      console.error('Approve draft reply lookup error:', JSON.stringify(categoryError, Object.getOwnPropertyNames(categoryError), 2))
+      logError('api/draft-reply/approve', categoryError, { creator_id: creatorId, comment_id, stage: 'lookup' })
       return NextResponse.json({ error: 'Failed to approve draft reply' }, { status: 500 })
     }
 
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest) {
       .eq('comment_id', comment_id)
 
     if (updateError) {
-      console.error('Approve draft reply error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+      logError('api/draft-reply/approve', updateError, { creator_id: creatorId, comment_id, stage: 'update' })
       return NextResponse.json({ error: 'Failed to approve draft reply' }, { status: 500 })
     }
 
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
       reply_was_edited: wasEdited,
     })
   } catch (err) {
-    console.error('Approve draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/draft-reply/approve', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

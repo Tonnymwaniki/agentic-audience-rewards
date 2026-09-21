@@ -5,6 +5,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import PageHeader from '@/components/PageHeader'
 import PasteVideoLink from './PasteVideoLink'
 import VideoGrid from './VideoGrid'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,7 +26,7 @@ export default async function InboxPage() {
     .maybeSingle()
 
   if (creatorError) {
-    console.error('My Videos creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.inbox', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your account details.</p>
@@ -44,7 +45,7 @@ export default async function InboxPage() {
     .order('ingested_at', { ascending: false })
 
   if (postsError) {
-    console.error('Posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+    logError('page.inbox', postsError, { creator_id: creator.id, stage: 'fetch_posts' })
     return (
       <div>
         <p className="text-red-500">Failed to load posts</p>
@@ -79,7 +80,7 @@ export default async function InboxPage() {
         .range(from, from + pageSize - 1)
 
       if (channelVideosError) {
-        console.error('Channel videos fetch error:', JSON.stringify(channelVideosError, Object.getOwnPropertyNames(channelVideosError), 2))
+        logError('page.inbox', channelVideosError, { creator_id: creator.id, stage: 'fetch_channel_videos' })
         break
       }
 
@@ -97,7 +98,7 @@ export default async function InboxPage() {
     .eq('creator_id', creator.id)
 
   if (trackedError) {
-    console.error('Tracked videos fetch error:', JSON.stringify(trackedError, Object.getOwnPropertyNames(trackedError), 2))
+    logError('page.inbox', trackedError, { creator_id: creator.id, stage: 'fetch_tracked_videos' })
   }
 
   const trackedPostIds = new Set(
@@ -121,7 +122,7 @@ export default async function InboxPage() {
         .range(offset, offset + batchSize - 1)
 
       if (commentsError) {
-        console.error('Comments paginated fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+        logError('page.inbox', commentsError, { creator_id: creator.id, stage: 'fetch_comments' })
         break
       }
 

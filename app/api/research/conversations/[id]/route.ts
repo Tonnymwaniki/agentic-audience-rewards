@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { conversationBelongsTo, loadMessages } from '@/lib/research/conversations'
+import { logError } from '@/lib/logger'
 
 /**
  * One conversation's messages, for resuming it.
@@ -24,7 +25,7 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
 
     return NextResponse.json({ id, messages })
   } catch (err) {
-    console.error('Load conversation error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/research/conversations/[id]', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

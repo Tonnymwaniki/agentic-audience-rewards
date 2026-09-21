@@ -3,6 +3,7 @@ import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-pro
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
+import { logError, logWarn } from '@/lib/logger'
 
 export type ProgressCallback = (count: number) => void
 
@@ -203,7 +204,7 @@ export async function loadStyleExamples(
     .limit(limit)
 
   if (error) {
-    console.error('Style examples fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('categorize.loadStyleExamples', error, { creator_id: creatorId })
     return []
   }
 
@@ -361,9 +362,9 @@ export async function isBusinessRelevant(
     return content === 'business'
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
-      console.error('Relevance check error: request timed out after 15s')
+      logWarn('categorize.isBusinessRelevant', 'Relevance check timed out after 15s', { post_title: postTitle })
     } else {
-      console.error('Relevance check error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+      logError('categorize.isBusinessRelevant', err, { post_title: postTitle })
     }
     return false
   } finally {
@@ -390,7 +391,7 @@ export async function categorizeComments(
     }
 
     if (batchResults.length === 0) {
-      console.error('Categorize batch warning: zero valid results after retry, skipping batch')
+      logWarn('categorize.batch', 'Zero valid results after retry; skipping batch', { batch_size: batch.length })
     }
 
     results.push(...batchResults)
@@ -479,9 +480,9 @@ ${JSON.stringify(batch)}${retrySuffix}`
     } catch (fetchErr) {
       clearTimeout(timeoutId)
       if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
-        console.error('Categorize batch error: request timed out after 15s')
+        logWarn('categorize.batch', 'Batch request timed out after 15s', { batch_size: batch.length, is_retry: isRetry })
       } else {
-        console.error('Categorize batch error:', JSON.stringify(fetchErr, Object.getOwnPropertyNames(fetchErr), 2))
+        logError('categorize.batch', fetchErr, { batch_size: batch.length, is_retry: isRetry, stage: 'fetch' })
       }
       return batchResults
     } finally {
@@ -508,7 +509,7 @@ ${JSON.stringify(batch)}${retrySuffix}`
     try {
       parsed = JSON.parse(match[0])
     } catch (parseErr) {
-      console.error('Categorize batch parse error:', JSON.stringify(parseErr, Object.getOwnPropertyNames(parseErr), 2))
+      logError('categorize.batch', parseErr, { batch_size: batch.length, is_retry: isRetry, stage: 'parse_model_output' })
       return batchResults
     }
 
@@ -541,12 +542,12 @@ ${JSON.stringify(batch)}${retrySuffix}`
             escalationScreened,
           })
         } else {
-          console.error('Categorize batch warning: skipping invalid result', JSON.stringify(item, Object.getOwnPropertyNames(item), 2))
+          logWarn('categorize.batch', 'Skipping invalid result from the model', { is_retry: isRetry, item })
         }
       }
     }
   } catch (err) {
-    console.error('Categorize batch error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('categorize.batch', err, { batch_size: batch.length, is_retry: isRetry })
   }
 
   return batchResults
@@ -561,7 +562,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     .eq('post_id', post_id)
 
   if (commentsError) {
-    console.error('Fetch comments error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+    logError('categorize.categorizePost', commentsError, { post_id, stage: 'fetch_comments' })
     throw new Error('Failed to fetch comments')
   }
 
@@ -574,7 +575,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     .select('comment_id')
 
   if (categoriesError) {
-    console.error('Fetch categories error:', JSON.stringify(categoriesError, Object.getOwnPropertyNames(categoriesError), 2))
+    logError('categorize.categorizePost', categoriesError, { post_id, stage: 'fetch_existing_categories' })
     throw new Error('Failed to fetch existing categories')
   }
 
@@ -635,7 +636,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   }
 
   if (upsertError) {
-    console.error('Upsert categories error:', JSON.stringify(upsertError, Object.getOwnPropertyNames(upsertError), 2))
+    logError('categorize.categorizePost', upsertError, { post_id, stage: 'upsert_categories' })
     throw new Error('Failed to upsert categories')
   }
 
@@ -664,7 +665,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       .single()
 
     if (postFetchError) {
-      console.error('Fetch post metadata error:', JSON.stringify(postFetchError, Object.getOwnPropertyNames(postFetchError), 2))
+      logError('categorize.categorizePost', postFetchError, { post_id, stage: 'fetch_post_metadata' })
     } else if (post) {
       postTitle = post.title || ''
       postDescription = post.content || ''
@@ -699,7 +700,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
           .single()
 
         if (profileError) {
-          console.error('Fetch business profile error:', JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2))
+          logError('categorize.categorizePost', profileError, { post_id, creator_id: post.creator_id, stage: 'fetch_business_profile' })
         } else if (creator) {
           businessProfile = creator as unknown as BusinessProfile
         }
@@ -758,7 +759,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
       notifiable.push({ commentId: comment.id, category: comment.category, text })
     } catch (err) {
-      console.error('Draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+      logError('categorize.categorizePost', err, { post_id, comment_id: comment.id, stage: 'generate_draft_reply' })
     }
   }
 
@@ -801,7 +802,7 @@ async function createDraftNotifications(
       .in('comment_id', notifiable.map(n => n.commentId))
 
     if (existingError) {
-      console.error('Notification dedupe check error:', JSON.stringify(existingError, Object.getOwnPropertyNames(existingError), 2))
+      logError('categorize.createDraftNotifications', existingError, { creator_id: creatorId, stage: 'dedupe_check' })
       return
     }
 
@@ -821,12 +822,12 @@ async function createDraftNotifications(
 
     const { error: insertError } = await supabase.from('notifications').insert(rows)
     if (insertError) {
-      console.error('Notification insert error:', JSON.stringify(insertError, Object.getOwnPropertyNames(insertError), 2))
+      logError('categorize.createDraftNotifications', insertError, { creator_id: creatorId, stage: 'insert' })
       return
     }
 
     console.log(`Categorize: created ${rows.length} notification(s) for creator ${creatorId}.`)
   } catch (err) {
-    console.error('Notification creation crashed:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('categorize.createDraftNotifications', err, { creator_id: creatorId })
   }
 }

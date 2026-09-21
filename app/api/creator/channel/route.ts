@@ -4,6 +4,7 @@ import { requireCreator } from '@/lib/api-auth'
 import { refreshChannelStats } from '@/lib/channel-stats'
 import { syncChannelVideos } from '@/lib/channel-videos'
 import { isValidVideoLimit, MAX_VIDEOS_PER_SYNC } from '@/lib/channel-sync-limits'
+import { logError } from '@/lib/logger'
 
 /**
  * Connects a channel and brings `video_limit` of its most recent videos into My
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
       .eq('id', creatorId)
 
     if (updateError) {
-      console.error('Update channel_url error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+      logError('api/creator/channel', updateError, { creator_id: creatorId, stage: 'update_channel_url' })
       return NextResponse.json({ error: 'Failed to save channel URL' }, { status: 500 })
     }
 
@@ -57,7 +58,7 @@ export async function POST(request: NextRequest) {
       try {
         await syncChannelVideos(supabase, creatorId, channelUrl, { limit: video_limit })
       } catch (err) {
-        console.error('Background channel sync crash:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        logError('api/creator/channel', err, { creator_id: creatorId, stage: 'background_sync' })
         await supabase.from('creators').update({ channel_sync_status: 'error' }).eq('id', creatorId)
       }
     })
@@ -70,7 +71,7 @@ export async function POST(request: NextRequest) {
       videoLimit: video_limit,
     })
   } catch (err) {
-    console.error('Save channel URL error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/creator/channel', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

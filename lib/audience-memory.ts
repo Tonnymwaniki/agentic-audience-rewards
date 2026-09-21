@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { updateAudienceSegment } from '@/lib/segments'
 import { updateAudienceLevel } from '@/lib/levels'
+import { logError } from '@/lib/logger'
 
 export async function updateAudienceProfile(audience_member_id: string) {
   console.log("AUDIENCE MEMORY: starting for member", audience_member_id)
@@ -82,7 +83,7 @@ export async function updateAudienceProfile(audience_member_id: string) {
 
     return { success: true, updated: true, summary }
   } catch (error) {
-    console.error("AUDIENCE MEMORY ERROR:", JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('audienceMemory.updateProfile', error, { audience_member_id })
     return { success: false, updated: false }
   } finally {
     clearTimeout(timeoutId)

@@ -3,6 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
 import BusinessProfileForm from './BusinessProfileForm'
 import { loadCustomProfileFields } from '@/lib/custom-profile-fields'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,7 +29,7 @@ export default async function BusinessProfilePage() {
   // not an auth problem. Redirecting to /login for it makes a schema error look
   // like a session error and hides the real cause.
   if (creatorError) {
-    console.error('Business profile creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.profile', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your profile.</p>

@@ -7,6 +7,7 @@ import { useAnalyze } from '@/lib/hooks/useAnalyze'
 import { BUSINESS_CATEGORIES } from '@/lib/business-categories'
 import { MAX_VIDEOS_PER_SYNC } from '@/lib/channel-sync-limits'
 import MascotIcon from '@/components/MascotIcon'
+import { logError } from '@/lib/logger'
 
 /** Quick picks offered next to the number input, filtered to what the channel has. */
 const QUICK_PICKS = [20, 50, 100, 200]
@@ -283,7 +284,7 @@ export default function ConnectPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ business_category: category }),
-      }).catch(err => console.error('Save business category error:', err))
+      }).catch(err => logError('page.connect', err, { stage: 'save_business_category' }))
     }
 
     try {

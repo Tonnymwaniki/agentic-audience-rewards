@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
 import NotificationsList, { type InboxItem } from './NotificationsList'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,7 @@ export default async function NotificationsPage() {
     .maybeSingle()
 
   if (creatorError) {
-    console.error('Notifications creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.notifications', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your account details.</p>
@@ -93,7 +94,7 @@ export default async function NotificationsPage() {
     .limit(PAGE_SIZE)
 
   if (error) {
-    console.error('Notifications fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('page.notifications', error, { creator_id: creator.id, stage: 'fetch_notifications' })
     return (
       <div>
         <p className="text-red-500">Failed to load notifications</p>

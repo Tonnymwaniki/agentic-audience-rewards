@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { fetchChannelStats } from '@/lib/youtube-channel'
 import { DEFAULT_VIDEOS_TO_SYNC, MAX_VIDEOS_PER_SYNC } from '@/lib/channel-sync-limits'
+import { logError } from '@/lib/logger'
 
 /**
  * The quick first step of Connect: how many videos does this channel have?
@@ -47,7 +48,7 @@ export async function POST(request: NextRequest) {
     if (message.includes('Channel not found')) {
       return NextResponse.json({ error: "We couldn't find that channel. Check the link and try again." }, { status: 404 })
     }
-    console.error('Channel preview error:', message)
+    logError('api/creator/channel/preview', err, { stage: 'fetch_from_youtube' })
     return NextResponse.json({ error: "Couldn't reach YouTube just now. Please try again." }, { status: 502 })
   }
 }

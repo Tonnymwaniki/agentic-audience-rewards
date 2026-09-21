@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchChannelVideos, type ChannelVideo } from '@/lib/youtube-channel'
 import { requireCreator } from '@/lib/api-auth'
+import { logError } from '@/lib/logger'
 
 export async function GET(request: NextRequest) {
   // Spends the shared YouTube API quota on a caller-supplied channel, so it is
@@ -69,7 +70,7 @@ export async function GET(request: NextRequest) {
       )
     }
 
-    console.error('Channel videos error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/channel/videos', err, { stage: 'request' })
     return NextResponse.json(
       { error: 'Failed to fetch channel videos. Please try again.' },
       { status: 500 }

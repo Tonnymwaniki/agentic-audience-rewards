@@ -5,6 +5,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import MascotIcon from '@/components/MascotIcon'
 import LogoutButton from './LogoutButton'
 import DataControls from './DataControls'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -168,7 +169,7 @@ export default async function MePage() {
     .maybeSingle()
 
   if (creatorError) {
-    console.error('Me page creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.me', creatorError, { user_id: user.id, stage: 'fetch_creator' })
   }
 
   // --- All-time stats. Same shape as Agent Home's: posts for this creator, the

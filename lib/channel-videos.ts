@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllChannelVideos, type ChannelVideo } from '@/lib/youtube-channel'
+import { logError } from '@/lib/logger'
 
 export type SyncResult =
   | { success: true; discovered: number; pages: number; hitCap: boolean }
@@ -99,7 +100,7 @@ export async function syncChannelVideos(
 
     return { success: true, discovered: stored, pages: result.pages, hitCap: result.hitCap }
   } catch (err) {
-    console.error('Channel videos sync error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('channelVideos.sync', err, { creator_id: creatorId })
     await supabase
       .from('creators')
       .update({ channel_sync_status: 'error', channel_videos_synced_count: stored })
@@ -132,6 +133,6 @@ export async function linkChannelVideoToPost(
     )
 
   if (error) {
-    console.error('Channel video link error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('channelVideos.linkToPost', error, { creator_id: creatorId, video_id: videoId, post_id: postId })
   }
 }

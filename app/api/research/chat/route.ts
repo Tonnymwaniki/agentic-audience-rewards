@@ -9,6 +9,7 @@ import {
   generateConversationTitle,
   truncateMessages,
 } from '@/lib/research/conversations'
+import { logError, logWarn } from '@/lib/logger'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
 // one invocation. Vercel Hobby caps this at 60s, Pro at 300s.
@@ -82,7 +83,7 @@ export async function POST(request: NextRequest) {
             const title = await generateConversationTitle(supabase, id, message)
             console.log('Research conversation titled:', JSON.stringify({ id, title }))
           } catch (err) {
-            console.error('Conversation title error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+            logWarn('api/research/chat', 'Conversation title generation failed; the default title stands', { conversation_id: conversationId, reason: err instanceof Error ? err.message : String(err) })
           }
         })
       }
@@ -90,7 +91,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, conversation_id: conversationId, ...result })
   } catch (err) {
-    console.error('Research chat error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/research/chat', err, { stage: 'request' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

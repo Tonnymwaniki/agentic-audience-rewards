@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logError } from '@/lib/logger'
 
 // Shared "what deserves the creator's attention" selection. The Highlights page
 // renders the full list; Agent Home previews the top few. Keeping the logic here
@@ -91,7 +92,7 @@ export async function loadHighlights(
     .eq('creator_id', creatorId)
 
   if (postsError) {
-    console.error('Highlights posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+    logError('highlights.load', postsError, { creator_id: creatorId, stage: 'fetch_posts' })
     return EMPTY
   }
 
@@ -124,7 +125,7 @@ export async function loadHighlights(
       .range(offset, offset + batchSize - 1)
 
     if (commentsError) {
-      console.error('Highlights comments fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+      logError('highlights.load', commentsError, { creator_id: creatorId, stage: 'fetch_comments' })
       break
     }
 

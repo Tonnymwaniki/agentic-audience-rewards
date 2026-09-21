@@ -1,5 +1,11 @@
 /**
- * Structured server-side logging.
+ * Structured logging.
+ *
+ * Primarily server-side, but the module is pure — it touches nothing but
+ * `console` and `Date` — so the handful of client components that report a failed
+ * fetch import it too and emit the identical shape in the browser console. The
+ * server/browser split lives entirely in `forwardToMonitoring` below, which is
+ * where a Node SDK and a browser SDK would differ.
  *
  * Every log line is a single line of JSON on stdout/stderr. That is the format
  * Vercel, Datadog, Sentry and every other collector can ingest without a custom

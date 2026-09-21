@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { deleteCreatorData, findOrphanedRows } from '@/lib/creator-deletion'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -47,7 +48,7 @@ export async function POST(request: Request) {
   try {
     report = await deleteCreatorData(supabase, creatorId)
   } catch (error) {
-    console.error('Account deletion failed mid-cascade:', error)
+    logError('api/creator/delete', error, { creator_id: creatorId, user_id: userId, stage: 'cascade' })
     return NextResponse.json(
       {
         error:
@@ -59,7 +60,7 @@ export async function POST(request: Request) {
 
   const leftovers = await findOrphanedRows(supabase, creatorId)
   if (Object.keys(leftovers).length > 0) {
-    console.error('Account deletion left rows behind:', leftovers)
+    logError('api/creator/delete', new Error('Deletion left rows behind; auth user kept'), { creator_id: creatorId, user_id: userId, leftovers, stage: 'verify' })
     return NextResponse.json(
       {
         error:
@@ -73,7 +74,7 @@ export async function POST(request: Request) {
   // Last, and only once the data is provably gone.
   const { error: userError } = await supabase.auth.admin.deleteUser(userId)
   if (userError) {
-    console.error('Account data deleted but auth user remains:', userError)
+    logError('api/creator/delete', userError, { creator_id: creatorId, user_id: userId, stage: 'delete_auth_user' })
     return NextResponse.json(
       {
         error:

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { buildCreatorExport } from '@/lib/creator-export'
 import { createClient as createCookieClient } from '@/lib/supabase/server'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -40,7 +41,7 @@ export async function GET() {
       },
     })
   } catch (error) {
-    console.error('Creator export error:', error)
+    logError('api/creator/export', error, { creator_id: creatorId })
     return NextResponse.json(
       { error: 'Could not build your export. Please try again.' },
       { status: 500 }

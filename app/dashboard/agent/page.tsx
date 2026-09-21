@@ -15,6 +15,7 @@ import {
 } from '@/lib/timing'
 import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -53,7 +54,7 @@ export default async function AgentHomePage() {
     .maybeSingle()
 
   if (creatorError) {
-    console.error('Agent home creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.agent', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your account details.</p>
@@ -79,7 +80,7 @@ export default async function AgentHomePage() {
     .eq('creator_id', creator.id)
 
   if (postsError) {
-    console.error('Agent home posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+    logError('page.agent', postsError, { creator_id: creator.id, stage: 'fetch_posts' })
     return (
       <div>
         <p className="text-red-500">Failed to load your videos.</p>
@@ -119,7 +120,7 @@ export default async function AgentHomePage() {
         .range(offset, offset + batchSize - 1)
 
       if (commentsError) {
-        console.error('Agent home comments fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+        logError('page.agent', commentsError, { creator_id: creator.id, stage: 'fetch_comments', offset })
         break
       }
 
@@ -180,7 +181,7 @@ export default async function AgentHomePage() {
     .eq('creator_id', creator.id)
 
   if (audienceError) {
-    console.error('Agent home audience members fetch error:', JSON.stringify(audienceError, Object.getOwnPropertyNames(audienceError), 2))
+    logError('page.agent', audienceError, { creator_id: creator.id, stage: 'fetch_audience_members' })
   }
 
   const memberIds = (creatorAudienceMembers || []).map(m => m.id)
@@ -253,7 +254,7 @@ export default async function AgentHomePage() {
     .limit(ACTIVITY_LIMIT)
 
   if (notificationError) {
-    console.error('Agent home notification fetch error:', JSON.stringify(notificationError, Object.getOwnPropertyNames(notificationError), 2))
+    logError('page.agent', notificationError, { creator_id: creator.id, stage: 'fetch_notifications' })
   }
 
   let latestCommentAt: string | null = null

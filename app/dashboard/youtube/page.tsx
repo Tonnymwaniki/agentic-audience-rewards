@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { creatorHasPosts, AGENT_PATH, CONNECT_PATH } from '@/lib/onboarding'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -34,7 +35,7 @@ export default async function YouTubeEntryPage() {
     .maybeSingle()
 
   if (creatorError) {
-    console.error('YouTube entry creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.youtube', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     // The connect flow creates/repairs the creator row, so it's the safe landing
     // when we can't read one.
     redirect(CONNECT_PATH)

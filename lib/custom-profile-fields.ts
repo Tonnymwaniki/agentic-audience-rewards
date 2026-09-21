@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logError, logWarn } from '@/lib/logger'
 
 /**
  * Per-creator Business Profile fields, proposed by Claude from that creator's real
@@ -56,7 +57,7 @@ export async function loadCustomProfileFields(
 
   if (error) {
     if (!markUnavailable(error)) {
-      console.error('Custom profile fields fetch error:', error.message)
+      logError('customProfileFields.load', error, { creator_id: creatorId })
     }
     return []
   }
@@ -285,7 +286,7 @@ export async function generateCustomProfileFields(
 
     if (existingError) {
       if (!markUnavailable(existingError)) {
-        console.error('Custom field existence check error:', existingError.message)
+        logError('customProfileFields.generate', existingError, { creator_id: creatorId, stage: 'existence_check' })
       }
       return { generated: [], skipped: 'existence check failed' }
     }
@@ -318,7 +319,7 @@ export async function generateCustomProfileFields(
       })
 
       if (!response.ok) {
-        console.error('Custom field generation API error:', response.status)
+        logWarn('customProfileFields.generate', 'Generation API returned a non-OK status; no fields generated', { creator_id: creatorId, category, status: response.status })
         return { generated: [], skipped: `api ${response.status}` }
       }
 
@@ -354,7 +355,7 @@ export async function generateCustomProfileFields(
 
     if (insertError) {
       if (!markUnavailable(insertError)) {
-        console.error('Custom field insert error:', insertError.message)
+        logError('customProfileFields.generate', insertError, { creator_id: creatorId, stage: 'insert' })
       }
       return { generated: [], skipped: 'insert failed' }
     }
@@ -369,7 +370,7 @@ export async function generateCustomProfileFields(
     }
   } catch (err) {
     const reason = err instanceof Error && err.name === 'AbortError' ? 'timed out' : String(err)
-    console.error('Custom field generation crashed:', reason)
+    logError('customProfileFields.generate', err, { creator_id: creatorId, category, reason })
     return { generated: [], skipped: reason }
   }
 }
@@ -398,7 +399,7 @@ export async function saveCustomProfileValues(
     .in('field_key', keys)
 
   if (error) {
-    if (!markUnavailable(error)) console.error('Custom field ownership check error:', error.message)
+    if (!markUnavailable(error)) logError('customProfileFields.save', error, { creator_id: creatorId, stage: 'ownership_check' })
     return 0
   }
 
@@ -413,7 +414,7 @@ export async function saveCustomProfileValues(
       .eq('creator_id', creatorId)
       .eq('field_key', key)
 
-    if (updateError) console.error(`Custom field update error (${key}):`, updateError.message)
+    if (updateError) logError('customProfileFields.save', updateError, { creator_id: creatorId, field_key: key })
     else written++
   }
 

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { generateEmbedding, rerankDocuments, toVectorLiteral, EmbeddingUnavailableError } from '@/lib/embeddings'
+import { logWarn } from '@/lib/logger'
 import type { Sentiment } from '@/lib/trending'
 import type { CommentLanguage, CommentEmotion, CommentSentiment } from '@/lib/categorize'
 import type { AudienceSegment } from '@/lib/segments'
@@ -236,7 +237,7 @@ export async function hybridSearchComments(
       // Keyword search is the baseline; losing the semantic half degrades the
       // result rather than failing it.
       semanticUnavailable = `Semantic search failed: ${error.message}`
-      console.error('search_comments_semantic error:', error.message)
+      logWarn('hybridSearch.semantic', 'Semantic half unavailable; keyword results still returned', { code: error.code })
     } else {
       semantic = (data as Array<{ id: string; similarity: number }>).map(row => ({
         id: row.id,

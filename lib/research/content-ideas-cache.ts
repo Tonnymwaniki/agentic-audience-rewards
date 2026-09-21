@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ContentIdea } from '@/lib/research/content-ideas'
+import { logWarn } from '@/lib/logger'
 
 /** Ideas are regenerated at most once a day unless the creator asks. */
 export const IDEAS_CACHE_MAX_AGE_MS = 24 * 60 * 60 * 1000
@@ -33,7 +34,7 @@ export async function loadCachedIdeas(supabase: SupabaseClient, creatorId: strin
     .eq('creator_id', creatorId)
     .maybeSingle()
   if (error) {
-    console.error('Content ideas cache read failed:', error.message || error.code)
+    logWarn('research.contentIdeasCache', 'Cache read failed; ideas will be regenerated', { creator_id: creatorId, code: error.code })
     return null
   }
   return (data as CachedIdeas | null) ?? null
@@ -56,6 +57,6 @@ export async function saveCachedIdeas(
     },
     { onConflict: 'creator_id' }
   )
-  if (error) console.error('Content ideas cache write failed:', error.message || error.code)
+  if (error) logWarn('research.contentIdeasCache', 'Cache write failed; ideas were still returned', { creator_id: creatorId, code: error.code })
   return generatedAt
 }

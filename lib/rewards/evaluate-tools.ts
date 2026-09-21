@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logError } from '@/lib/logger'
 
 // Two narrow lookups the reward decision can request before committing. Deliberately
 // not the sixteen the Research chat has: this runs once PER PERSON inside a batch, so
@@ -65,7 +66,7 @@ export async function getPersonFullHistory(
     .limit(200)
 
   if (error) {
-    console.error('Reward tool history error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('rewards.tools.getPersonFullHistory', error, { post_count: creatorPostIds.length })
     return { total_comments: 0, distinct_videos: 0, per_video: [], sample_comments: [], note: 'lookup failed' }
   }
 
@@ -137,7 +138,7 @@ export async function getSimilarRewardedPeople(
     .limit(limit)
 
   if (error) {
-    console.error('Reward tool precedent error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('rewards.tools.precedent', error, {})
     return { count: 0, examples: [] }
   }
 

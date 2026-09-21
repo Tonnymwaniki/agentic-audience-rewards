@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import Avatar from '@/components/Avatar'
 import PageHeader from '@/components/PageHeader'
+import { logError } from '@/lib/logger'
 
 function relativeTime(dateString: string): string {
   const date = new Date(dateString)
@@ -40,7 +41,7 @@ export default async function RecognizedPage() {
     .limit(50)
 
   if (error) {
-    console.error('Recognized page fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('page.recognized', error, { stage: 'fetch' })
   }
 
   const events = (rewardEvents || [])

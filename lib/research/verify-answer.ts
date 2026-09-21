@@ -1,3 +1,4 @@
+import { logWarn } from '@/lib/logger'
 /**
  * A fact-check of a Research chat answer against the evidence gathered in the
  * same turn, before the creator sees it.
@@ -412,7 +413,7 @@ export async function verifyResearchAnswer(input: {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       attemptFailures.push(`full check attempt ${attempt}: ${reason}`)
-      console.error(`Research answer verification attempt ${attempt} failed:`, reason)
+      logWarn('research.verifyAnswer', 'Verification attempt failed; will retry or fall back', { attempt, reason })
     }
   }
 
@@ -465,7 +466,7 @@ export async function verifyResearchAnswer(input: {
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err)
       attemptFailures.push(`simple check: ${reason}`)
-      console.error('Research answer simple check failed:', reason)
+      logWarn('research.verifyAnswer', 'Simple check failed; answer left unverified', { reason })
     }
   } else {
     attemptFailures.push('simple check: not enough time left')

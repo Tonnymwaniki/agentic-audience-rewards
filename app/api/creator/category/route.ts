@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { generateCustomProfileFields } from '@/lib/custom-profile-fields'
 import { isBusinessCategory } from '@/lib/business-categories'
+import { logError } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,12 +28,12 @@ export async function POST(request: NextRequest) {
       .select('id')
 
     if (!updateError && (updated?.length ?? 0) === 0) {
-      console.error('Update business_category wrote no rows for creator', creatorId)
+      logError('api/creator/category', new Error('Update wrote no rows'), { creator_id: creatorId, stage: 'update_business_category' })
       return NextResponse.json({ error: 'Failed to save category' }, { status: 500 })
     }
 
     if (updateError) {
-      console.error('Update business_category error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+      logError('api/creator/category', updateError, { creator_id: creatorId, stage: 'update_business_category' })
       return NextResponse.json({ error: 'Failed to save category' }, { status: 500 })
     }
 
@@ -49,13 +50,13 @@ export async function POST(request: NextRequest) {
           JSON.stringify({ creatorId, generated: result.generated.length, skipped: result.skipped ?? null })
         )
       } catch (err) {
-        console.error('Custom profile field generation error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        logError('api/creator/category', err, { creator_id: creatorId, stage: 'generate_custom_fields' })
       }
     })
 
     return NextResponse.json({ success: true, business_category })
   } catch (err) {
-    console.error('Save business_category error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/creator/category', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

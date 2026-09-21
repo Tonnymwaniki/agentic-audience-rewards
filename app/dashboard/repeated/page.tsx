@@ -3,6 +3,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import Link from 'next/link'
 import Avatar from '@/components/Avatar'
 import PageHeader from '@/components/PageHeader'
+import { logError } from '@/lib/logger'
 
 function normalizeText(text: string): string {
   return text
@@ -20,7 +21,7 @@ export default async function RepeatedCommentsPage() {
     .order('ingested_at', { ascending: false })
 
   if (postsError) {
-    console.error('Posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+    logError('page.repeated', postsError, { stage: 'fetch_posts' })
     return (
       <div>
         <p className="text-red-500">Failed to load posts</p>
@@ -52,7 +53,7 @@ export default async function RepeatedCommentsPage() {
       .range(offset, offset + batchSize - 1)
 
     if (commentsError) {
-      console.error('Comments paginated fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+      logError('page.repeated', commentsError, { stage: 'fetch_comments' })
       break
     }
 

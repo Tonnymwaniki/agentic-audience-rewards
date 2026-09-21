@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { requireCreator } from '@/lib/api-auth'
+import { logError, logWarn } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -27,7 +28,7 @@ export async function POST(request: NextRequest) {
       .eq('creator_id', creator_id)
 
     if (postsError) {
-      console.error('Posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+      logError('api/ask', postsError, { creator_id, stage: 'fetch_posts' })
       return NextResponse.json(
         { error: 'Failed to fetch posts' },
         { status: 500 }
@@ -60,7 +61,7 @@ export async function POST(request: NextRequest) {
       const { data: commentRows, error: commentsError } = await commentQuery
 
       if (commentsError) {
-        console.error('Comments fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+        logError('api/ask', commentsError, { creator_id, stage: 'fetch_comments' })
         return NextResponse.json(
           { error: 'Failed to fetch comments' },
           { status: 500 }
@@ -156,7 +157,7 @@ export async function POST(request: NextRequest) {
     } catch (fetchErr) {
       clearTimeout(timeoutId)
       if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
-        console.error('Ask error: request timed out after 15s')
+        logWarn('api/ask', 'Model request timed out after 15s', { creator_id })
         return NextResponse.json(
           { error: 'Request timed out' },
           { status: 504 }
@@ -183,7 +184,7 @@ export async function POST(request: NextRequest) {
       answer,
     })
   } catch (err) {
-    console.error('Ask error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/ask', err, { stage: 'request' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
 import { saveCustomProfileValues } from '@/lib/custom-profile-fields'
+import { logError } from '@/lib/logger'
 
 // The save itself returns immediately; this headroom is for the after() work,
 // which re-drafts replies across every one of the creator's videos.
@@ -69,7 +70,7 @@ export async function POST(request: NextRequest) {
       .eq('id', creatorId)
 
     if (updateError) {
-      console.error('Update business profile error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+      logError('api/creator/profile', updateError, { creator_id: creatorId, stage: 'update_profile' })
       return NextResponse.json({ error: 'Failed to save your business profile' }, { status: 500 })
     }
 
@@ -81,13 +82,13 @@ export async function POST(request: NextRequest) {
         const result = await regenerateDraftsForCreator(creatorId)
         console.log('Profile save draft regeneration:', JSON.stringify(result))
       } catch (regenError) {
-        console.error('Profile save draft regeneration error:', JSON.stringify(regenError, Object.getOwnPropertyNames(regenError), 2))
+        logError('api/creator/profile', regenError, { creator_id: creatorId, stage: 'regenerate_drafts' })
       }
     })
 
     return NextResponse.json({ success: true, customFieldsSaved: customWritten })
   } catch (err) {
-    console.error('Save business profile error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/creator/profile', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

@@ -8,6 +8,7 @@ import {
   type BusinessProfile,
 } from '@/lib/categorize'
 import { requireCreator } from '@/lib/api-auth'
+import { logError } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -64,7 +65,7 @@ export async function POST(request: NextRequest) {
         .single()
 
       if (profileError) {
-        console.error('Fetch business profile error:', JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2))
+        logError('api/draft-reply', profileError, { creator_id: creatorId, stage: 'fetch_business_profile' })
       } else if (creator) {
         businessProfile = creator as unknown as BusinessProfile
       }
@@ -92,7 +93,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ draft_reply: draft.text, draft_confidence: draft.confidence })
   } catch (err) {
-    console.error('Draft reply error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/draft-reply', err, { stage: 'request' })
     return NextResponse.json(
       { error: 'Failed to generate draft reply' },
       { status: 500 }

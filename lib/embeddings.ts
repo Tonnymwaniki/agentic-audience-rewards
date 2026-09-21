@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logError, logWarn } from '@/lib/logger'
 
 /**
  * Voyage's general-purpose embedding model. voyage-4-large scores higher but has
@@ -467,7 +468,7 @@ export async function embedPendingComments(
         for (const { error } of outcomes) {
           if (error) {
             result.failed++
-            console.error('Comment embedding update error:', error.message)
+            logError('embeddings.embedPendingComments', error, { post_id: postId, stage: 'write_embedding' })
           } else {
             result.embedded++
           }
@@ -493,9 +494,9 @@ export async function embedPostCommentsSafely(supabase: SupabaseClient, postId: 
   try {
     const result = await embedPendingComments(supabase, { postId })
     if (result.failed > 0) {
-      console.error(`Embeddings for post ${postId}: ${result.failed} of ${result.total} updates failed`)
+      logWarn('embeddings.embedPostCommentsSafely', 'Some embedding writes failed', { post_id: postId, failed: result.failed, total: result.total })
     }
   } catch (err) {
-    console.error(`Embeddings skipped for post ${postId}:`, err instanceof Error ? err.message : err)
+    logWarn('embeddings.embedPostCommentsSafely', 'Embeddings skipped; analysis is unaffected', { post_id: postId, reason: err instanceof Error ? err.message : String(err) })
   }
 }

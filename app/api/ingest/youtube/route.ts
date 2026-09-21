@@ -3,6 +3,7 @@ import { ingestYouTubeVideo } from '@/lib/ingest'
 import { requireCreator } from '@/lib/api-auth'
 import { embedPostCommentsSafely } from '@/lib/embeddings'
 import { createServiceClient } from '@/lib/supabase/service'
+import { logError } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -26,7 +27,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(result)
   } catch (err) {
-    console.error('Ingest error:', JSON.stringify(err, null, 2))
+    logError('api/ingest/youtube', err, { stage: 'request' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

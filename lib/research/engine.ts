@@ -10,6 +10,7 @@ import { COMMENT_LANGUAGES, COMMENT_EMOTIONS, type CommentLanguage, type Comment
 import { SEGMENTS, type AudienceSegment } from '@/lib/segments'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
+import { logError, logWarn } from '@/lib/logger'
 
 const MAX_TOOL_ROUNDS = 5
 const ANTHROPIC_TIMEOUT_MS = 25000
@@ -234,7 +235,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
     }
 
     if (error) {
-      console.error('Research tool comments fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+      logError('research.engine.fetchComments', error, { offset })
       break
     }
 
@@ -814,7 +815,7 @@ export async function toolGetAudienceInsights(ctx: ToolContext, input: { topic?:
   try {
     insights = await loadAudienceInsights(ctx.supabase, ctx.creatorId, topic)
   } catch (err) {
-    console.error('Research tool get_audience_insights error:', err instanceof Error ? err.message : err)
+    logWarn('research.engine.get_audience_insights', 'Audience insights unavailable (computed by a daily job)', { creator_id: ctx.creatorId, topic, reason: err instanceof Error ? err.message : String(err) })
     return { error: 'Audience insights are not available yet (they are computed by a daily job).' }
   }
 
@@ -946,7 +947,7 @@ async function toolLookupPerson(ctx: ToolContext, input: { display_name?: unknow
     .limit(5)
 
   if (error) {
-    console.error('Research tool lookup_person error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('research.engine.lookup_person', error, { creator_id: ctx.creatorId })
     return { error: 'Failed to look up that person' }
   }
 
@@ -966,7 +967,7 @@ async function toolLookupPerson(ctx: ToolContext, input: { display_name?: unknow
     .limit(20)
 
   if (commentsError) {
-    console.error('Research tool lookup_person comments error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+    logError('research.engine.lookup_person', commentsError, { creator_id: ctx.creatorId, audience_member_id: member.id, stage: 'fetch_comments' })
   }
 
   return {
@@ -1007,7 +1008,7 @@ async function fetchCreatorRewardEvents(ctx: ToolContext): Promise<RewardEventRo
     .eq('creator_id', ctx.creatorId)
 
   if (membersError) {
-    console.error('Research tool reward events members error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
+    logError('research.engine.fetchCreatorRewardEvents', membersError, { creator_id: ctx.creatorId })
     return []
   }
 
@@ -1868,7 +1869,7 @@ export async function executeTool(ctx: ToolContext, name: string, input: Record<
         return { error: `Unknown tool: ${name}` }
     }
   } catch (err) {
-    console.error(`Research tool "${name}" error:`, JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('research.engine.tool', err, { tool: name, creator_id: ctx.creatorId })
     return { error: 'This tool failed to run — try a different approach.' }
   }
 }
@@ -1941,7 +1942,7 @@ export async function buildResearchContext(supabase: SupabaseClient, creator_id:
       .eq('creator_id', creator_id)
 
     if (postsError) {
-      console.error('Research posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+      logError('research.engine.buildContext', postsError, { creator_id })
       throw new Error('Failed to fetch posts')
     }
 

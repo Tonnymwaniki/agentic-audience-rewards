@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { sentimentForRow } from '@/lib/trending'
+import { logError } from '@/lib/logger'
 
 /**
  * A person's segment, computed from their own comment history by fixed rules — not
@@ -123,7 +124,7 @@ export async function updateAudienceSegment(
     .select('post_id, comment_categories ( category, sentiment )')
     .eq('audience_member_id', audienceMemberId)
   if (error) {
-    console.error('Segment comments fetch error:', error.message)
+    logError('segments.update', error, { audience_member_id: audienceMemberId, stage: 'fetch_comments' })
     return null
   }
   const comments = (data ?? []) as unknown as CommentRow[]
@@ -139,7 +140,7 @@ export async function updateAudienceSegment(
       console.warn('audience_members.segment does not exist yet (migration 20240101000028); skipping segmentation')
       return null
     }
-    console.error('Segment update error:', updateError.message)
+    logError('segments.update', updateError, { audience_member_id: audienceMemberId, stage: 'write_segment' })
     return null
   }
   return { segment, signals }

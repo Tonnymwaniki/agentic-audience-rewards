@@ -6,6 +6,7 @@ import {
   type RewardedPrecedent,
 } from '@/lib/rewards/evaluate-tools'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
+import { logError, logWarn } from '@/lib/logger'
 
 /**
  * Tool rounds allowed per person. Two is enough to fetch both tools once each and
@@ -123,7 +124,7 @@ Set "stands" to false ONLY if you would genuinely decide differently now; in tha
       outcome: { critiqued: true, overturned: true, critique: critique || null },
     }
   } catch (err) {
-    console.error('Reward critique error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('rewards.decide.critique', err, { member: member.display_name })
     return unchanged
   } finally {
     clearTimeout(timeoutId)
@@ -214,9 +215,9 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
       } catch (fetchErr) {
         clearTimeout(timeoutId)
         if (fetchErr instanceof Error && fetchErr.name === 'AbortError') {
-          console.error('Reward evaluate error: request timed out after 15s')
+          logWarn('rewards.decide', 'Decision request timed out after 15s', {})
         } else {
-          console.error('Reward evaluate fetch error:', JSON.stringify(fetchErr, Object.getOwnPropertyNames(fetchErr), 2))
+          logError('rewards.decide', fetchErr, { stage: 'fetch' })
         }
         throw fetchErr instanceof Error ? fetchErr : new Error('Request failed')
       } finally {
@@ -301,7 +302,7 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
         reason: typeof parsed.reason === 'string' ? parsed.reason : '',
       }
     } catch (parseErr) {
-      console.error('Reward evaluate parse error:', JSON.stringify(parseErr, Object.getOwnPropertyNames(parseErr), 2))
+      logError('rewards.decide', parseErr, { stage: 'parse_model_output' })
       return { decision: null, toolsUsed, critique: noCritique }
     }
 

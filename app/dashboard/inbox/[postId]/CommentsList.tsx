@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react'
 import Avatar from '@/components/Avatar'
 import DraftReplyEditor from '@/components/DraftReplyEditor'
 import { CATEGORY_ORDER, CATEGORY_STYLES } from '@/lib/comment-categories'
+import { logError } from '@/lib/logger'
 
 type Comment = {
   id: string
@@ -113,7 +114,7 @@ export default function CommentsList({ comments, peopleNoticed, repeatedCommentI
       }
     } catch (err) {
       setDraftErrors(prev => new Set(prev).add(commentId))
-      console.error('Regenerate draft error:', err)
+      logError('CommentsList.regenerateDraft', err, { comment_id: commentId })
     } finally {
       setRegeneratingId(null)
     }

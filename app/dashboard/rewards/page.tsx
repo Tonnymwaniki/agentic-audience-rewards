@@ -7,6 +7,7 @@ import MascotIcon from '@/components/MascotIcon'
 import ConfidenceBadge from '@/components/ConfidenceBadge'
 import EvaluateButton from './EvaluateButton'
 import CopyLinkButton from './CopyLinkButton'
+import { logError } from '@/lib/logger'
 
 const glyphProps = {
   xmlns: 'http://www.w3.org/2000/svg',
@@ -82,7 +83,7 @@ export default async function RewardsPage({
     .maybeSingle()
 
   if (creatorError) {
-    console.error('Rewards creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.rewards', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your account details.</p>
@@ -116,7 +117,7 @@ export default async function RewardsPage({
         .range(offset, offset + pageSize - 1)
 
       if (audienceError) {
-        console.error('Audience members fetch error:', JSON.stringify(audienceError, Object.getOwnPropertyNames(audienceError), 2))
+        logError('page.rewards', audienceError, { creator_id: creator.id, stage: 'fetch_audience_members' })
         return (
           <div>
             <p className="text-red-500">Failed to load audience members</p>
@@ -180,7 +181,7 @@ export default async function RewardsPage({
         throwOnError: true,
       })
     } catch (err) {
-      console.error('Reward events fetch error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+      logError('page.rewards', err, { creator_id: creator.id, stage: 'fetch_reward_events' })
       return (
         <div>
           <p className="text-red-500">Failed to load reward events</p>

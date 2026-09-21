@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { createServiceClient } from '@/lib/supabase/service'
+import { logError } from '@/lib/logger'
 
 // Delegates to requireCreator(), which authenticates with a cookie-bound client
 // and hands back a genuine service-role client for data access. Building one
@@ -35,7 +36,7 @@ export async function PATCH(
     .eq('creator_id', creator.id)
 
   if (error) {
-    console.error('Mark notification read error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('api/notifications/[id]', error, { creator_id: creator.id, notification_id: id, stage: 'mark_read' })
     return NextResponse.json({ error: 'Failed to update notification' }, { status: 500 })
   }
 

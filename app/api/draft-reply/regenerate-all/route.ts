@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
+import { logError } from '@/lib/logger'
 
 // Each comment can cost two sequential Claude calls, so this needs far more room
 // than a normal request. Vercel Hobby caps this at 60s, Pro at 300s — the
@@ -36,7 +37,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(result)
   } catch (err) {
-    console.error('Regenerate all drafts error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/draft-reply/regenerate-all', err, { stage: 'request' })
     return NextResponse.json({ error: 'Failed to regenerate drafts' }, { status: 500 })
   }
 }

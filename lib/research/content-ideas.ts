@@ -1,5 +1,6 @@
 import type { toolSuggestContentIdeas } from '@/lib/research/engine'
 import { plainText } from '@/lib/plain-text'
+import { logWarn } from '@/lib/logger'
 
 type IdeaSignalsData = Awaited<ReturnType<typeof toolSuggestContentIdeas>>
 
@@ -123,7 +124,7 @@ Respond with ONLY valid JSON:
   const startedAt = Date.now()
   const fail = (failure: string): IdeasResult => {
     const elapsedMs = Date.now() - startedAt
-    console.error('Content ideas generation rejected:', failure, { elapsedMs })
+    logWarn('research.contentIdeas', 'Idea generation rejected; no ideas returned', { failure, elapsed_ms: elapsedMs })
     return { ideas: [], error: IDEAS_FAILED_MESSAGE, failure, elapsedMs }
   }
 

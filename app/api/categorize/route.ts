@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { categorizePost } from '@/lib/categorize'
 import { requireCreator, requirePostOwnership } from '@/lib/api-auth'
+import { logError } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -25,7 +26,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(result)
   } catch (err) {
-    console.error('Categorize error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/categorize', err, { stage: 'request' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

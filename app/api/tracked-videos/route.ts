@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { createServiceClient } from '@/lib/supabase/service'
+import { logError } from '@/lib/logger'
 
 // Delegates to requireCreator(), which authenticates with a cookie-bound client
 // and hands back a genuine service-role client for data access. Building one
@@ -84,7 +85,7 @@ export async function POST(request: NextRequest) {
         .eq('id', existing.id)
 
       if (updateError) {
-        console.error('Update tracked_videos error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+        logError('api/tracked-videos', updateError, { creator_id: creator.id, post_id, stage: 'update' })
         return NextResponse.json({ error: 'Failed to update tracking' }, { status: 500 })
       }
     } else {
@@ -93,14 +94,14 @@ export async function POST(request: NextRequest) {
         .insert({ creator_id: creator.id, post_id, polling_enabled })
 
       if (insertError) {
-        console.error('Insert tracked_videos error:', JSON.stringify(insertError, Object.getOwnPropertyNames(insertError), 2))
+        logError('api/tracked-videos', insertError, { creator_id: creator.id, post_id, stage: 'insert' })
         return NextResponse.json({ error: 'Failed to save tracking' }, { status: 500 })
       }
     }
 
     return NextResponse.json({ success: true, polling_enabled })
   } catch (err) {
-    console.error('Tracked videos error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/tracked-videos', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

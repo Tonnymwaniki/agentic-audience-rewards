@@ -9,6 +9,7 @@ import ResearchSidebar, {
   type SidebarInsight,
   type SidebarInterest,
 } from './ResearchSidebar'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -70,7 +71,7 @@ async function loadSidebarData(
     .eq('creator_id', creatorId)
 
   if (postsError) {
-    console.error('Research sidebar posts error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+    logError('page.research.sidebar', postsError, { creator_id: creatorId, stage: 'fetch_posts' })
     return base
   }
 
@@ -95,7 +96,7 @@ async function loadSidebarData(
         .range(offset, offset + batchSize - 1)
 
       if (commentsError) {
-        console.error('Research sidebar comments error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+        logError('page.research.sidebar', commentsError, { creator_id: creatorId, stage: 'fetch_comments' })
         break
       }
 
@@ -140,7 +141,7 @@ async function loadSidebarData(
     .limit(SIDEBAR_INSIGHTS_LIMIT)
 
   if (notificationsError) {
-    console.error('Research sidebar notifications error:', JSON.stringify(notificationsError, Object.getOwnPropertyNames(notificationsError), 2))
+    logError('page.research.sidebar', notificationsError, { creator_id: creatorId, stage: 'fetch_notifications' })
   } else {
     for (const notification of notifications || []) {
       insights.push({ kind: 'notification', text: notification.message, at: notification.created_at })
@@ -229,7 +230,7 @@ async function loadSidebarData(
     .eq('creator_id', creatorId)
 
   if (membersError) {
-    console.error('Research sidebar members error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
+    logError('page.research.sidebar', membersError, { creator_id: creatorId, stage: 'fetch_members' })
   } else {
     const memberIds = (members || []).map(m => m.id)
     if (memberIds.length > 0) {
@@ -289,7 +290,7 @@ export default async function ResearchPage() {
     .maybeSingle()
 
   if (creatorError) {
-    console.error('Research creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.research', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your account details.</p>

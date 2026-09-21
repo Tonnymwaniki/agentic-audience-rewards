@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
+import { logError } from '@/lib/logger'
 
 /**
  * Polled by the connect UI while a background channel sync runs.
@@ -31,7 +32,7 @@ export async function GET() {
       lastCheckedAt: creator.last_channel_check_at,
     })
   } catch (err) {
-    console.error('Channel sync status error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/creator/channel/sync-status', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

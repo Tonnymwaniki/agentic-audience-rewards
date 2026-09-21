@@ -1,3 +1,4 @@
+import { logWarn } from '@/lib/logger'
 const YOUTUBE_API_BASE = 'https://www.googleapis.com/youtube/v3'
 
 // Same defensive parsing as the channel stats: YouTube sends counts as strings and
@@ -230,7 +231,7 @@ export async function fetchCommentReplies(
       threadsFetched++
     } catch (err) {
       threadsFailed++
-      console.error(`Reply fetch failed for ${parent.externalCommentId}:`, err instanceof Error ? err.message : err)
+      logWarn('youtube.fetchCommentReplies', 'Reply thread failed; counted in threadsFailed', { external_comment_id: parent.externalCommentId, reason: err instanceof Error ? err.message : String(err) })
     }
   }
 

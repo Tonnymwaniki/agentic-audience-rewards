@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { logError } from '@/lib/logger'
 
 /**
  * A person's level, combining how often the creator has recognized them with how
@@ -116,7 +117,7 @@ export async function updateAudienceLevel(
     .select('post_id')
     .eq('audience_member_id', audienceMemberId)
   if (error) {
-    console.error('Level comments fetch error:', error.message)
+    logError('levels.updateAudienceLevel', error, { audience_member_id: audienceMemberId, stage: 'fetch_comments' })
     return null
   }
 
@@ -126,7 +127,7 @@ export async function updateAudienceLevel(
     .select('id', { count: 'exact', head: true })
     .eq('audience_member_id', audienceMemberId)
   if (rewardError) {
-    console.error('Level reward count error:', rewardError.message)
+    logError('levels.updateAudienceLevel', rewardError, { audience_member_id: audienceMemberId, stage: 'count_reward_events' })
     return null
   }
 
@@ -143,7 +144,7 @@ export async function updateAudienceLevel(
       console.warn('audience_members.level does not exist yet (migration 20240101000031); skipping levels')
       return null
     }
-    console.error('Level update error:', updateError.message)
+    logError('levels.updateAudienceLevel', updateError, { audience_member_id: audienceMemberId, stage: 'write_level' })
     return null
   }
 

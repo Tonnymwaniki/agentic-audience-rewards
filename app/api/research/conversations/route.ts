@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { listConversations } from '@/lib/research/conversations'
+import { logError } from '@/lib/logger'
 
 /** This creator's saved Research conversations, most recently active first. */
 export async function GET() {
@@ -13,7 +14,7 @@ export async function GET() {
 
     return NextResponse.json({ conversations })
   } catch (err) {
-    console.error('List conversations error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/research/conversations', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 }

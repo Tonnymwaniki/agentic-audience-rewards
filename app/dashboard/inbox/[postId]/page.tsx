@@ -5,6 +5,7 @@ import PageHeader from '@/components/PageHeader'
 import TrackVideoToggle from '@/components/TrackVideoToggle'
 import CommentsList from './CommentsList'
 import RegenerateDraftsButton from './RegenerateDraftsButton'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,7 +30,7 @@ export default async function PostInboxPage({
     .maybeSingle()
 
   if (creatorError) {
-    console.error('Video inbox creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+    logError('page.inbox.post', creatorError, { user_id: user.id, stage: 'fetch_creator' })
     return (
       <div>
         <p className="text-red-500">Failed to load your account details.</p>
@@ -51,7 +52,7 @@ export default async function PostInboxPage({
     .maybeSingle()
 
   if (postError) {
-    console.error('Video inbox post fetch error:', JSON.stringify(postError, Object.getOwnPropertyNames(postError), 2))
+    logError('page.inbox.post', postError, { creator_id: creator.id, post_id: postId, stage: 'fetch_post' })
     return (
       <div>
         <p className="text-red-500">Failed to load this video.</p>
@@ -133,7 +134,7 @@ export default async function PostInboxPage({
   }
 
   if (commentsFetchError) {
-    console.error('Comments fetch error:', JSON.stringify(commentsFetchError, Object.getOwnPropertyNames(commentsFetchError as object), 2))
+    logError('page.inbox.post', commentsFetchError, { creator_id: creator.id, post_id: postId, stage: 'fetch_comments' })
     return (
       <div>
         <p className="text-red-500">Failed to load comments</p>

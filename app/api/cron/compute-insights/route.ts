@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refreshAudienceInsights } from '@/lib/audience-insights'
 import { isCronAuthorized } from '@/lib/cron-auth'
+import { logError } from '@/lib/logger'
 
 // One pass over every creator with videos. Measured at ~3-5s per creator on
 // ~650 comments; raise the plan's limit before this approaches it.
@@ -17,7 +18,7 @@ export const maxDuration = 300
  */
 export async function GET(request: NextRequest) {
   if (!process.env.CRON_SECRET) {
-    console.error('Compute insights: CRON_SECRET is not configured')
+    logError('api/cron/compute-insights', new Error('CRON_SECRET is not configured'), { stage: 'auth_precondition' })
     return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 })
   }
 
@@ -29,7 +30,7 @@ export async function GET(request: NextRequest) {
 
   const { data: posts, error } = await supabase.from('posts').select('creator_id')
   if (error) {
-    console.error('Compute insights: could not list creators', error.message)
+    logError('api/cron/compute-insights', error, { stage: 'list_creators' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })
   }
 
@@ -42,7 +43,7 @@ export async function GET(request: NextRequest) {
       const { stored } = await refreshAudienceInsights(supabase, creatorId, now)
       results.push({ creator_id: creatorId, stored })
     } catch (err) {
-      console.error('Compute insights: creator failed', creatorId, err instanceof Error ? err.message : err)
+      logError('api/cron/compute-insights', err, { creator_id: creatorId, stage: 'compute_for_creator' })
       results.push({ creator_id: creatorId, error: err instanceof Error ? err.message : 'Unknown error' })
     }
   }

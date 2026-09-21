@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchChannelStats, type ChannelStats } from '@/lib/youtube-channel'
+import { logError, logWarn } from '@/lib/logger'
 
 export type RefreshResult =
   | { success: true; stats: ChannelStats }
@@ -29,7 +30,7 @@ export async function refreshChannelStats(
   try {
     stats = await fetchChannelStats(channelUrl)
   } catch (err) {
-    console.error('Channel stats fetch error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('channelStats.refresh', err, { stage: 'fetch_from_youtube' })
     return { success: false, error: err instanceof Error ? err.message : 'Failed to fetch channel stats' }
   }
 
@@ -44,7 +45,7 @@ export async function refreshChannelStats(
     .eq('id', creatorId)
 
   if (updateError) {
-    console.error('Channel stats update error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+    logError('channelStats.refresh', updateError, { stage: 'write_current_stats' })
     return { success: false, error: 'Failed to store channel stats' }
   }
 
@@ -60,7 +61,7 @@ export async function refreshChannelStats(
     if (snapshotError) {
       // The current-value write already succeeded; losing one history point is not
       // worth reporting the whole refresh as failed.
-      console.error('Channel stats snapshot error:', JSON.stringify(snapshotError, Object.getOwnPropertyNames(snapshotError), 2))
+      logWarn('channelStats.refresh', 'History snapshot failed; current stats were still written', { stage: 'write_snapshot' })
     }
   }
 

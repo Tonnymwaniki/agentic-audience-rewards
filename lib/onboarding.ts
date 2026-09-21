@@ -1,3 +1,4 @@
+import { logError } from '@/lib/logger'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 // Where a signed-in creator belongs depends on one thing: whether they've analyzed
@@ -32,7 +33,7 @@ export async function creatorHasPosts(
     .eq('creator_id', creatorId)
 
   if (error) {
-    console.error('Onboarding post-count error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('onboarding.creatorHasPosts', error, { creator_id: creatorId })
     return true
   }
 

@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchVideoMeta, fetchVideoComments, fetchCommentReplies, type FetchedComment, type FetchedReply } from '@/lib/youtube'
 import { linkChannelVideoToPost } from '@/lib/channel-videos'
+import { logError, logWarn } from '@/lib/logger'
 
 type SupabaseService = ReturnType<typeof createServiceClient>
 
@@ -102,7 +103,7 @@ async function storeComment(
     .single()
 
   if (memberError || !member) {
-    console.error('Member upsert error:', JSON.stringify(memberError, null, 2))
+    logError('ingest.upsertMember', memberError, { creator_id: args.creatorId, platform_id: args.platformId, post_id: args.postId })
     return null
   }
 
@@ -117,7 +118,7 @@ async function storeComment(
     parent_comment_id: args.parentCommentId ?? null,
   })
   if (error || !data) {
-    console.error('Comment upsert error:', JSON.stringify(error, null, 2))
+    logError('ingest.upsertComment', error, { post_id: args.postId, creator_id: args.creatorId, audience_member_id: member.id })
     return null
   }
   return data.id as string
@@ -146,7 +147,7 @@ async function ingestReplies(
   try {
     fetched = await fetchCommentReplies(fetchable)
   } catch (err) {
-    console.error('Reply fetch failed:', err instanceof Error ? err.message : err)
+    logWarn('ingest.fetchReplies', 'Reply fetch failed; continuing without replies', { post_id: args.postId, creator_id: args.creatorId, fetchable: fetchable.length, reason: err instanceof Error ? err.message : String(err) })
     return { stored: [], fetched: 0, truncated: false }
   }
 

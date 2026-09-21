@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { ResearchChatProvider } from './ResearchChatContext'
+import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,7 +30,7 @@ export default async function ResearchLayout({ children }: { children: React.Rea
     .maybeSingle()
 
   if (error) {
-    console.error('Research layout creator fetch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+    logError('layout.research', error, { user_id: user.id, stage: 'fetch_creator' })
   }
 
   if (!creator) {
