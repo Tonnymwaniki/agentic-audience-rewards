@@ -86,6 +86,10 @@ export async function fetchVideoMeta(videoId: string) {
     title: snippet.title,
     description: snippet.description,
     thumbnailUrl,
+    // The real upload time from YouTube, as opposed to posts.ingested_at, which
+    // only records when we first pulled the video in. Already present in the
+    // snippet we were fetching anyway, so returning it costs no extra quota.
+    publishedAt: (snippet.publishedAt as string | undefined) ?? null,
     likeCount: parseCount(statistics.likeCount),
     viewCount: parseCount(statistics.viewCount),
     durationSeconds: parseIsoDuration(item.contentDetails?.duration),

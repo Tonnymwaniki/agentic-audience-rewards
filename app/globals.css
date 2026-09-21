@@ -222,6 +222,22 @@ body {
   transform-origin: center;
 }
 
+/* The chart's per-point hit targets are full-height transparent columns, and they
+   are focusable so the chart can be driven from the keyboard. Left alone, a mouse
+   click also focuses them, and the browser draws its focus rectangle around the
+   whole column — two bright vertical rules straddling the selected point, which
+   reads as a rendering fault rather than as feedback. The selection already has
+   its own purple marker and drop-line, so the ring is redundant for a click;
+   :focus-visible keeps it for keyboard users, who have nothing else to go on. */
+.chart-hit:focus {
+  outline: none;
+}
+
+.chart-hit:focus-visible {
+  outline: 2px solid var(--purple-text);
+  outline-offset: -2px;
+}
+
 /* Tactile feedback on a video card. Scales up and settles in 200ms with a glow
    that fades on the way out, so a tap reads as "received" before the analysis
    spinner or the navigation has had time to appear. */

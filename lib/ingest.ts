@@ -196,6 +196,11 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     title: meta.title,
     content: meta.description,
     thumbnail_url: meta.thumbnailUrl,
+    // The video's real upload time. This was never written before, so every post
+    // ingested prior to this had posted_at NULL and nothing could measure how long
+    // after publication a comment arrived — see scripts/backfill-post-published-at.ts
+    // for the repair of those rows.
+    posted_at: meta.publishedAt,
     // Refreshed on every re-ingest of the same video, since the upsert conflicts
     // on (platform_id, external_post_id) — so counts track the video over time
     // rather than freezing at whatever they were on first import.

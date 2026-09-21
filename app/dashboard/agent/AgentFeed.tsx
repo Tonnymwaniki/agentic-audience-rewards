@@ -5,7 +5,7 @@ import NotificationBell from '@/components/NotificationBell'
 import CategoryBreakdown, { type CategoryCounts, type VideoBreakdown } from './CategoryBreakdown'
 import RecognizedPeople, { type RecognizedPerson } from './RecognizedPeople'
 import BestTimeToPost from './BestTimeToPost'
-import type { ActivityWindow, WeekdayActivity, HourActivity } from '@/lib/timing'
+import type { ActivityWindow, WeekdayActivity, HourActivity, LatencyBucket } from '@/lib/timing'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -28,6 +28,9 @@ type AgentSummaryProps = {
   datedCommentCount: number
   weekdayActivity: WeekdayActivity[]
   hourlyActivity: HourActivity[]
+  latencyBuckets: LatencyBucket[]
+  latencyTotal: number
+  latencySkipped: number
   totalDraftsCount: number
   totalRecognizedCount: number
   repliesReadyCount: number
@@ -246,6 +249,9 @@ export default function AgentSummary({
   datedCommentCount,
   weekdayActivity,
   hourlyActivity,
+  latencyBuckets,
+  latencyTotal,
+  latencySkipped,
   totalDraftsCount,
   totalRecognizedCount,
   repliesReadyCount,
@@ -358,6 +364,9 @@ export default function AgentSummary({
         windows={activityWindows}
         weekdays={weekdayActivity}
         hours={hourlyActivity}
+        latency={latencyBuckets}
+        latencyTotal={latencyTotal}
+        latencySkipped={latencySkipped}
         totalComments={datedCommentCount}
       />
 

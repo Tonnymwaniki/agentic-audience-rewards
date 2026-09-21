@@ -159,6 +159,131 @@ export function computeWeeklyActivity(
   }
 }
 
+export type LatencyBucket = {
+  /** Stable key, independent of the label wording. */
+  key: string
+  /** "0–1h" — the axis label, kept short enough for six side by side. */
+  short: string
+  /** "within the first hour" — reads inside a sentence. */
+  label: string
+  /**
+   * How to describe everything up to and including this bucket, for the
+   * cumulative headline: "within the first 6 hours of posting".
+   */
+  throughLabel: string
+  count: number
+  percentage: number
+}
+
+/**
+ * Upper bound of each bucket in hours; the last is open-ended. A comment lands in
+ * the first bucket whose bound it is strictly under, so the edges don't overlap:
+ * exactly 1.0h after publication is "1–6h", not "0–1h".
+ */
+const LATENCY_BUCKETS: Array<{
+  key: string
+  short: string
+  label: string
+  throughLabel: string
+  maxHours: number
+}> = [
+  { key: '0-1h', short: '0–1h', label: 'within the first hour', throughLabel: 'within the first hour of posting', maxHours: 1 },
+  { key: '1-6h', short: '1–6h', label: '1 to 6 hours after posting', throughLabel: 'within the first 6 hours of posting', maxHours: 6 },
+  { key: '6-24h', short: '6–24h', label: '6 to 24 hours after posting', throughLabel: 'within the first day of posting', maxHours: 24 },
+  { key: '1-3d', short: '1–3d', label: '1 to 3 days after posting', throughLabel: 'within 3 days of posting', maxHours: 72 },
+  { key: '3-7d', short: '3–7d', label: '3 to 7 days after posting', throughLabel: 'within a week of posting', maxHours: 168 },
+  { key: '7d+', short: '7d+', label: 'more than a week after posting', throughLabel: 'but only after more than a week', maxHours: Infinity },
+]
+
+/**
+ * How long after a video went live each comment arrived.
+ *
+ * Unlike the day and hour views, this one is timezone-free on purpose: it measures
+ * an ELAPSED INTERVAL between two instants, and a duration is the same number of
+ * hours whichever zone you read the clocks in. Converting to EAT first would be
+ * wrong twice over — it would cancel out, and it would imply the answer depends on
+ * where the viewer is.
+ *
+ * Requires posts.posted_at, the real YouTube upload time. Comments on a post with
+ * no publish timestamp are skipped and excluded from the denominator rather than
+ * being charged to an assumed publish date — `totalComments` reports how many were
+ * actually measurable, so the caller can say so instead of implying full coverage.
+ *
+ * Negative intervals (a comment timestamped before its video, which YouTube
+ * occasionally produces for premieres and reused ids) are clamped into the first
+ * bucket rather than dropped: the comment genuinely arrived at the very start.
+ */
+export function computeLatencyActivity(
+  comments: Array<{ posted_at: string | null; post_id: string }>,
+  postPublishedAt: Map<string, string | null>
+): { totalComments: number; skippedNoPublishDate: number; buckets: LatencyBucket[] } {
+  const counts = new Array(LATENCY_BUCKETS.length).fill(0)
+  let totalComments = 0
+  let skippedNoPublishDate = 0
+
+  for (const comment of comments) {
+    if (!comment.posted_at) continue
+    const commentAt = new Date(comment.posted_at)
+    if (isNaN(commentAt.getTime())) continue
+
+    const publishedRaw = postPublishedAt.get(comment.post_id)
+    if (!publishedRaw) {
+      skippedNoPublishDate++
+      continue
+    }
+    const publishedAt = new Date(publishedRaw)
+    if (isNaN(publishedAt.getTime())) {
+      skippedNoPublishDate++
+      continue
+    }
+
+    const elapsedHours = (commentAt.getTime() - publishedAt.getTime()) / MS_PER_HOUR
+    const index = LATENCY_BUCKETS.findIndex(b => elapsedHours < b.maxHours)
+    counts[index === -1 ? LATENCY_BUCKETS.length - 1 : index]++
+    totalComments++
+  }
+
+  return {
+    totalComments,
+    skippedNoPublishDate,
+    buckets: LATENCY_BUCKETS.map((bucket, i) => ({
+      key: bucket.key,
+      short: bucket.short,
+      label: bucket.label,
+      throughLabel: bucket.throughLabel,
+      count: counts[i],
+      percentage: totalComments > 0 ? Math.round((counts[i] / totalComments) * 100) : 0,
+    })),
+  }
+}
+
+/**
+ * The headline claim for the "since posted" view: the shortest run of buckets
+ * from the start that together hold at least half the comments.
+ *
+ * Reporting only the single biggest bucket understates how front-loaded the
+ * response usually is — "31% arrive in 1–6h" hides that 78% arrived inside a day.
+ * Accumulating from the fastest bucket says the useful thing: how long the window
+ * actually is.
+ */
+export function summarizeLatency(buckets: LatencyBucket[]): {
+  throughIndex: number
+  percentage: number
+} | null {
+  const total = buckets.reduce((sum, b) => sum + b.count, 0)
+  if (total === 0) return null
+
+  let running = 0
+  for (let i = 0; i < buckets.length; i++) {
+    running += buckets[i].count
+    if (running / total >= 0.5) {
+      return { throughIndex: i, percentage: Math.round((running / total) * 100) }
+    }
+  }
+
+  return { throughIndex: buckets.length - 1, percentage: 100 }
+}
+
 export type HourActivity = {
   /** 0-23, in EAT. */
   hour: number

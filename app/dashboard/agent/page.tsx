@@ -7,7 +7,12 @@ import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
 import { normalizeLevel } from '@/lib/levels'
-import { computeActivityWindows, computeWeeklyActivity, computeHourlyActivity } from '@/lib/timing'
+import {
+  computeActivityWindows,
+  computeWeeklyActivity,
+  computeHourlyActivity,
+  computeLatencyActivity,
+} from '@/lib/timing'
 import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
 
@@ -66,9 +71,11 @@ export default async function AgentHomePage() {
   // as-is, not parsed, per product decision. "there" is the last resort.
   const creatorDisplayName = creator.display_name || user.email || 'there'
 
+  // posted_at is the video's real YouTube upload time, needed by the "since
+  // posted" view to measure how long after publication each comment arrived.
   const { data: posts, error: postsError } = await supabase
     .from('posts')
-    .select('id, title')
+    .select('id, title, posted_at')
     .eq('creator_id', creator.id)
 
   if (postsError) {
@@ -286,6 +293,14 @@ export default async function AgentHomePage() {
   const weeklyActivity = computeWeeklyActivity(allComments)
   const hourlyActivity = computeHourlyActivity(allComments)
 
+  // How long after each video went live its comments arrived. Uses the posts rows
+  // already loaded above, so no extra query — and any post still missing a publish
+  // timestamp is reported rather than silently assumed.
+  const latencyActivity = computeLatencyActivity(
+    allComments,
+    new Map((posts || []).map(p => [p.id, (p.posted_at as string | null) ?? null]))
+  )
+
   // Every category row for this creator is already loaded above for the drafts and
   // stats, so the breakdown is a tally over memory rather than another query.
   const categoryCounts: Record<string, number> = {}
@@ -350,6 +365,9 @@ export default async function AgentHomePage() {
         datedCommentCount={activityWindows.totalComments}
         weekdayActivity={weeklyActivity.days}
         hourlyActivity={hourlyActivity.hours}
+        latencyBuckets={latencyActivity.buckets}
+        latencyTotal={latencyActivity.totalComments}
+        latencySkipped={latencyActivity.skippedNoPublishDate}
       />
     </div>
   )
