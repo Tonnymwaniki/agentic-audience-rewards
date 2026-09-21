@@ -2,7 +2,6 @@
 
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import NotificationBell from '@/components/NotificationBell'
 import MobileTabBar from '@/components/MobileTabBar'
 
 const NAV_ITEMS = [
@@ -42,16 +41,12 @@ export default function DashboardLayout({
   // at all — picking a platform comes before any of them apply.
   const isHub = pathname === '/dashboard/hub'
 
-  // The bell lives on Agent Home only. Everywhere else it was a permanent icon
-  // for something the creator was not doing on that page; Agent Home is where they
-  // actually triage, and the inbox is one tap away from it.
-  const isAgentHome = pathname === '/dashboard/agent'
-
-  // Below md the only header controls that exist are the bell (Agent Home) and the
-  // account gear (hub). On every other route the desktop links and the gear are
-  // md-only, so the bar would render as an empty bordered strip — it is hidden
-  // outright there instead, and the page starts at the container padding.
-  const headerHasMobileControls = isHub || isAgentHome
+  // Below md the only header control that exists is the account gear, and it is
+  // rendered on the hub alone. Agent Home's bell now sits on that page's own title
+  // row rather than up here, so on every other route this bar would be an empty
+  // bordered strip — it is hidden outright there, and the page starts at the
+  // container padding.
+  const headerHasMobileControls = isHub
 
   return (
     // The bottom padding below reserves room for the fixed tab bar so the last
@@ -115,7 +110,6 @@ export default function DashboardLayout({
           </div>
           )}
 
-          {isAgentHome && <NotificationBell />}
 
           {/* Duplicated by the "Me" tab below md, so it hides with the link row.
               Points at the account page rather than straight to Business Profile —

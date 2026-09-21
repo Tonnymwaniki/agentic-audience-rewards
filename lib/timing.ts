@@ -158,3 +158,48 @@ export function computeWeeklyActivity(
     })),
   }
 }
+
+export type HourActivity = {
+  /** 0-23, in EAT. */
+  hour: number
+  /** "2 PM" */
+  label: string
+  count: number
+  percentage: number
+}
+
+/**
+ * Comment volume for each hour of the day, in EAT, midnight through 11pm.
+ *
+ * All 24 hours are always returned, including the dead ones overnight — the shape
+ * of a day is largely the gap where nobody is awake, and omitting empty hours would
+ * draw a curve straight across it.
+ *
+ * Same toEat() conversion as the weekday and window functions, so every view of
+ * this data agrees about which hour a comment belongs to.
+ */
+export function computeHourlyActivity(
+  comments: Array<{ posted_at: string | null }>
+): { totalComments: number; hours: HourActivity[] } {
+  const counts = new Array(24).fill(0)
+  let totalComments = 0
+
+  for (const comment of comments) {
+    if (!comment.posted_at) continue
+    const date = new Date(comment.posted_at)
+    if (isNaN(date.getTime())) continue
+    const { hour } = toEat(date)
+    counts[hour]++
+    totalComments++
+  }
+
+  return {
+    totalComments,
+    hours: counts.map((count, hour) => ({
+      hour,
+      label: formatHour(hour),
+      count,
+      percentage: totalComments > 0 ? Math.round((count / totalComments) * 100) : 0,
+    })),
+  }
+}

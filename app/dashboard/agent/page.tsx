@@ -7,7 +7,7 @@ import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
 import { normalizeLevel } from '@/lib/levels'
-import { computeActivityWindows, computeWeeklyActivity } from '@/lib/timing'
+import { computeActivityWindows, computeWeeklyActivity, computeHourlyActivity } from '@/lib/timing'
 import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
 
@@ -284,6 +284,7 @@ export default async function AgentHomePage() {
   // 24h stats, so this is arithmetic over memory rather than another query.
   const activityWindows = computeActivityWindows(allComments, 3)
   const weeklyActivity = computeWeeklyActivity(allComments)
+  const hourlyActivity = computeHourlyActivity(allComments)
 
   // Every category row for this creator is already loaded above for the drafts and
   // stats, so the breakdown is a tally over memory rather than another query.
@@ -348,6 +349,7 @@ export default async function AgentHomePage() {
         activityWindows={activityWindows.windows}
         datedCommentCount={activityWindows.totalComments}
         weekdayActivity={weeklyActivity.days}
+        hourlyActivity={hourlyActivity.hours}
       />
     </div>
   )

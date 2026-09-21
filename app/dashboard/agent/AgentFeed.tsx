@@ -1,10 +1,11 @@
 import Link from 'next/link'
 import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
+import NotificationBell from '@/components/NotificationBell'
 import CategoryBreakdown, { type CategoryCounts, type VideoBreakdown } from './CategoryBreakdown'
 import RecognizedPeople, { type RecognizedPerson } from './RecognizedPeople'
 import BestTimeToPost from './BestTimeToPost'
-import type { ActivityWindow, WeekdayActivity } from '@/lib/timing'
+import type { ActivityWindow, WeekdayActivity, HourActivity } from '@/lib/timing'
 
 // Laid out mobile-first: the base classes ARE the phone design (single column,
 // 2-up stat grid, full-bleed cards), and the `sm:`/`lg:` overrides widen it for
@@ -26,6 +27,7 @@ type AgentSummaryProps = {
   activityWindows: ActivityWindow[]
   datedCommentCount: number
   weekdayActivity: WeekdayActivity[]
+  hourlyActivity: HourActivity[]
   totalDraftsCount: number
   totalRecognizedCount: number
   repliesReadyCount: number
@@ -243,6 +245,7 @@ export default function AgentSummary({
   activityWindows,
   datedCommentCount,
   weekdayActivity,
+  hourlyActivity,
   totalDraftsCount,
   totalRecognizedCount,
   repliesReadyCount,
@@ -253,10 +256,14 @@ export default function AgentSummary({
 
   return (
     <div className="space-y-5">
-      {/* Page title. The shared header no longer carries one — it was the same
-          "Creator Dashboard" on every screen — so each page names itself. This is
-          Agent Home's, and belongs to this page alone. */}
-      <h1 className="font-display text-2xl font-semibold text-text-primary">Your Agent</h1>
+      {/* Page title and the bell on ONE row. The bell used to live in the shared
+          nav, which put it on a separate line above the title and left both lines
+          mostly empty. Moving it here also lets that nav disappear entirely on this
+          route, so the page starts higher than before. */}
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="font-display text-2xl font-semibold text-text-primary">My Agent</h1>
+        <NotificationBell />
+      </div>
 
       {/* --- Mobile hero. Desktop already leads with the "Your Agent" card beside
               the greeting, so the mascot would be a third robot up there. --- */}
@@ -350,6 +357,7 @@ export default function AgentSummary({
       <BestTimeToPost
         windows={activityWindows}
         weekdays={weekdayActivity}
+        hours={hourlyActivity}
         totalComments={datedCommentCount}
       />
 

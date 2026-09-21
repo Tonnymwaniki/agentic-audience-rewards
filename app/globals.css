@@ -201,6 +201,27 @@ body {
     inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
 }
 
+/* The peak point on the Best Time to Post chart. A halo that expands and fades
+   from the marker, so the eye lands on the busiest moment without the marker
+   itself moving and blurring the value it sits on. */
+@keyframes chartPeakPulse {
+  0% {
+    r: 5;
+    opacity: 0.55;
+  }
+  70%,
+  100% {
+    r: 14;
+    opacity: 0;
+  }
+}
+
+.chart-peak-pulse {
+  animation: chartPeakPulse 2.2s ease-out infinite;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
 /* Tactile feedback on a video card. Scales up and settles in 200ms with a glow
    that fades on the way out, so a tap reads as "received" before the analysis
    spinner or the navigation has had time to appear. */
@@ -511,6 +532,11 @@ body {
   /* The tap still works and still marks the card; it simply does not move. */
   .card-pop {
     animation: none;
+  }
+  /* The peak stays red and clearly marked — only the expanding halo is dropped. */
+  .chart-peak-pulse {
+    animation: none;
+    display: none;
   }
   .status-dot::after {
     animation: none;
