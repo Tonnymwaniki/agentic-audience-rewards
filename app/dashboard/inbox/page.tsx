@@ -39,7 +39,7 @@ export default async function InboxPage() {
 
   const { data: posts, error: postsError } = await supabase
     .from('posts')
-    .select('id, title, ingested_at, thumbnail_url, external_post_id')
+    .select('id, title, ingested_at, thumbnail_url, external_post_id, duration_seconds, view_count')
     .eq('creator_id', creator.id)
     .order('ingested_at', { ascending: false })
 
@@ -173,6 +173,8 @@ export default async function InboxPage() {
     videoId: null,
     title: post.title,
     sortedAt: post.ingested_at,
+    durationSeconds: (post.duration_seconds as number | null) ?? null,
+    viewCount: (post.view_count as number | null) ?? null,
     thumbnailUrl: post.thumbnail_url,
     total: totalCounts[post.id] || 0,
     categorized: categorizedCounts[post.id] || 0,
@@ -194,6 +196,9 @@ export default async function InboxPage() {
       videoId: v.video_id,
       title: v.title || 'Untitled video',
       sortedAt: v.published_at,
+      // channel_videos is metadata only — duration and views arrive with analysis.
+      durationSeconds: null,
+      viewCount: null,
       thumbnailUrl: v.thumbnail_url,
       total: 0,
       categorized: 0,
