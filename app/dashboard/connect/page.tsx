@@ -11,6 +11,143 @@ import MascotIcon from '@/components/MascotIcon'
 /** Quick picks offered next to the number input, filtered to what the channel has. */
 const QUICK_PICKS = [20, 50, 100, 200]
 
+const stepIconProps = {
+  xmlns: 'http://www.w3.org/2000/svg',
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 1.75,
+  className: 'h-5 w-5',
+} as const
+
+/**
+ * The same three beats the product walkthrough uses, kept in the app's own card /
+ * icon-badge language rather than imported as deck art. They double as a progress
+ * indicator: the form highlights step 1, the count screen highlights step 2.
+ */
+const HOW_IT_WORKS = [
+  {
+    num: '01',
+    tone: 'purple',
+    label: 'Paste your channel',
+    desc: 'We find it and count the public videos — nothing is saved yet.',
+    icon: (
+      <svg {...stepIconProps}>
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"
+        />
+      </svg>
+    ),
+  },
+  {
+    num: '02',
+    tone: 'teal',
+    label: 'Choose how many videos',
+    desc: 'You see the real count first, then pick the number to bring in.',
+    icon: (
+      <svg {...stepIconProps}>
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M10.5 6h9.75M10.5 6a1.5 1.5 0 1 1-3 0m3 0a1.5 1.5 0 1 0-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 0 1-3 0m3 0a1.5 1.5 0 0 0-3 0m-9.75 0h9.75"
+        />
+      </svg>
+    ),
+  },
+  {
+    num: '03',
+    tone: 'pink',
+    label: 'Your agent gets to work',
+    desc: 'Titles land in My Videos. You choose which ones it reads.',
+    icon: (
+      <svg {...stepIconProps}>
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z"
+        />
+      </svg>
+    ),
+  },
+] as const
+
+/**
+ * Stacks as readable rows on a phone and spreads to three columns once there is
+ * width for it. `activeStep` dims the steps the creator isn't on, so the strip
+ * says where they are rather than just what the product does.
+ */
+function HowItWorks({ activeStep }: { activeStep: '01' | '02' }) {
+  return (
+    <section aria-labelledby="how-it-works">
+      <h2
+        id="how-it-works"
+        className="font-mono text-[10px] tracking-widest text-text-muted uppercase"
+      >
+        How this works
+      </h2>
+      <ol className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        {HOW_IT_WORKS.map(step => {
+          const isActive = step.num === activeStep
+          return (
+            <li
+              key={step.num}
+              aria-current={isActive ? 'step' : undefined}
+              className={`card flex items-start gap-3 transition-opacity sm:flex-col ${
+                isActive ? '' : 'opacity-60'
+              }`}
+            >
+              <span className={`icon-badge icon-badge-${step.tone}`} aria-hidden="true">
+                {step.icon}
+              </span>
+              <div className="min-w-0">
+                <span className="font-mono text-[10px] tracking-widest text-text-muted">
+                  {step.num}
+                </span>
+                <h3 className="mt-0.5 font-display text-sm leading-snug font-semibold text-text-primary">
+                  {step.label}
+                </h3>
+                <p className="mt-1 text-xs leading-snug text-text-muted">{step.desc}</p>
+              </div>
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
+/**
+ * One line on what this does that other comment tools don't. Deliberately short —
+ * the creator is here to connect a channel, not to read a pitch.
+ */
+function TrustNote() {
+  return (
+    <p className="flex items-start gap-2.5 border-t border-white/10 pt-5 text-xs leading-relaxed text-text-muted">
+      <svg
+        xmlns="http://www.w3.org/2000/svg"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={1.75}
+        className="mt-px h-4 w-4 flex-shrink-0 text-teal"
+        aria-hidden="true"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M9 12.75 11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 0 1-1.043 3.296 3.745 3.745 0 0 1-3.296 1.043A3.745 3.745 0 0 1 12 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 0 1-3.296-1.043 3.745 3.745 0 0 1-1.043-3.296A3.745 3.745 0 0 1 3 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 0 1 1.043-3.296 3.746 3.746 0 0 1 3.296-1.043A3.746 3.746 0 0 1 12 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 0 1 3.296 1.043 3.746 3.746 0 0 1 1.043 3.296A3.745 3.745 0 0 1 21 12Z"
+        />
+      </svg>
+      <span>
+        Understands Sheng and Swahili code-switching most tools miss, and recognizes loyal
+        customers with verifiable on-chain rewards.
+      </span>
+    </p>
+  )
+}
+
 /**
  * Connect is discovery only: find the channel, choose how many recent videos to
  * list, bring them into My Videos. It never analyzes anything — every video lands
@@ -270,14 +407,18 @@ export default function ConnectPage() {
       }`
 
     return (
-      <div className="flex min-h-[70vh] items-center justify-center">
-        <div className="w-full max-w-md">
-          <h1 className="text-center font-display text-2xl font-semibold text-text-primary md:text-3xl">
+      <div className="mx-auto max-w-2xl space-y-8">
+        <header>
+          <p className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+            Step 2 · Choose
+          </p>
+          <h1 className="mt-2 font-display text-2xl font-semibold text-text-primary md:text-3xl">
             We found {videoCount.toLocaleString()} {videoCount === 1 ? 'video' : 'videos'} in this channel.
           </h1>
+        </header>
 
           {videoCount === 0 ? (
-            <div className="mt-8 space-y-3 text-center">
+            <div className="card space-y-3">
               <p className="text-sm text-text-muted">There are no public videos to bring in yet.</p>
               <button type="button" onClick={() => setPhase('form')} className="btn-primary w-full">
                 Try a different channel
@@ -289,7 +430,7 @@ export default function ConnectPage() {
                 e.preventDefault()
                 handleBringIn()
               }}
-              className="mt-8 space-y-4"
+              className="card space-y-4"
             >
               <div>
                 <label htmlFor="video-limit" className="mb-2 block text-sm font-medium text-text-primary">
@@ -358,7 +499,9 @@ export default function ConnectPage() {
               </button>
             </form>
           )}
-        </div>
+
+        <HowItWorks activeStep="02" />
+        <TrustNote />
       </div>
     )
   }
@@ -366,18 +509,24 @@ export default function ConnectPage() {
   const checking = phase === 'checking'
 
   return (
-    <div className="flex min-h-[70vh] items-center justify-center">
-      <div className="w-full max-w-md">
-        <div className="text-center">
-          <h1 className="font-display text-3xl font-semibold text-text-primary md:text-4xl">
-            Connect your channel
-          </h1>
-          <p className="mt-3 text-sm text-text-muted">
-            Paste your channel link and we&apos;ll find your videos.
-          </p>
-        </div>
+    // Top-down flow, not a box centred in a tall empty viewport. The heading and
+    // the input sit near the top where they're reachable without scrolling, and
+    // the explanatory sections carry the rest of the page.
+    <div className="mx-auto max-w-2xl space-y-8">
+      <header>
+        <p className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+          Step 1 · Connect
+        </p>
+        <h1 className="mt-2 font-display text-3xl font-semibold text-text-primary md:text-4xl">
+          Connect your channel
+        </h1>
+        <p className="mt-3 text-sm leading-relaxed text-text-muted">
+          We&apos;ll scan your channel, show you what we find, and let you decide how many
+          videos to bring in — no automatic bulk processing without your say.
+        </p>
+      </header>
 
-        <form onSubmit={handleFindVideos} className="mt-8 space-y-4">
+      <form onSubmit={handleFindVideos} className="card space-y-4">
           <div>
             <label htmlFor="channel-url" className="mb-2 block text-sm font-medium text-text-muted">
               Paste your channel link
@@ -426,10 +575,9 @@ export default function ConnectPage() {
           <button type="submit" disabled={!channel.trim() || checking} className="btn-primary w-full disabled:opacity-50">
             {checking ? 'Checking your channel…' : 'Find My Videos'}
           </button>
-        </form>
 
         {savedChannel && (
-          <div className="mt-6 space-y-3">
+          <div className="space-y-3 border-t border-white/10 pt-4">
             <button type="button" onClick={handleUseSaved} className="btn-primary w-full">
               Use my channel
             </button>
@@ -442,18 +590,28 @@ export default function ConnectPage() {
             </button>
           </div>
         )}
+      </form>
 
-        <div className="mt-10 border-t border-white/10 pt-6">
-          <p className="mb-4 text-center text-sm text-text-muted">
-            Or paste a single video link instead
-          </p>
+      <HowItWorks activeStep="01" />
 
-          <SingleVideoAnalyze
-            creatorId={creatorId}
-            onResult={(postId) => router.push(`/dashboard/inbox/${postId}`)}
-          />
-        </div>
-      </div>
+      <section aria-labelledby="single-video">
+        <h2
+          id="single-video"
+          className="font-mono text-[10px] tracking-widest text-text-muted uppercase"
+        >
+          Just one video?
+        </h2>
+        <p className="mt-2 mb-3 text-sm text-text-muted">
+          Paste a single video link and your agent reads it straight away.
+        </p>
+
+        <SingleVideoAnalyze
+          creatorId={creatorId}
+          onResult={(postId) => router.push(`/dashboard/inbox/${postId}`)}
+        />
+      </section>
+
+      <TrustNote />
     </div>
   )
 }
