@@ -6,6 +6,7 @@ import { evaluateRewards, type EvaluateProgressCallback } from '@/lib/rewards/ev
 import { createServiceClient } from '@/lib/supabase/service'
 import { requireCreator } from '@/lib/api-auth'
 import { embedPostCommentsSafely } from '@/lib/embeddings'
+import { logError } from '@/lib/logger'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -66,7 +67,7 @@ async function processAnalysisInBackground(postId: string, creatorId: string) {
       members_evaluated: evaluateResult.evaluated,
     })
   } catch (err) {
-    console.error('Background analysis error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/analyze', err, { creator_id: creatorId, post_id: postId, stage: 'background_analysis' })
     await updatePostStatus(postId, { analysis_status: 'error', analysis_stage: 'unknown_error' }).catch(() => {})
   }
 }
@@ -118,7 +119,7 @@ export async function POST(request: NextRequest) {
       await Promise.all([
         embedPostCommentsSafely(createServiceClient(), postId),
         processAnalysisInBackground(postId, creator_id).catch(err => {
-          console.error('Background analysis crash:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+          logError('api/analyze', err, { creator_id, post_id: postId, stage: 'background_analysis_crash' })
         }),
       ])
     })
@@ -129,7 +130,7 @@ export async function POST(request: NextRequest) {
       commentsIngested: ingestResult.commentsIngested,
     })
   } catch (err) {
-    console.error('Analyze error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/analyze', err, { stage: 'request' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

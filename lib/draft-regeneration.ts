@@ -9,6 +9,7 @@ import {
   type BusinessProfile,
 } from '@/lib/categorize'
 import { detectEscalation } from '@/lib/escalation'
+import { logError } from '@/lib/logger'
 
 const DRAFTABLE_CATEGORIES = new Set(['purchase_intent', 'question', 'complaint'])
 const RELEVANCE_CHECK_CATEGORIES = new Set(['question', 'complaint'])
@@ -82,7 +83,7 @@ export async function regenerateDraftsForCreator(
   const { data: posts, error: postsError } = await postsQuery
 
   if (postsError) {
-    console.error('Draft regeneration posts fetch error:', JSON.stringify(postsError, Object.getOwnPropertyNames(postsError), 2))
+    logError('drafts.regenerate', postsError, { creator_id, stage: 'fetch_posts' })
     return { ...empty, success: false }
   }
 
@@ -103,7 +104,7 @@ export async function regenerateDraftsForCreator(
     .maybeSingle()
 
   if (profileError) {
-    console.error('Draft regeneration profile fetch error:', JSON.stringify(profileError, Object.getOwnPropertyNames(profileError), 2))
+    logError('drafts.regenerate', profileError, { creator_id, stage: 'fetch_business_profile' })
   } else if (creator) {
     businessProfile = creator as unknown as BusinessProfile
   }
@@ -132,7 +133,7 @@ export async function regenerateDraftsForCreator(
       .range(offset, offset + batchSize - 1)
 
     if (commentsError) {
-      console.error('Draft regeneration comments fetch error:', JSON.stringify(commentsError, Object.getOwnPropertyNames(commentsError), 2))
+      logError('drafts.regenerate', commentsError, { creator_id, stage: 'fetch_comments' })
       return { ...empty, success: false }
     }
 
@@ -220,7 +221,7 @@ export async function regenerateDraftsForCreator(
       .eq('comment_id', commentId)
 
     if (error) {
-      console.error('Draft regeneration mark-checked error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+      logError('drafts.regenerate', error, { creator_id, stage: 'mark_checked' })
       return false
     }
     return true
@@ -288,7 +289,7 @@ export async function regenerateDraftsForCreator(
         failed++
       }
     } catch (err) {
-      console.error('Draft regeneration error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+      logError('drafts.regenerate', err, { creator_id, stage: 'regenerate_draft' })
       // Stamp failures too, so one comment that reliably errors can't permanently
       // occupy a slot at the front of the queue. Best-effort — if this write also
       // fails, markChecked logs it and we simply retry the comment next run.

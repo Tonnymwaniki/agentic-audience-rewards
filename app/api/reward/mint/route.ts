@@ -5,6 +5,7 @@ import { avalancheFuji } from 'thirdweb/chains'
 import { claimTo } from 'thirdweb/extensions/erc721'
 import { privateKeyToAccount } from 'thirdweb/wallets'
 import dotenv from 'dotenv'
+import { logError } from '@/lib/logger'
 dotenv.config({ path: '.env.local' })
 
 export async function POST(request: NextRequest) {
@@ -104,7 +105,7 @@ export async function POST(request: NextRequest) {
       .eq('id', rewardEvent.audience_member_id)
 
     if (updateMemberError) {
-      console.error('Audience member update error:', JSON.stringify(updateMemberError, Object.getOwnPropertyNames(updateMemberError), 2))
+      logError('api/reward/mint', updateMemberError, { reward_event_id: rewardEvent.id, audience_member_id: rewardEvent.audience_member_id, stage: 'update_member_after_mint' })
     }
 
     return NextResponse.json({
@@ -112,7 +113,7 @@ export async function POST(request: NextRequest) {
       tx_hash: txHash,
     })
   } catch (err) {
-    console.error('Mint error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/reward/mint', err, { stage: 'mint' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

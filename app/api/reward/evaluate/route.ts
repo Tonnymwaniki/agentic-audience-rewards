@@ -3,6 +3,7 @@ import { after } from 'next/server'
 import { evaluateRewards, type EvaluateProgressCallback } from '@/lib/rewards/evaluate'
 import { createServiceClient } from '@/lib/supabase/service'
 import { requireCreator, requirePostOwnership } from '@/lib/api-auth'
+import { logError } from '@/lib/logger'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -62,7 +63,7 @@ export async function POST(request: NextRequest) {
           }
         }
       } catch (err) {
-        console.error('Background reward evaluation error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+        logError('api/reward/evaluate', err, { creator_id, post_id: post_id ?? null, stage: 'background_evaluation' })
         if (post_id) {
           await updatePostStatus(post_id, {
             analysis_status: 'error',
@@ -74,7 +75,7 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, status: 'started' })
   } catch (err) {
-    console.error('Reward evaluate error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+    logError('api/reward/evaluate', err, { stage: 'request' })
     return NextResponse.json(
       { error: err instanceof Error ? err.message : 'Internal error' },
       { status: 500 }

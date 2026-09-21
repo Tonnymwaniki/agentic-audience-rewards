@@ -3,6 +3,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import { updateAudienceProfile } from '@/lib/audience-memory'
 import { decideReward, MAX_TOOL_ROUNDS } from '@/lib/rewards/decide'
 import type { RewardedPrecedent } from '@/lib/rewards/evaluate-tools'
+import { logError, logInfo } from '@/lib/logger'
 
 export type EvaluateProgressCallback = (evaluated: number, total: number) => void
 
@@ -29,7 +30,7 @@ export async function evaluateRewards(
       .range(from, from + membersPageSize - 1)
 
     if (membersError) {
-      console.error('Audience members fetch error:', JSON.stringify(membersError, Object.getOwnPropertyNames(membersError), 2))
+      logError('rewards.evaluate', membersError, { creator_id, stage: 'fetch_audience_members', page_from: from })
       throw new Error('Failed to fetch audience members')
     }
     audienceMembers.push(...((data ?? []) as typeof audienceMembers))
@@ -64,7 +65,7 @@ export async function evaluateRewards(
       const { data, error } = await query.range(page * pageSize, (page + 1) * pageSize - 1)
 
       if (error) {
-        console.error('Comments batch error:', JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+        logError('rewards.evaluate', error, { creator_id, stage: 'fetch_comments_batch', page })
         break
       }
       if (data) allComments.push(...data)
@@ -148,7 +149,7 @@ export async function evaluateRewards(
     .eq('creator_id', creator_id)
 
   if (creatorPostsError) {
-    console.error('Reward evaluate posts fetch error:', JSON.stringify(creatorPostsError, Object.getOwnPropertyNames(creatorPostsError), 2))
+    logError('rewards.evaluate', creatorPostsError, { creator_id, stage: 'fetch_posts' })
   }
 
   const creatorPostIds = (creatorPosts || []).map(p => p.id)
@@ -222,7 +223,7 @@ export async function evaluateRewards(
       try {
         await updateAudienceProfile(member.id)
       } catch (profileErr) {
-        console.error('Audience profile update error:', JSON.stringify(profileErr, Object.getOwnPropertyNames(profileErr), 2))
+        logError('rewards.evaluate', profileErr, { creator_id, audience_member_id: member.id, stage: 'update_audience_profile' })
       }
 
       if (!decision.qualifies) {
@@ -253,7 +254,7 @@ export async function evaluateRewards(
         })
 
       if (insertError) {
-        console.error('Reward event insert error:', JSON.stringify(insertError, Object.getOwnPropertyNames(insertError), 2))
+        logError('rewards.evaluate', insertError, { creator_id, audience_member_id: member.id, post_id: post_id || null, stage: 'insert_reward_event' })
       } else {
         const { error: updateError } = await supabase
           .from('audience_members')
@@ -261,7 +262,7 @@ export async function evaluateRewards(
           .eq('id', member.id)
 
         if (updateError) {
-          console.error('Audience member update error:', JSON.stringify(updateError, Object.getOwnPropertyNames(updateError), 2))
+          logError('rewards.evaluate', updateError, { creator_id, audience_member_id: member.id, stage: 'mark_member_eligible' })
         } else {
           qualified++
         }
@@ -279,7 +280,7 @@ export async function evaluateRewards(
       evaluated++
       onProgress?.(evaluated, eligibleMembers.length)
     } catch (err) {
-      console.error('Reward evaluate error:', JSON.stringify(err, Object.getOwnPropertyNames(err), 2))
+      logError('rewards.evaluate', err, { creator_id, audience_member_id: member.id, stage: 'evaluate_member' })
       results.push({
         audience_member_display_name: member.display_name,
         qualifies: false,
@@ -290,7 +291,16 @@ export async function evaluateRewards(
     }
   }
 
-  console.error('Reward evaluate results:', JSON.stringify(results, null, 2))
+  // Was console.error with the entire results array inlined, which meant every
+  // successful run reported itself as an error and buried the real ones. It is an
+  // info-level summary; the per-member detail is already returned to the caller.
+  logInfo('rewards.evaluate', 'Evaluation complete', {
+    creator_id,
+    post_id: post_id || null,
+    evaluated,
+    qualified,
+    overturned_by_critic: results.filter(r => r.overturned).length,
+  })
 
   return { success: true, evaluated, qualified, results }
 }
