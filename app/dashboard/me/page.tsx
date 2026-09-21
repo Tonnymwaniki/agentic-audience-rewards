@@ -1,10 +1,15 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { fetchInBatches } from '@/lib/supabase-helpers'
 import MascotIcon from '@/components/MascotIcon'
 import LogoutButton from './LogoutButton'
+import DataControls from './DataControls'
 
 export const dynamic = 'force-dynamic'
+
+/** Answered in the product: support goes to the account owner's inbox. */
+const SUPPORT_EMAIL = 'mwanikitonny3@gmail.com'
 
 const linkIconProps = {
   xmlns: 'http://www.w3.org/2000/svg',
@@ -82,6 +87,52 @@ const ACCOUNT_LINKS = [
   },
 ] as const
 
+/**
+ * Same treatment as Agent Home's StatCard — icon badge, large display number,
+ * muted caption — so a stat means the same thing wherever it appears. These are
+ * all-time totals rather than Agent Home's rolling 24h window, which is why the
+ * section is labelled as such.
+ */
+function StatCard({
+  icon,
+  value,
+  label,
+  tone,
+  valueClass,
+}: {
+  icon: React.ReactNode
+  value: number
+  label: string
+  tone: string
+  valueClass: string
+}) {
+  return (
+    <div className="card">
+      <span className={`icon-badge icon-badge-${tone}`} aria-hidden="true">
+        {icon}
+      </span>
+      <p className={`mt-3 font-display text-3xl leading-none font-semibold ${valueClass}`}>
+        {value.toLocaleString()}
+      </p>
+      <p className="mt-1.5 text-xs leading-snug text-text-muted">{label}</p>
+    </div>
+  )
+}
+
+/** Absolute date; "3 days ago" is vaguer than a sync timestamp needs to be. */
+function formatSyncedAt(iso: string | null): string {
+  if (!iso) return 'Not synced yet'
+  const date = new Date(iso)
+  if (Number.isNaN(date.getTime())) return 'Not synced yet'
+  return date.toLocaleString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function ChevronIcon() {
   return (
     <svg
@@ -110,12 +161,60 @@ export default async function MePage() {
 
   const { data: creator, error: creatorError } = await supabase
     .from('creators')
-    .select('display_name')
+    .select(
+      'id, display_name, channel_url, subscriber_count, channel_video_count, channel_stats_updated_at, channel_videos_synced_count'
+    )
     .eq('user_id', user.id)
     .maybeSingle()
 
   if (creatorError) {
     console.error('Me page creator fetch error:', JSON.stringify(creatorError, Object.getOwnPropertyNames(creatorError), 2))
+  }
+
+  // --- All-time stats. Same shape as Agent Home's: posts for this creator, the
+  // comments on them, then reward events via this creator's audience members.
+  // Every read is scoped by creator_id or by ids derived from it. ---
+  let totalComments = 0
+  let videosAnalyzed = 0
+  let peopleRecognized = 0
+
+  if (creator?.id) {
+    const { data: posts } = await supabase
+      .from('posts')
+      .select('id')
+      .eq('creator_id', creator.id)
+
+    const postIds = (posts || []).map(p => p.id)
+    videosAnalyzed = postIds.length
+
+    if (postIds.length > 0) {
+      // head + exact count: the number is all that's wanted here, so the rows
+      // themselves never cross the wire and the 1000-row page cap is irrelevant.
+      const { count } = await supabase
+        .from('comments')
+        .select('*', { count: 'exact', head: true })
+        .in('post_id', postIds)
+      totalComments = count ?? 0
+    }
+
+    const { data: members } = await supabase
+      .from('audience_members')
+      .select('id')
+      .eq('creator_id', creator.id)
+
+    const memberIds = (members || []).map(m => m.id)
+
+    if (memberIds.length > 0) {
+      // Distinct people, not events: someone recognized three times is one person
+      // here, which is what "people recognized" says.
+      const events = await fetchInBatches<{ audience_member_id: string }>(supabase, {
+        table: 'reward_events',
+        select: 'audience_member_id',
+        inColumn: 'audience_member_id',
+        inValues: memberIds,
+      })
+      peopleRecognized = new Set(events.map(e => e.audience_member_id)).size
+    }
   }
 
   const displayName = creator?.display_name || user.email || 'Your account'
@@ -138,6 +237,138 @@ export default async function MePage() {
           <span aria-hidden="true" className="h-1.5 w-1.5 rounded-full bg-green" />
           Signed in
         </p>
+      </section>
+
+      <section aria-labelledby="stats-snapshot">
+        <h2
+          id="stats-snapshot"
+          className="font-mono text-[10px] tracking-widest text-text-muted uppercase"
+        >
+          All time
+        </h2>
+        <div className="mt-3 grid grid-cols-3 gap-3">
+          <StatCard
+            tone="purple"
+            valueClass="text-purple-text"
+            value={totalComments}
+            label="Comments understood"
+            icon={
+              <svg {...linkIconProps}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M12 20.25c4.97 0 9-3.694 9-8.25s-4.03-8.25-9-8.25S3 7.444 3 12c0 2.104.859 4.023 2.273 5.48.432.447.74 1.04.586 1.641a4.483 4.483 0 0 1-.923 1.785A5.969 5.969 0 0 0 6 21c1.282 0 2.47-.402 3.445-1.087.81.22 1.668.337 2.555.337Z"
+                />
+              </svg>
+            }
+          />
+          <StatCard
+            tone="green"
+            valueClass="text-green"
+            value={peopleRecognized}
+            label="People recognized"
+            icon={
+              <svg {...linkIconProps}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M4 17.5 2.5 7l5.25 3.75L12 4.5l4.25 6.25L21.5 7 20 17.5zM5 20h14"
+                />
+              </svg>
+            }
+          />
+          <StatCard
+            tone="pink"
+            valueClass="text-pink"
+            value={videosAnalyzed}
+            label="Videos analyzed"
+            icon={
+              <svg {...linkIconProps}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="m15.75 10.5 4.72-2.36a.75.75 0 0 1 1.08.67v8.38a.75.75 0 0 1-1.08.67l-4.72-2.36M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-7.5A2.25 2.25 0 0 0 13.5 6.75h-9A2.25 2.25 0 0 0 2.25 9v7.5a2.25 2.25 0 0 0 2.25 2.25Z"
+                />
+              </svg>
+            }
+          />
+        </div>
+      </section>
+
+      <section aria-labelledby="connected-channel">
+        <h2
+          id="connected-channel"
+          className="font-mono text-[10px] tracking-widest text-text-muted uppercase"
+        >
+          Connected channel
+        </h2>
+
+        {creator?.channel_url ? (
+          <div className="card mt-3">
+            {/* break-all: a channel URL is one unbreakable token and will push the
+                card past the viewport on a phone without it. */}
+            <a
+              href={creator.channel_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="block font-body text-sm font-medium break-all text-purple-text hover:underline"
+            >
+              {creator.channel_url}
+            </a>
+
+            <dl className="mt-4 grid grid-cols-2 gap-x-3 gap-y-4">
+              <div>
+                <dt className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+                  Subscribers
+                </dt>
+                <dd className="mt-1 font-display text-lg leading-none font-semibold text-text-primary">
+                  {creator.subscriber_count === null || creator.subscriber_count === undefined
+                    ? '—'
+                    : Number(creator.subscriber_count).toLocaleString()}
+                </dd>
+              </div>
+              <div>
+                <dt className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+                  Videos brought in
+                </dt>
+                <dd className="mt-1 font-display text-lg leading-none font-semibold text-text-primary">
+                  {(creator.channel_videos_synced_count ?? 0).toLocaleString()}
+                  {creator.channel_video_count
+                    ? ` / ${Number(creator.channel_video_count).toLocaleString()}`
+                    : ''}
+                </dd>
+              </div>
+            </dl>
+
+            <p className="mt-4 border-t border-white/10 pt-3 text-xs text-text-muted">
+              Last synced {formatSyncedAt(creator.channel_stats_updated_at)}
+            </p>
+          </div>
+        ) : (
+          <Link
+            href="/dashboard/connect"
+            className="card mt-3 flex items-center gap-3 transition-colors hover:border-purple/40 hover:bg-surface-hover"
+          >
+            <span className="icon-badge icon-badge-purple" aria-hidden="true">
+              <svg {...linkIconProps}>
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M13.19 8.688a4.5 4.5 0 0 1 1.242 7.244l-4.5 4.5a4.5 4.5 0 0 1-6.364-6.364l1.757-1.757m13.35-.622 1.757-1.757a4.5 4.5 0 0 0-6.364-6.364l-4.5 4.5a4.5 4.5 0 0 0 1.242 7.244"
+                />
+              </svg>
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block font-body text-sm font-medium text-text-primary">
+                Connect a channel
+              </span>
+              <span className="mt-0.5 block text-xs leading-snug text-text-muted">
+                No channel connected yet — paste your link to get started
+              </span>
+            </span>
+            <ChevronIcon />
+          </Link>
+        )}
       </section>
 
       <nav className="space-y-3" aria-label="Account">
@@ -163,7 +394,19 @@ export default async function MePage() {
         ))}
       </nav>
 
+      <DataControls />
+
       <LogoutButton />
+
+      <p className="pb-2 text-center text-xs text-text-muted">
+        Need help?{' '}
+        <a
+          href={`mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent('Notice — support request')}`}
+          className="text-purple-text underline hover:text-text-primary"
+        >
+          Contact us
+        </a>
+      </p>
     </div>
   )
 }
