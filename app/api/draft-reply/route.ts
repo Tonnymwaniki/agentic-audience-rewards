@@ -8,7 +8,8 @@ import {
   type BusinessProfile,
 } from '@/lib/categorize'
 import { requireCreator } from '@/lib/api-auth'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
+import { checkPostVerification, VERIFY_OWNERSHIP_MESSAGE, VERIFY_OWNERSHIP_PATH } from '@/lib/channel-verification'
 
 export async function POST(request: NextRequest) {
   try {
@@ -30,7 +31,7 @@ export async function POST(request: NextRequest) {
 
     const { data: comment } = await supabase
       .from('comments')
-      .select('text, comment_categories (category), posts (creator_id)')
+      .select('text, post_id, comment_categories (category), posts (creator_id)')
       .eq('id', comment_id)
       .single()
 
@@ -47,6 +48,27 @@ export async function POST(request: NextRequest) {
     // indistinguishable from one that does not exist.
     if (!ownerId || ownerId !== authResult.auth.creatorId) {
       return NextResponse.json({ error: 'Comment not found' }, { status: 404 })
+    }
+
+    // CAPABILITY GATE. Same rule as categorization-time drafting: a reply written
+    // in the owner's voice requires proof of ownership. 403 with an actionable
+    // message, not a silent empty draft, so the UI can offer the verify link.
+    const verification = await checkPostVerification(
+      authResult.auth.supabase,
+      authResult.auth.creatorId,
+      comment.post_id as string
+    )
+    if (!verification.verified) {
+      logInfo('api/draft-reply', 'Refused: channel ownership not verified', {
+        creator_id: authResult.auth.creatorId,
+        comment_id,
+        channel_id: verification.channelId,
+        reason: verification.reason,
+      })
+      return NextResponse.json(
+        { error: VERIFY_OWNERSHIP_MESSAGE, reason: verification.reason, verify_url: VERIFY_OWNERSHIP_PATH },
+        { status: 403 }
+      )
     }
 
     const category = (comment.comment_categories as unknown as { category: string } | null)?.category || 'purchase_intent'

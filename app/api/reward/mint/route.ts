@@ -5,7 +5,8 @@ import { avalancheFuji } from 'thirdweb/chains'
 import { claimTo } from 'thirdweb/extensions/erc721'
 import { privateKeyToAccount } from 'thirdweb/wallets'
 import dotenv from 'dotenv'
-import { logError, logInfo } from '@/lib/logger'
+import { logError, logInfo, logWarn } from '@/lib/logger'
+import { checkPostVerification } from '@/lib/channel-verification'
 dotenv.config({ path: '.env.local' })
 
 export async function POST(request: NextRequest) {
@@ -28,7 +29,7 @@ export async function POST(request: NextRequest) {
 
     const { data: rewardEvent, error: rewardError } = await supabase
       .from('reward_events')
-      .select('id, status, audience_member_id, audience_members (wallet_address)')
+      .select('id, status, post_id, audience_member_id, audience_members (wallet_address)')
       .eq('claim_token', claim_token)
       .single()
 
@@ -37,6 +38,34 @@ export async function POST(request: NextRequest) {
         { error: 'Invalid claim token' },
         { status: 404 }
       )
+    }
+
+    // CAPABILITY GATE. The claimant is authorized by their token, but the reward
+    // itself must have come from a channel its creator proved they own — otherwise
+    // an unverified account could mint real tokens to a stranger's audience.
+    // Checked here, not only at evaluation, because rows may predate the gate.
+    const rewardPostId = (rewardEvent as unknown as { post_id?: string | null }).post_id ?? null
+    if (rewardPostId) {
+      const { data: postRow } = await supabase
+        .from('posts')
+        .select('creator_id')
+        .eq('id', rewardPostId)
+        .maybeSingle()
+      const ownerId = (postRow as { creator_id?: string } | null)?.creator_id ?? null
+      const verification = ownerId
+        ? await checkPostVerification(supabase, ownerId, rewardPostId)
+        : { verified: false, channelId: null, reason: 'unknown_channel' as const }
+
+      if (!verification.verified) {
+        logWarn('api/reward/mint', 'Blocked: reward is from an unverified channel', {
+          reward_event_id: rewardEvent.id, post_id: rewardPostId,
+          creator_id: ownerId, channel_id: verification.channelId, reason: verification.reason,
+        })
+        return NextResponse.json(
+          { error: 'This reward cannot be claimed yet — the channel owner has not verified ownership.' },
+          { status: 403 }
+        )
+      }
     }
 
     if (rewardEvent.status !== 'pending') {

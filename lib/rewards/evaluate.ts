@@ -3,7 +3,8 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import { updateAudienceProfile } from '@/lib/audience-memory'
 import { decideReward, MAX_TOOL_ROUNDS } from '@/lib/rewards/decide'
 import type { RewardedPrecedent } from '@/lib/rewards/evaluate-tools'
-import { logError, logInfo } from '@/lib/logger'
+import { logError, logInfo, logWarn } from '@/lib/logger'
+import { checkPostVerification, getVerifiedChannelIds, VERIFY_OWNERSHIP_MESSAGE } from '@/lib/channel-verification'
 
 export type EvaluateProgressCallback = (evaluated: number, total: number) => void
 
@@ -13,6 +14,44 @@ export async function evaluateRewards(
   onProgress?: EvaluateProgressCallback
 ) {
   const supabase = createServiceClient()
+
+  // CAPABILITY GATE, before any work or spend. Recognizing someone commits to
+  // minting them a token — acting on a real person on behalf of a channel. That
+  // requires proof the caller owns the channel.
+  //
+  // Scoped to the post when one is named. A creator verified for channel A must
+  // not be able to evaluate a video belonging to channel B. With no post_id the
+  // run spans every post, so it requires at least one verified grant and then
+  // filters per post below.
+  if (post_id) {
+    const verification = await checkPostVerification(supabase, creator_id, post_id)
+    if (!verification.verified) {
+      logWarn('rewards.evaluate', 'Blocked: channel ownership not verified', {
+        creator_id, post_id, channel_id: verification.channelId, reason: verification.reason,
+      })
+      return {
+        success: false,
+        blocked: 'unverified_channel' as const,
+        error: VERIFY_OWNERSHIP_MESSAGE,
+        evaluated: 0,
+        qualified: 0,
+        results: [],
+      }
+    }
+  } else {
+    const verifiedIds = await getVerifiedChannelIds(supabase, creator_id)
+    if (verifiedIds.length === 0) {
+      logWarn('rewards.evaluate', 'Blocked: no verified channel for this creator', { creator_id })
+      return {
+        success: false,
+        blocked: 'unverified_channel' as const,
+        error: VERIFY_OWNERSHIP_MESSAGE,
+        evaluated: 0,
+        qualified: 0,
+        results: [],
+      }
+    }
+  }
 
   // Paged: PostgREST caps a response at 1000 rows, and a channel can easily have
   // more never-rewarded members than that. Without this, everyone past the first

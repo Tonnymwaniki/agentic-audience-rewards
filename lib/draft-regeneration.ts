@@ -9,7 +9,8 @@ import {
   type BusinessProfile,
 } from '@/lib/categorize'
 import { detectEscalation } from '@/lib/escalation'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
+import { checkPostVerification } from '@/lib/channel-verification'
 
 const DRAFTABLE_CATEGORIES = new Set(['purchase_intent', 'question', 'complaint'])
 const RELEVANCE_CHECK_CATEGORIES = new Set(['question', 'complaint'])
@@ -25,6 +26,8 @@ export type RegenerationResult = {
   considered: number
   regenerated: number
   skippedCasual: number
+  /** Comments whose channel has no verified ownership grant, so no draft was made. */
+  skippedUnverified: number
   failed: number
   remaining: number
 }
@@ -67,6 +70,7 @@ export async function regenerateDraftsForCreator(
     considered: 0,
     regenerated: 0,
     skippedCasual: 0,
+    skippedUnverified: 0,
     failed: 0,
     remaining: 0,
   }
@@ -207,6 +211,8 @@ export async function regenerateDraftsForCreator(
     )
   }
 
+  let skippedUnverified = 0
+
   let regenerated = 0
   let skippedCasual = 0
   let failed = 0
@@ -275,6 +281,14 @@ export async function regenerateDraftsForCreator(
         }
       }
 
+      // CAPABILITY GATE, per post: regeneration must not become a way to produce
+      // drafts for a channel the creator has not proven they own.
+      const verification = await checkPostVerification(supabase, creator_id, comment.post_id)
+      if (!verification.verified) {
+        skippedUnverified++
+        continue
+      }
+
       const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples, customFieldContext)
 
       const stamped = await markChecked(comment.id, {
@@ -298,11 +312,18 @@ export async function regenerateDraftsForCreator(
     }
   }
 
+  if (skippedUnverified > 0) {
+    logInfo('drafts.regenerate', 'Some drafts skipped: channel ownership not verified', {
+      creator_id, skipped_unverified: skippedUnverified,
+    })
+  }
+
   return {
     success: true,
     considered: targets.length,
     regenerated,
     skippedCasual,
+    skippedUnverified,
     failed,
     remaining,
   }

@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { deleteCreatorData, findOrphanedRows } from '@/lib/creator-deletion'
-import { logError } from '@/lib/logger'
+import { revokeCreatorGoogleAccess } from '@/lib/youtube-oauth'
+import { logError, logInfo } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,6 +43,33 @@ export async function POST(request: Request) {
       { error: `Confirmation required: send { "confirm": "${CONFIRMATION}" }` },
       { status: 400 }
     )
+  }
+
+  // BEFORE the cascade, never after. youtube_oauth_tokens cascades from creators,
+  // so once deleteCreatorData runs the tokens are gone and Google's grant could
+  // never be withdrawn from our side — deleting our row would leave the app with
+  // standing read access to an account whose owner believes they have left.
+  //
+  // Deliberately not inside the try/catch below: revokeCreatorGoogleAccess never
+  // throws, and a Google outage must not be able to abort a deletion the creator
+  // has already confirmed.
+  const revoke = await revokeCreatorGoogleAccess(supabase, creatorId)
+  if (revoke.outcome === 'failed' || revoke.outcome === 'decrypt_failed') {
+    // Deletion continues regardless — this is recorded so a live grant that
+    // outlived its account can be found and chased up.
+    logError('api/creator/delete', new Error(`Google revocation did not complete: ${revoke.outcome}`), {
+      creator_id: creatorId,
+      user_id: userId,
+      revoke_outcome: revoke.outcome,
+      token_type: revoke.tokenType,
+      stage: 'revoke_google_access',
+    })
+  } else {
+    logInfo('api/creator/delete', 'Google access revocation resolved', {
+      creator_id: creatorId,
+      revoke_outcome: revoke.outcome,
+      token_type: revoke.tokenType,
+    })
   }
 
   let report: Record<string, number>

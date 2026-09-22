@@ -167,6 +167,12 @@ export default function ConnectPage() {
   const [alreadyCategorized, setAlreadyCategorized] = useState(false)
   const router = useRouter()
 
+  // --- Verified ownership (Google OAuth) ---
+  type OwnedChannel = { id: string; title: string; customUrl: string | null; thumbnailUrl: string | null; channelUrl: string }
+  const [ownedChannels, setOwnedChannels] = useState<OwnedChannel[] | null>(null)
+  const [loadingChannels, setLoadingChannels] = useState(false)
+  const [oauthNotice, setOauthNotice] = useState<string | null>(null)
+
   const [phase, setPhase] = useState<Phase>('form')
   const [formError, setFormError] = useState<string | null>(null)
   // From the quick count.
@@ -211,6 +217,80 @@ export default function ConnectPage() {
 
     loadCreator()
   }, [])
+
+  // Read the result of the OAuth round trip, then load the channels Google says
+  // this account owns. Runs on every mount, not only after a redirect: a creator
+  // who connected last week should still see their verified channel offered
+  // first rather than being sent back through consent.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search)
+    const error = params.get('yt_error')
+    if (error) {
+      setOauthNotice(
+        error === 'declined'
+          ? 'You cancelled the Google sign-in. You can try again, or use the link option below.'
+          : error === 'no_channels'
+            ? 'That Google account signed in successfully, but it does not own a YouTube channel.'
+            : error === 'channels_failed'
+              ? "We connected to Google but couldn't read your channels. Please try again shortly."
+              : 'We could not complete the Google connection. Please try again.'
+      )
+    }
+
+    // Clean the query string so a refresh doesn't replay the banner.
+    if (error || params.get('yt_connected')) {
+      window.history.replaceState({}, '', window.location.pathname)
+    }
+
+    let cancelled = false
+    setLoadingChannels(true)
+    fetch('/api/creator/youtube-channels')
+      .then(res => res.json())
+      .then(data => {
+        if (cancelled) return
+        setOwnedChannels(data.connected ? (data.channels ?? []) : [])
+        if (data.revoked) {
+          setOauthNotice('Your Google connection was revoked. Reconnect to enable replies and rewards.')
+        }
+      })
+      .catch(() => { if (!cancelled) setOwnedChannels([]) })
+      .finally(() => { if (!cancelled) setLoadingChannels(false) })
+
+    return () => { cancelled = true }
+  }, [])
+
+  /**
+   * Selecting a verified channel feeds the EXISTING flow. The OAuth step changes
+   * only how the channel is identified — everything after this point (count
+   * discovery, choose-how-many, live progress) is the same code path the pasted
+   * link has always used, which is why this hands over a channel URL rather than
+   * introducing a parallel sync.
+   */
+  async function handleSelectOwnedChannel(selected: OwnedChannel) {
+    setChannel(selected.channelUrl)
+    setFormError(null)
+    setPhase('checking')
+    try {
+      const res = await fetch('/api/creator/channel/preview', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ channel_url: selected.channelUrl }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setFormError(data.error || 'Something went wrong. Please try again.')
+        setPhase('form')
+        return
+      }
+      setVideoCount(data.videoCount)
+      setMaxSelectable(data.maxSelectable)
+      setChosen(String(data.suggested))
+      setPhase('choose')
+    } catch {
+      setFormError("Couldn't check that channel. Please try again.")
+      setPhase('form')
+    }
+  }
 
   // Polls the background sync. Stops as soon as it finishes, so a completed sync
   // doesn't leave an interval running for the life of the page.
@@ -527,10 +607,97 @@ export default function ConnectPage() {
         </p>
       </header>
 
+      {oauthNotice && (
+        <p className="rounded-lg border border-white/10 bg-surface px-4 py-3 text-sm text-text-primary" role="status">
+          {oauthNotice}
+        </p>
+      )}
+
+      {/* PRIMARY PATH. Google answers "which channels does this account own?" —
+          an answer the person filling in the form cannot influence, which is what
+          unlocks drafted replies and rewards. */}
+      <section aria-labelledby="verified-connect" className="card">
+        <h2 id="verified-connect" className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+          Recommended
+        </h2>
+
+        {loadingChannels ? (
+          <p className="mt-3 text-sm text-text-muted">Checking your Google connection…</p>
+        ) : ownedChannels && ownedChannels.length > 0 ? (
+          <>
+            <p className="mt-2 text-sm leading-relaxed text-text-primary">
+              {ownedChannels.length === 1
+                ? 'Google confirmed you own this channel.'
+                : `Google confirmed you own ${ownedChannels.length} channels. Pick the one to connect.`}
+            </p>
+            <ul className="mt-3 space-y-2">
+              {ownedChannels.map(owned => (
+                <li key={owned.id}>
+                  <button
+                    type="button"
+                    onClick={() => handleSelectOwnedChannel(owned)}
+                    disabled={checking}
+                    className="flex w-full items-center gap-3 rounded-xl border border-green/30 bg-surface p-3 text-left transition-colors hover:border-green/60 hover:bg-surface-hover disabled:opacity-60"
+                  >
+                    {owned.thumbnailUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={owned.thumbnailUrl} alt="" className="h-10 w-10 flex-shrink-0 rounded-full" />
+                    ) : (
+                      <span className="icon-badge icon-badge-green" aria-hidden="true" />
+                    )}
+                    <span className="min-w-0 flex-1">
+                      <span className="block font-body text-sm font-medium text-text-primary">{owned.title}</span>
+                      <span className="mt-0.5 block text-xs text-text-muted">
+                        {owned.customUrl ?? owned.id}
+                      </span>
+                    </span>
+                    <span className="flex-shrink-0 font-mono text-[10px] tracking-widest text-green uppercase">
+                      Verified
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-3 text-xs leading-relaxed text-text-muted">
+              Drafted replies and rewards are enabled for verified channels.
+            </p>
+          </>
+        ) : (
+          <>
+            <p className="mt-2 text-sm leading-relaxed text-text-primary">
+              Sign in with Google to confirm which channel is yours. This unlocks drafted
+              replies and audience rewards, which need proof of ownership.
+            </p>
+            {/* A plain link, not fetch(): the OAuth start route answers with a
+                redirect to Google, and a full navigation is what has to happen. */}
+            <a href="/api/auth/youtube/start" className="btn-primary mt-4 flex w-full items-center justify-center gap-2">
+              <svg viewBox="0 0 24 24" className="h-4 w-4" aria-hidden="true">
+                <path fill="#fff" d="M21.35 11.1H12v2.9h5.35c-.25 1.35-1.9 3.95-5.35 3.95A5.95 5.95 0 0 1 12 6.05c1.7 0 2.85.72 3.5 1.35l2.4-2.3A9.5 9.5 0 0 0 12 2.5a9.5 9.5 0 1 0 0 19c5.5 0 9.1-3.85 9.1-9.3 0-.62-.05-1.1-.15-1.6Z" />
+              </svg>
+              Connect with Google
+            </a>
+            <p className="mt-2 text-xs leading-relaxed text-text-muted">
+              We ask only to read which channels you own — never to post, edit or delete.
+            </p>
+          </>
+        )}
+      </section>
+
+      {/* SECONDARY PATH, deliberately quieter. Analyzing a channel you don't own
+          is legitimate research, so it stays available — with its limits stated up
+          front rather than discovered later when drafts don't appear. */}
       <form onSubmit={handleFindVideos} className="card space-y-4">
           <div>
+            <p className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+              Or analyze any channel, for research
+            </p>
+            <p className="mt-2 mb-3 text-xs leading-relaxed text-text-muted">
+              Paste any channel link to read and analyze its comments — categories, sentiment,
+              topics and Research chat all work. Drafted replies and rewards stay unavailable
+              until ownership is verified above.
+            </p>
             <label htmlFor="channel-url" className="mb-2 block text-sm font-medium text-text-muted">
-              Paste your channel link
+              Channel link
             </label>
             <input
               id="channel-url"
@@ -574,7 +741,7 @@ export default function ConnectPage() {
           )}
 
           <button type="submit" disabled={!channel.trim() || checking} className="btn-primary w-full disabled:opacity-50">
-            {checking ? 'Checking your channel…' : 'Find My Videos'}
+            {checking ? 'Checking that channel…' : 'Find videos'}
           </button>
 
         {savedChannel && (

@@ -4,6 +4,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 import { logError, logWarn, logInfo } from '@/lib/logger'
+import { checkPostVerification } from '@/lib/channel-verification'
 
 export type ProgressCallback = (count: number) => void
 
@@ -715,6 +716,23 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   //     needs the creator to answer personally
   // Collected here and written in one insert after the loop rather than one insert
   // per comment, which on a first analysis would be hundreds of round trips.
+  // Resolved once per post, not per comment: every comment on a post shares its
+  // channel, so this is one check for the whole loop.
+  let draftingAllowed = false
+  let skippedUnverified = 0
+  if (postCreatorId) {
+    const verification = await checkPostVerification(supabase, postCreatorId, post_id)
+    draftingAllowed = verification.verified
+    if (!draftingAllowed) {
+      logInfo('categorize.categorizePost', 'Drafting disabled for this post: channel ownership not verified', {
+        creator_id: postCreatorId,
+        post_id,
+        channel_id: verification.channelId,
+        reason: verification.reason,
+      })
+    }
+  }
+
   const notifiable: Array<{ commentId: string; category: string; text: string }> = []
 
   for (const comment of draftable) {
@@ -746,6 +764,16 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         if (!isRelevant) continue
       }
 
+      // CAPABILITY GATE. Drafting is skipped outright rather than generated and
+      // hidden: a draft speaks in the channel owner's voice to a real viewer, so
+      // producing one for a channel nobody has proven they own is the thing to
+      // avoid — not merely showing it. Skipping also saves the LLM call.
+      // Categorization above has already run and is deliberately NOT gated.
+      if (!draftingAllowed) {
+        skippedUnverified++
+        continue
+      }
+
       const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext)
       const draftReply = draft.text
       await supabase
@@ -762,6 +790,17 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       logError('categorize.categorizePost', err, { post_id, comment_id: comment.id, stage: 'generate_draft_reply' })
     }
   }
+
+  if (skippedUnverified > 0) {
+
+    logInfo('categorize.categorizePost', 'Drafts skipped for unverified channel', {
+
+      creator_id: postCreatorId, post_id, skipped_unverified: skippedUnverified,
+
+    })
+
+  }
+
 
   await createDraftNotifications(supabase, postCreatorId, postTitle, notifiable)
 

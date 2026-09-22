@@ -6,6 +6,8 @@ import PageHeader from '@/components/PageHeader'
 import PasteVideoLink from './PasteVideoLink'
 import VideoGrid from './VideoGrid'
 import { logError } from '@/lib/logger'
+import { getChannelVerificationSummary, type ChannelSummary } from '@/lib/channel-verification'
+import ChannelVerificationBanner from './ChannelVerificationBanner'
 
 export const dynamic = 'force-dynamic'
 
@@ -209,10 +211,20 @@ export default async function InboxPage() {
 
   const allCards = [...analyzedCards, ...unanalyzedCards]
 
+  // Per-channel ownership status. Never throws the page: a failure here means the
+  // banner is absent, not that My Videos is unavailable.
+  let channelSummary: ChannelSummary[] = []
+  try {
+    channelSummary = await getChannelVerificationSummary(supabase, creator.id)
+  } catch (summaryError) {
+    logError('page.inbox', summaryError, { creator_id: creator.id, stage: 'channel_verification_summary' })
+  }
+
   return (
     <div>
       <PageHeader title="My Videos" />
       <PasteVideoLink creatorId={creator.id} />
+      <ChannelVerificationBanner channels={channelSummary} />
 
       {allCards.length === 0 ? (
         <div className="card p-6 text-center">

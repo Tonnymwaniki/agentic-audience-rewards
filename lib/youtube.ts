@@ -91,6 +91,9 @@ export async function fetchVideoMeta(videoId: string) {
     // only records when we first pulled the video in. Already present in the
     // snippet we were fetching anyway, so returning it costs no extra quota.
     publishedAt: (snippet.publishedAt as string | undefined) ?? null,
+    // Which channel owns this video. Already in the snippet we fetch, and it is
+    // what capability gating compares against a verified OAuth grant.
+    channelId: (snippet.channelId as string | undefined) ?? null,
     likeCount: parseCount(statistics.likeCount),
     viewCount: parseCount(statistics.viewCount),
     durationSeconds: parseIsoDuration(item.contentDetails?.duration),

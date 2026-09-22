@@ -29,9 +29,10 @@ const optionalColumns: Record<'like_count' | 'reply_count' | 'parent_comment_id'
 }
 
 /** Post columns added by migration 20240101000027, dropped until it has been run. */
-const optionalPostColumns: Record<'duration_seconds' | 'youtube_category', boolean> = {
+const optionalPostColumns: Record<'duration_seconds' | 'youtube_category' | 'channel_id', boolean> = {
   duration_seconds: true,
   youtube_category: true,
+  channel_id: true,
 }
 
 /** The column an "unknown column" error names, if it's one of the optional ones. */
@@ -206,6 +207,9 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     // after publication a comment arrived — see scripts/backfill-post-published-at.ts
     // for the repair of those rows.
     posted_at: meta.publishedAt,
+    // Recorded at ingest so ownership gating is a local read. Optional-column
+    // handling below drops it on a database without migration 36.
+    channel_id: meta.channelId,
     // Refreshed on every re-ingest of the same video, since the upsert conflicts
     // on (platform_id, external_post_id) — so counts track the video over time
     // rather than freezing at whatever they were on first import.
