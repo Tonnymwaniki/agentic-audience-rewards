@@ -3,7 +3,7 @@ import { after } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
 import { saveCustomProfileValues } from '@/lib/custom-profile-fields'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
 
 // The save itself returns immediately; this headroom is for the after() work,
 // which re-drafts replies across every one of the creator's videos.
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     after(async () => {
       try {
         const result = await regenerateDraftsForCreator(creatorId)
-        console.log('Profile save draft regeneration:', JSON.stringify(result))
+        logInfo('api/creator/profile', 'Drafts regenerated after profile save', { creator_id: creatorId, ...result })
       } catch (regenError) {
         logError('api/creator/profile', regenError, { creator_id: creatorId, stage: 'regenerate_drafts' })
       }

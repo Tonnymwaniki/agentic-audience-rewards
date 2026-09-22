@@ -3,7 +3,7 @@ import { fetchInBatches } from '@/lib/supabase-helpers'
 import Link from 'next/link'
 import Avatar from '@/components/Avatar'
 import PageHeader from '@/components/PageHeader'
-import { logError } from '@/lib/logger'
+import { logError, logWarn } from '@/lib/logger'
 
 function normalizeText(text: string): string {
   return text
@@ -120,7 +120,7 @@ export default async function RepeatedCommentsPage() {
   })
 
   if (memberIds.length > 0 && (audienceMembers || []).length === 0) {
-    console.log("REPEATED AUDIENCE MEMBERS ERROR: fetched 0 rows for", memberIds.length, "member IDs")
+    logWarn('page.repeated', 'Audience member lookup returned no rows for known member ids', { member_ids: memberIds.length })
   }
 
   const memberMap = new Map((audienceMembers || []).map(m => [m.id, m.display_name || 'Unknown']))

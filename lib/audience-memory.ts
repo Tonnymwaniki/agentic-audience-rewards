@@ -1,7 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { updateAudienceSegment } from '@/lib/segments'
 import { updateAudienceLevel } from '@/lib/levels'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
 
 export async function updateAudienceProfile(audience_member_id: string) {
   console.log("AUDIENCE MEMORY: starting for member", audience_member_id)
@@ -79,7 +79,7 @@ export async function updateAudienceProfile(audience_member_id: string) {
       throw updateError
     }
 
-    console.log("AUDIENCE MEMORY: successfully saved profile for", audience_member_id)
+    logInfo('audienceMemory.updateProfile', 'Audience profile saved', { audience_member_id })
 
     return { success: true, updated: true, summary }
   } catch (error) {

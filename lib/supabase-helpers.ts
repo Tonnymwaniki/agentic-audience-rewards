@@ -1,4 +1,5 @@
 import { SupabaseClient } from '@supabase/supabase-js'
+import { logError } from '@/lib/logger'
 
 const BATCH_SIZE = 200
 const PAGE_SIZE = 1000
@@ -54,7 +55,7 @@ export async function fetchInBatches<T>(
       const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1)
 
       if (error) {
-        console.log(`fetchInBatches error on ${options.table}:`, JSON.stringify(error, Object.getOwnPropertyNames(error), 2))
+        logError('supabaseHelpers.fetchInBatches', error, { table: options.table, in_column: options.inColumn, throw_on_error: Boolean(options.throwOnError) })
         if (options.throwOnError) {
           throw new Error(`fetchInBatches failed on ${options.table}: ${error.message}`)
         }

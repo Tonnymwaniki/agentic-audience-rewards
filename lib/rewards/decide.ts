@@ -6,7 +6,7 @@ import {
   type RewardedPrecedent,
 } from '@/lib/rewards/evaluate-tools'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
-import { logError, logWarn } from '@/lib/logger'
+import { logError, logWarn, logInfo } from '@/lib/logger'
 
 /**
  * Tool rounds allowed per person. Two is enough to fetch both tools once each and
@@ -114,12 +114,22 @@ Set "stands" to false ONLY if you would genuinely decide differently now; in tha
     }
 
     return {
-      // Both halves of the audit trail are kept: what was decided first, and why it
-      // was changed. The stored reason is the only record a creator ever sees.
+      // ONLY the final justification is stored. This used to be
+      // `Initial: ${decision.reason} On review: ${critique}` — the whole internal
+      // deliberation, persisted into reward_events.reason, which is rendered on the
+      // PUBLIC /recognized page. That published a transcript stating that a named
+      // person had first been judged insufficient, the threshold they fell short
+      // of, and that the creator's reward history was "empty". A superseded draft
+      // judgement is not a justification for the decision that replaced it, and it
+      // is not something the person it describes should ever read.
+      //
+      // The audit trail is not lost, it moves to where an audit trail belongs: the
+      // `outcome` returned below still carries `overturned` and the full `critique`,
+      // and rewards.decide.critique logs both verdicts at info level.
       decision: {
         qualifies: revised,
         confidence: decision.confidence,
-        reason: `Initial: ${decision.reason} On review: ${critique}`,
+        reason: critique || decision.reason,
       },
       outcome: { critiqued: true, overturned: true, critique: critique || null },
     }
@@ -314,9 +324,11 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
     const reviewed = await critiqueDecision(member, signals, decision)
 
     if (reviewed.outcome.overturned) {
-      console.log(
-        `Reward critique OVERTURNED ${member.display_name}: qualifies ${decision.qualifies} -> ${reviewed.decision.qualifies}`
-      )
+      logInfo('rewards.decide.critique', 'Self-critique overturned the decision', {
+        member: member.display_name,
+        qualifies_before: decision.qualifies,
+        qualifies_after: reviewed.decision.qualifies,
+      })
     }
 
     return { decision: reviewed.decision, toolsUsed, critique: reviewed.outcome }

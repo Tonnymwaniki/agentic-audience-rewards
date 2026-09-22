@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import Link from 'next/link'
+import { logError } from '@/lib/logger'
 
 async function getStats() {
   const supabase = createServiceClient()
@@ -10,10 +11,10 @@ async function getStats() {
   ])
 
   if (commentsResult.error) {
-    console.log("LIVE PROOF QUERY ERROR:", JSON.stringify(commentsResult.error, Object.getOwnPropertyNames(commentsResult.error), 2))
+    logError('page.landing', commentsResult.error, { stage: 'count_comments' })
   }
   if (eventsResult.error) {
-    console.log("LIVE PROOF QUERY ERROR:", JSON.stringify(eventsResult.error, Object.getOwnPropertyNames(eventsResult.error), 2))
+    logError('page.landing', eventsResult.error, { stage: 'count_reward_events' })
   }
 
   console.log("Querying table: comment_categories")
@@ -23,7 +24,7 @@ async function getStats() {
     .select('comment_id', { count: 'exact', head: true })
 
   if (categoriesError) {
-    console.log("CATEGORIES COUNT ERROR FULL:", JSON.stringify(categoriesError, Object.getOwnPropertyNames(categoriesError), 2))
+    logError('page.landing', categoriesError, { stage: 'count_categories' })
   }
   console.log("CATEGORIES COUNT RESULT:", categoriesCount)
 
@@ -40,7 +41,7 @@ async function getStats() {
       .select('audience_member_id')
 
     if (eventMembersError) {
-      console.log("PEOPLE RECOGNIZED ERROR:", JSON.stringify(eventMembersError, Object.getOwnPropertyNames(eventMembersError), 2))
+      logError('page.landing', eventMembersError, { stage: 'count_people_recognized' })
     }
     console.log("PEOPLE RECOGNIZED RESULT:", eventMembers ? new Set(eventMembers.map(e => e.audience_member_id)).size : 'no data')
 
@@ -67,7 +68,7 @@ async function getRecentRewards() {
     .limit(3)
 
   if (mintedError) {
-    console.log("RECENT REWARDS ERROR:", JSON.stringify(mintedError, Object.getOwnPropertyNames(mintedError), 2))
+    logError('page.landing', mintedError, { stage: 'recent_rewards' })
   }
 
   const events = mintedEvents || []

@@ -3,7 +3,7 @@ import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-pro
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
-import { logError, logWarn } from '@/lib/logger'
+import { logError, logWarn, logInfo } from '@/lib/logger'
 
 export type ProgressCallback = (count: number) => void
 
@@ -826,7 +826,7 @@ async function createDraftNotifications(
       return
     }
 
-    console.log(`Categorize: created ${rows.length} notification(s) for creator ${creatorId}.`)
+    logInfo('categorize.createDraftNotifications', 'Draft notifications created', { creator_id: creatorId, created: rows.length })
   } catch (err) {
     logError('categorize.createDraftNotifications', err, { creator_id: creatorId })
   }

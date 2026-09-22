@@ -206,7 +206,7 @@ export async function evaluateRewards(
         console.log(`Reward evaluate: ${member.display_name} — tools used: ${toolsUsed.join(', ')}`)
       }
       if (critique.overturned) {
-        console.log(`Reward evaluate: ${member.display_name} — decision overturned on self-critique.`)
+        logInfo('rewards.evaluate', 'Decision overturned on self-critique', { creator_id, audience_member_id: member.id, member: member.display_name })
       }
 
       if (!decision) {

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { logError, logWarn } from '@/lib/logger'
+import { logError, logWarn, logInfo } from '@/lib/logger'
 
 /**
  * Per-creator Business Profile fields, proposed by Claude from that creator's real
@@ -334,9 +334,13 @@ export async function generateCustomProfileFields(
 
     if (suggestions.length === 0) return { generated: [], skipped: 'no usable suggestions' }
 
-    for (const s of suggestions) {
-      console.log(`Custom field suggested for ${creatorId}: ${s.field_label} (${s.field_key}) — ${s.reason}`)
-    }
+    // One line for the batch rather than one per suggestion: the set is the
+    // operational event, and a per-item loop made a five-field run look like five.
+    logInfo('customProfileFields.generate', 'Fields suggested', {
+      creator_id: creatorId,
+      category,
+      fields: suggestions.map(s => ({ key: s.field_key, label: s.field_label, reason: s.reason })),
+    })
 
     // Values stay null: definitions only, per the brief. onConflict makes a
     // concurrent second call harmless rather than a unique-violation error.

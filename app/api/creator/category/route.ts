@@ -3,7 +3,7 @@ import { after } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { generateCustomProfileFields } from '@/lib/custom-profile-fields'
 import { isBusinessCategory } from '@/lib/business-categories'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
 
 export async function POST(request: NextRequest) {
   try {
@@ -45,10 +45,7 @@ export async function POST(request: NextRequest) {
     after(async () => {
       try {
         const result = await generateCustomProfileFields(supabase, creatorId, business_category)
-        console.log(
-          'Custom profile field generation:',
-          JSON.stringify({ creatorId, generated: result.generated.length, skipped: result.skipped ?? null })
-        )
+        logInfo('api/creator/category', 'Custom profile fields generated', { creator_id: creatorId, generated: result.generated.length, skipped: result.skipped ?? null })
       } catch (err) {
         logError('api/creator/category', err, { creator_id: creatorId, stage: 'generate_custom_fields' })
       }

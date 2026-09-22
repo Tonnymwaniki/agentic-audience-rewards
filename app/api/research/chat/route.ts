@@ -9,7 +9,7 @@ import {
   generateConversationTitle,
   truncateMessages,
 } from '@/lib/research/conversations'
-import { logError, logWarn } from '@/lib/logger'
+import { logError, logWarn, logInfo } from '@/lib/logger'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
 // one invocation. Vercel Hobby caps this at 60s, Pro at 300s.
@@ -63,7 +63,7 @@ export async function POST(request: NextRequest) {
     // transcript is cut back to match before the new turn is appended.
     if (conversationId && typeof truncate_to === 'number' && truncate_to >= 0) {
       const removed = await truncateMessages(supabase, conversationId, truncate_to)
-      console.log('Research conversation truncated:', JSON.stringify({ conversationId, keep: truncate_to, removed }))
+      logInfo('api/research/chat', 'Conversation truncated for an edited question', { conversation_id: conversationId, keep: truncate_to, removed })
     }
 
     if (conversationId) await appendMessage(supabase, conversationId, 'user', message)
@@ -81,7 +81,7 @@ export async function POST(request: NextRequest) {
         after(async () => {
           try {
             const title = await generateConversationTitle(supabase, id, message)
-            console.log('Research conversation titled:', JSON.stringify({ id, title }))
+            logInfo('api/research/chat', 'Conversation titled', { conversation_id: id, title })
           } catch (err) {
             logWarn('api/research/chat', 'Conversation title generation failed; the default title stands', { conversation_id: conversationId, reason: err instanceof Error ? err.message : String(err) })
           }

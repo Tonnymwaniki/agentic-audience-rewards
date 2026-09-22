@@ -5,7 +5,7 @@ import { avalancheFuji } from 'thirdweb/chains'
 import { claimTo } from 'thirdweb/extensions/erc721'
 import { privateKeyToAccount } from 'thirdweb/wallets'
 import dotenv from 'dotenv'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
 dotenv.config({ path: '.env.local' })
 
 export async function POST(request: NextRequest) {
@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
 
     const txHash = result.transactionHash
 
-    console.log('MINT: about to update reward_events for claim_token:', claim_token, 'row id:', rewardEvent.id)
+    logInfo('api/reward/mint', 'Mint sent on-chain; writing status', { reward_event_id: rewardEvent.id, tx_hash: txHash, claim_token })
 
     const { error: updateEventError } = await supabase
       .from('reward_events')
@@ -91,9 +91,9 @@ export async function POST(request: NextRequest) {
       .eq('claim_token', claim_token)
 
     if (updateEventError) {
-      console.log("MINT STATUS UPDATE ERROR:", JSON.stringify(updateEventError, Object.getOwnPropertyNames(updateEventError), 2))
+      logError('api/reward/mint', updateEventError, { reward_event_id: rewardEvent.id, tx_hash: txHash, stage: 'update_reward_event_status' })
     } else {
-      console.log("MINT STATUS UPDATE SUCCESS for claim_token:", claim_token)
+      logInfo('api/reward/mint', 'Reward marked minted', { reward_event_id: rewardEvent.id, tx_hash: txHash, claim_token })
     }
 
     const { error: updateMemberError } = await supabase

@@ -1,7 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchVideoMeta, fetchVideoComments, fetchCommentReplies, type FetchedComment, type FetchedReply } from '@/lib/youtube'
 import { linkChannelVideoToPost } from '@/lib/channel-videos'
-import { logError, logWarn } from '@/lib/logger'
+import { logError, logWarn, logInfo } from '@/lib/logger'
 
 type SupabaseService = ReturnType<typeof createServiceClient>
 
@@ -159,11 +159,15 @@ async function ingestReplies(
     const id = await storeComment(supabase, reply, { ...args, parentCommentId })
     if (id) stored.push(id)
   }
-  console.log(
-    `Replies for post ${args.postId}: ${fetched.replies.length} fetched from ${fetched.threadsFetched} threads` +
-      `${fetched.threadsFailed ? ` (${fetched.threadsFailed} threads failed)` : ''}, ${stored.length} stored` +
-      `${fetched.truncated ? ' — capped' : ''}`
-  )
+  logInfo('ingest.fetchReplies', 'Replies ingested', {
+    post_id: args.postId,
+    creator_id: args.creatorId,
+    fetched: fetched.replies.length,
+    threads_fetched: fetched.threadsFetched,
+    threads_failed: fetched.threadsFailed,
+    stored: stored.length,
+    truncated: fetched.truncated,
+  })
   return { stored, fetched: fetched.replies.length, truncated: fetched.truncated }
 }
 
