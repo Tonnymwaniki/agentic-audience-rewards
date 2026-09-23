@@ -156,15 +156,43 @@ export default function BusinessProfileForm({
               so it is obvious these were generated for this creator rather than
               asked of everyone. --- */}
       {customFields.length > 0 && (
-        <div className="space-y-5 rounded-xl border border-purple/30 bg-purple/5 p-4">
-          <div>
-            <p className="font-mono text-[10px] tracking-widest text-purple-text uppercase">
-              Personalized for your business
-            </p>
-            <p className="mt-1 text-xs leading-snug text-text-muted">
-              Your agent suggested these from your videos and what your audience asks about.
-              Fill in what applies — blank fields are simply never used.
-            </p>
+        // Tint raised from purple/5 to purple/10 and the border from /30 to /40:
+        // at 5% on this near-black background the container was almost invisible,
+        // so three unfamiliar empty inputs read as more of the same fixed fields.
+        // The badge is the actual signal — a heading alone is easy to skim past.
+        <div className="space-y-5 rounded-xl border border-purple/40 bg-purple/10 p-4">
+          <div className="flex items-start gap-3">
+            <span className="icon-badge icon-badge-purple" aria-hidden="true">
+              {/* The same sparkle the agent uses elsewhere, so "this came from your
+                  agent" is recognisable without reading anything. */}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth={1.75}
+                className="h-5 w-5"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  d="M9.813 15.904 9 18.75l-.813-2.846a4.5 4.5 0 0 0-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 0 0 3.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 0 0 3.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 0 0-3.09 3.09ZM18.259 8.715 18 9.75l-.259-1.035a3.375 3.375 0 0 0-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 0 0 2.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 0 0 2.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 0 0-2.456 2.456Z"
+                />
+              </svg>
+            </span>
+            <div className="min-w-0 flex-1">
+              {/* Names the source. "Personalized for your business" described the
+                  result; this describes where it came from, which is the part that
+                  distinguishes these from the fixed questions above. */}
+              <p className="font-display text-sm leading-snug font-semibold text-text-primary">
+                Suggested by your agent, based on your comments
+              </p>
+              <p className="mt-1 text-xs leading-snug text-text-muted">
+                Picked from your videos and what your audience actually asks about — so they
+                differ from the fixed questions above. Fill in what applies; blank fields are
+                simply never used.
+              </p>
+            </div>
           </div>
 
           {customFields.map(field => (
