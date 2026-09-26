@@ -15,6 +15,8 @@ import {
 } from '@/lib/timing'
 import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
+import AudienceAnalytics, { AudienceAnalyticsSkeleton } from './AudienceAnalytics'
+import { Suspense } from 'react'
 import { logError } from '@/lib/logger'
 
 export const dynamic = 'force-dynamic'
@@ -370,6 +372,13 @@ export default async function AgentHomePage() {
         latencyTotal={latencyActivity.totalComments}
         latencySkipped={latencyActivity.skippedNoPublishDate}
       />
+      {/* Streams in on its own: four YouTube Analytics calls must never delay the
+          rest of Agent Home. Renders nothing without a verified channel. */}
+      <div className="mt-5">
+        <Suspense fallback={<AudienceAnalyticsSkeleton />}>
+          <AudienceAnalytics creatorId={creator.id} />
+        </Suspense>
+      </div>
     </div>
   )
 }

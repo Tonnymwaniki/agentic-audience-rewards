@@ -11,10 +11,11 @@ import { logWarn } from '@/lib/logger'
  * channels this authenticated account actually owns, and Google's answer cannot be
  * forged by the person filling in the form.
  *
- * Scope is `youtube.readonly` and nothing else: this flow reads which channels are
- * theirs. It never needs to post, edit or delete, and asking for less is both the
- * correct grant and the difference between a consent screen a creator accepts and
- * one they abandon.
+ * Scopes are read-only and nothing more: `youtube.readonly` to read which channels
+ * are theirs, and `yt-analytics.readonly` for their channel's aggregate audience
+ * analytics (lib/youtube-analytics.ts). It never needs to post, edit or delete, and
+ * asking for less is both the correct grant and the difference between a consent
+ * screen a creator accepts and one they abandon. No monetary scope is requested.
  */
 
 const GOOGLE_AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -23,6 +24,14 @@ const GOOGLE_REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke'
 const YOUTUBE_CHANNELS_ENDPOINT = 'https://www.googleapis.com/youtube/v3/channels'
 
 export const YOUTUBE_READONLY_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly'
+export const YT_ANALYTICS_READONLY_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly'
+
+/**
+ * Everything the consent screen asks for. Grants made before the analytics scope
+ * was added lack it; prompt=consent below means reconnecting grants it, and
+ * include_granted_scopes keeps the ones already held.
+ */
+export const REQUESTED_SCOPES = [YOUTUBE_READONLY_SCOPE, YT_ANALYTICS_READONLY_SCOPE].join(' ')
 
 /** Name of the httpOnly cookie holding the signed CSRF state. */
 export const OAUTH_STATE_COOKIE = 'yt_oauth_state'
@@ -170,7 +179,7 @@ export function buildConsentUrl(state: string): string {
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('response_type', 'code')
-  url.searchParams.set('scope', YOUTUBE_READONLY_SCOPE)
+  url.searchParams.set('scope', REQUESTED_SCOPES)
   url.searchParams.set('state', state)
   // offline + consent is what actually returns a refresh token. Google issues one
   // only on the FIRST authorization for a client/user pair unless prompt=consent
@@ -519,6 +528,10 @@ export async function getValidAccessToken(
         ? { refresh_token_encrypted: encryptToken(tokens.refreshToken) }
         : {}),
       expires_at: tokens.expiresAt.toISOString(),
+      // Google reports the grant's current scopes on every refresh, so the stored
+      // value tracks reality (e.g. a scope later removed in Google account settings)
+      // instead of freezing at whatever was granted at first consent.
+      ...(tokens.scope ? { scope: tokens.scope } : {}),
       updated_at: new Date().toISOString(),
     })
     .eq('creator_id', creatorId)

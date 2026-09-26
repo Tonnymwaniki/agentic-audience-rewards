@@ -233,7 +233,14 @@ export default function ConnectPage() {
             ? 'That Google account signed in successfully, but it does not own a YouTube channel.'
             : error === 'channels_failed'
               ? "We connected to Google but couldn't read your channels. Please try again shortly."
-              : 'We could not complete the Google connection. Please try again.'
+              : error === 'expired'
+                ? 'That Google sign-in link had expired — links are valid for 10 minutes. Please click Connect again.'
+                : error === 'bad_state'
+                  ? // The signed state didn't verify against this browser's session: most
+                    // often a newer attempt in another tab replaced it, or the sign-in
+                    // began in a different browser or account.
+                    "That Google sign-in didn't match this browser session — usually because it was started in another tab, browser or account. Please click Connect again from this page."
+                  : 'We could not complete the Google connection. Please try again.'
       )
     }
 
@@ -677,7 +684,7 @@ export default function ConnectPage() {
               Connect with Google
             </a>
             <p className="mt-2 text-xs leading-relaxed text-text-muted">
-              We ask only to read which channels you own — never to post, edit or delete.
+              We ask only to read which channels you own and their audience analytics — never to post, edit or delete.
             </p>
           </>
         )}
