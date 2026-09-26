@@ -7,6 +7,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { requireCreator } from '@/lib/api-auth'
 import { embedPostCommentsSafely } from '@/lib/embeddings'
 import { logError } from '@/lib/logger'
+import { syncEntityEmbeddings } from '@/lib/knowledge-embeddings'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -139,6 +140,9 @@ export async function POST(request: NextRequest) {
           logError('api/analyze', err, { creator_id, post_id: postId, stage: 'background_analysis_crash' })
         }),
       ])
+      // Entities first named in this video get their embeddings now rather than at
+      // the next daily run. Never throws.
+      await syncEntityEmbeddings(createServiceClient(), creator_id)
     })
 
     return NextResponse.json({

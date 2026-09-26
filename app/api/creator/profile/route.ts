@@ -4,6 +4,7 @@ import { requireCreator } from '@/lib/api-auth'
 import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
 import { saveCustomProfileValues } from '@/lib/custom-profile-fields'
 import { logError, logInfo } from '@/lib/logger'
+import { syncProfileFactEmbeddings } from '@/lib/knowledge-embeddings'
 
 // The save itself returns immediately; this headroom is for the after() work,
 // which re-drafts replies across every one of the creator's videos.
@@ -57,10 +58,22 @@ export async function POST(request: NextRequest) {
         ? await saveCustomProfileValues(supabase, creatorId, customFieldValues)
         : 0
 
+    // Keep the semantically-searchable copy of the profile (profile_fact_embeddings)
+    // in step with what was just saved. Background, and never fails the save; runs on
+    // the custom-fields-only path below too.
+    const refreshFactEmbeddings = () =>
+      after(async () => {
+        const result = await syncProfileFactEmbeddings(supabase, creatorId)
+        if (result.error) logError('api/creator/profile', new Error(result.error), { creator_id: creatorId, stage: 'fact_embeddings' })
+      })
+
     if (Object.keys(updates).length === 0) {
       // Custom-only saves are legitimate: a creator may fill in just the
       // personalised section and leave every fixed field blank.
-      if (customWritten > 0) return NextResponse.json({ success: true, customFieldsSaved: customWritten })
+      if (customWritten > 0) {
+        refreshFactEmbeddings()
+        return NextResponse.json({ success: true, customFieldsSaved: customWritten })
+      }
       return NextResponse.json({ error: 'No profile fields provided' }, { status: 400 })
     }
 
@@ -73,6 +86,8 @@ export async function POST(request: NextRequest) {
       logError('api/creator/profile', updateError, { creator_id: creatorId, stage: 'update_profile' })
       return NextResponse.json({ error: 'Failed to save your business profile' }, { status: 500 })
     }
+
+    refreshFactEmbeddings()
 
     // Newly-saved business facts make every existing draft potentially stale, so
     // re-draft across ALL of this creator's videos — in the background, since it

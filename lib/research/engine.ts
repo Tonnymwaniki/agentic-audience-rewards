@@ -14,6 +14,7 @@ import { logError, logWarn } from '@/lib/logger'
 import { resolveVerifiedPostIds } from '@/lib/channel-verification'
 import { countsAsRecognition } from '@/lib/rewards/status'
 import { aggregateEntities, entityKey, loadEntityAliases, mentionsEntity, relatedEntities, resolveEntity, type EntityAliases } from '@/lib/entities'
+import { matchEntities, matchProfileFacts } from '@/lib/knowledge-embeddings'
 import { engagementFact, loadPostEngagement } from '@/lib/engagement'
 
 const MAX_TOOL_ROUNDS = 5
@@ -795,6 +796,171 @@ async function toolGetEntityMentions(ctx: ToolContext, input: { entity?: unknown
           note: `No scanned comment names "${name}". It may be spelled differently in comments, or the comments naming it may not be scanned yet — try search_comments with it as the query.`,
           closest_entities: agg.entities.slice(0, 10).map(e => e.entity),
         }),
+  }
+}
+
+/**
+ * When a name matches no entity, a match BY MEANING is used only if it is both
+ * close (>= 0.45) and clearly ahead of the runner-up (by >= 0.05); otherwise the
+ * candidates go back to Claude to choose from. Calibrated on real data (2026-09-26,
+ * voyage-4): right answers scored 0.42–0.54 while queries with no right answer
+ * reached 0.43, and a right answer often led by only 0.01 (Snapchat 0.416 vs Snap
+ * 0.404; "the iPhone maker": iPhone 0.571 vs Apple 0.564). This rule accepted no
+ * wrong answer and no no-answer query in that set.
+ */
+export const ENTITY_AUTO_RESOLVE_MIN_SIMILARITY = 0.45
+export const ENTITY_AUTO_RESOLVE_MIN_MARGIN = 0.05
+/**
+ * Profile-fact match levels, calibrated the same way: every answerable question put
+ * the right field first at 0.33–0.59; unanswerable ones topped out at 0.43 (a
+ * loosely related field). >= 0.45 strong; 0.30–0.45 possible (check the value);
+ * below 0.30 not returned.
+ */
+export const FACT_STRONG_MIN_SIMILARITY = 0.45
+export const FACT_POSSIBLE_MIN_SIMILARITY = 0.3
+
+/**
+ * One entity, everything about how people talk about it, in ONE call: mentions,
+ * sentiment, which categories (complaint, praise, question...) its comments fall
+ * in, the themes behind them, and example comments. With focus_category, the
+ * themes and examples come from that slice ("what's driving complaints about X").
+ * The name is resolved exactly (with the creator's aliases) first, and by meaning
+ * via entity embeddings only if that finds nothing.
+ */
+async function toolGetEntitySentimentBreakdown(ctx: ToolContext, input: { entity?: unknown; focus_category?: unknown }) {
+  const asked = typeof input.entity === 'string' ? input.entity.trim().slice(0, 120) : ''
+  if (!asked) return { error: 'entity is required' }
+  const focus = typeof input.focus_category === 'string' && input.focus_category ? input.focus_category : null
+  if (focus && !['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'].includes(focus)) {
+    return { error: 'focus_category must be one of question, praise, complaint, purchase_intent, content_request, spam, other' }
+  }
+
+  const comments = await fetchRichComments(ctx.supabase, ctx.postIds)
+  const agg = aggregateEntities(comments.map(c => ({ entities: getCatInfo(c)?.entities })), ctx.entityAliases)
+  const coverage = await entityCoverage(ctx, comments)
+
+  // Resolve: exact name/alias first, meaning second.
+  let resolved = agg.entities.find(e => e.key === entityKey(resolveEntity(asked, ctx.entityAliases)))
+  let resolvedBy: Record<string, unknown> = { method: 'name' }
+  if (!resolved) {
+    const matches = await matchEntities(ctx.supabase, ctx.creatorId, asked, 3)
+    const [best, second] = matches
+    const margin = best ? best.similarity - (second?.similarity ?? 0) : 0
+    if (best && best.similarity >= ENTITY_AUTO_RESOLVE_MIN_SIMILARITY && margin >= ENTITY_AUTO_RESOLVE_MIN_MARGIN) {
+      resolved = agg.entities.find(e => e.key === best.key)
+      resolvedBy = { method: 'meaning', matched: best.entity, similarity: best.similarity, note: `"${asked}" matched no entity by name; "${best.entity}" is the clear closest by meaning. Say so in the answer.` }
+    } else {
+      // Not confident enough to pick one: hand the choice back rather than answer
+      // about the wrong entity.
+      const candidates = matches.filter(m => m.similarity >= FACT_POSSIBLE_MIN_SIMILARITY)
+      return {
+        entity: asked,
+        resolved: false,
+        coverage,
+        note: candidates.length
+          ? `"${asked}" isn't an entity name and no single entity clearly matches its meaning. If one of candidates is plainly what was meant, call again with its exact name; otherwise ask the user which they mean.`
+          : `No entity named or resembling "${asked}" in the scanned comments.`,
+        candidates: candidates.map(m => ({ entity: m.entity, mentions: m.mentions, similarity: m.similarity, context: m.context.slice(0, 160) })),
+      }
+    }
+  }
+  if (!resolved) return { entity: asked, mentions: 0, coverage, note: 'Entity not found.' }
+
+  const rows = comments.filter(c => mentionsEntity(getCatInfo(c)?.entities, resolved!.entity, ctx.entityAliases))
+  const share = (n: number, of: number) => (of ? Math.round((n / of) * 1000) / 10 : 0)
+  const countBy = (list: RichCommentRow[], f: (c: RichCommentRow) => string | null) => {
+    const m = new Map<string, number>()
+    for (const c of list) { const k = f(c); if (k) m.set(k, (m.get(k) ?? 0) + 1) }
+    return [...m].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  }
+  const sentiments = countBy(rows, c => rowSentiment(c))
+  const categories = countBy(rows, c => getCatInfo(c)?.category ?? null)
+  const slice = focus ? rows.filter(c => getCatInfo(c)?.category === focus) : rows
+  const themeCounts = new Map<string, number>()
+  for (const c of slice) {
+    for (const t of themesForRow({ topic: getCatInfo(c)?.topic ?? null, topics: getCatInfo(c)?.topics ?? null })) themeCounts.set(t, (themeCounts.get(t) ?? 0) + 1)
+  }
+  const themes = [...themeCounts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+  const videos = countBy(slice, c => c.post_id).slice(0, 3)
+
+  // Examples: the focus slice newest-first; otherwise up to 2 per leading category.
+  const newest = (list: RichCommentRow[]) => [...list].sort((a, b) => (b.posted_at || '').localeCompare(a.posted_at || ''))
+  const examples = focus
+    ? newest(slice).slice(0, 6)
+    : categories.slice(0, 3).flatMap(([cat]) => newest(rows.filter(c => getCatInfo(c)?.category === cat)).slice(0, 2))
+  const related = relatedEntities(resolved, agg.entities)
+
+  return {
+    entity: resolved.entity,
+    resolved_by: resolvedBy,
+    coverage,
+    mentions: rows.length,
+    evidence_ref: ctx.evidence.aggregate({
+      key: `entity-breakdown:${resolved.key}`,
+      label: `comments naming ${resolved.entity}`,
+      comment_count: rows.length,
+      video_count: new Set(rows.map(c => c.post_id)).size,
+    }),
+    sentiment: sentiments.map(([s, n]) => ({ sentiment: s, comments: n, percent: share(n, rows.length) })),
+    categories: categories.map(([c, n]) => ({ category: c, comments: n, percent: share(n, rows.length) })),
+    ...(focus
+      ? {
+          focus: {
+            category: focus,
+            comments: slice.length,
+            ...(slice.length
+              ? {
+                  evidence_ref: ctx.evidence.aggregate({
+                    key: `entity-breakdown:${resolved.key}:${focus}`,
+                    label: `${focus} comments naming ${resolved.entity}`,
+                    comment_count: slice.length,
+                    video_count: new Set(slice.map(c => c.post_id)).size,
+                  }),
+                }
+              : { note: `None of the comments naming ${resolved.entity} are ${focus}s.` }),
+          },
+        }
+      : {}),
+    themes_note: `Themes${focus ? ` within the ${focus} comments` : ''}; a comment can count toward more than one theme.`,
+    top_themes: themes.slice(0, 6).map(([t, n]) => ({ theme: t, comments: n })),
+    top_videos: videos.map(([id, n]) => ({ video: ctx.postMap.get(id) || 'Untitled video', comments: n })),
+    examples: examples.map(c => {
+      const video = ctx.postMap.get(c.post_id) || 'Untitled video'
+      return {
+        ref: ctx.evidence.comment({ id: c.id, text: c.text, author: getAuthor(c), post_id: c.post_id, video_title: video }),
+        category: getCatInfo(c)?.category ?? null,
+        sentiment: rowSentiment(c),
+        text: c.text,
+        video,
+      }
+    }),
+    ...(related.length
+      ? {
+          possibly_related: related.map(r => ({ entity: r.entity, mentions: r.mentions })),
+          possibly_related_note: 'Counted separately and NOT included above — may be the same thing (e.g. a company and its product). Mention them.',
+        }
+      : {}),
+  }
+}
+
+/**
+ * What the creator's Business Profile says that bears on a question, matched by
+ * meaning ("do you ship internationally?" finds the delivery field).
+ */
+async function toolFindProfileFacts(ctx: ToolContext, input: { question?: unknown }) {
+  const question = typeof input.question === 'string' ? input.question.trim().slice(0, 300) : ''
+  if (!question) return { error: 'question is required' }
+  const matches = await matchProfileFacts(ctx.supabase, ctx.creatorId, question, 3)
+  if (matches.length === 0) {
+    return { facts: [], note: "The creator's Business Profile has no filled-in fields to search (or they aren't indexed yet)." }
+  }
+  const relevant = matches.filter(m => m.similarity >= FACT_POSSIBLE_MIN_SIMILARITY)
+  if (relevant.length === 0) {
+    return { facts: [], note: "No field in the creator's Business Profile is about this. Say the profile doesn't cover it." }
+  }
+  return {
+    note: `Matched by meaning. "strong" = the field is about this; "possible" = it may be. Either way, check the value actually answers the question and say plainly if it doesn't (e.g. a delivery field that only covers Nairobi doesn't answer "do you ship internationally" with a yes).`,
+    facts: relevant.map(m => ({ field: m.field_label, content: m.content, similarity: m.similarity, match: m.similarity >= FACT_STRONG_MIN_SIMILARITY ? 'strong' : 'possible' })),
   }
 }
 
@@ -1822,6 +1988,33 @@ const TOOLS = [
     },
   },
   {
+    name: 'get_entity_sentiment_breakdown',
+    description:
+      "Everything about how the audience talks about ONE named brand, company, product or organization, in a single call: mention count, sentiment breakdown, which categories its comments fall in (complaint, praise, question, purchase_intent...), the themes behind them, top videos and example comments to quote. Use this — not get_entity_mentions plus search_comments — for questions like \"how do people feel about Safaricom\", \"what's driving complaints about Snap\" (set focus_category='complaint'), \"what do people praise about X\" (focus_category='praise'). Resolves the name exactly first, then by meaning if nothing matches (reported in resolved_by).",
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'string', description: 'The brand/company/product/organization, as the user named it.' },
+        focus_category: {
+          type: 'string',
+          enum: ['question', 'praise', 'complaint', 'purchase_intent', 'content_request', 'spam', 'other'],
+          description: "Optional: explain one slice — themes and examples come only from comments in this category (e.g. 'complaint' for what's driving complaints).",
+        },
+      },
+      required: ['entity'],
+    },
+  },
+  {
+    name: 'find_profile_facts',
+    description:
+      "Look up what the creator's own Business Profile says about something (delivery, hours, prices, services, location, anything they've filled in), matched by MEANING — \"do you ship internationally\" finds the delivery field. Use when a question is about the creator's business details or whether their profile already answers something.",
+    input_schema: {
+      type: 'object',
+      properties: { question: { type: 'string', description: 'The question or topic, in plain words.' } },
+      required: ['question'],
+    },
+  },
+  {
     name: 'get_entity_mentions',
     description:
       "Named brands, companies, competitors, products and organizations that commenters mention BY NAME. With no entity: the most-mentioned ones across the channel (or one video), each with its mention count, sentiment mix and top videos — use this for 'what brands/companies/products come up', 'which competitors do people mention'. With entity: what people are saying about that one — mention count, sentiment mix, videos and example comments to quote. Spelling variants are merged ('Safaricom Kenya' and 'safaricom' are one entity). Always report the coverage line if it says not every comment has been scanned.",
@@ -2027,6 +2220,10 @@ export async function executeTool(ctx: ToolContext, name: string, input: Record<
         return await toolSearchComments(ctx, input)
       case 'get_entity_mentions':
         return await toolGetEntityMentions(ctx, input)
+      case 'get_entity_sentiment_breakdown':
+        return await toolGetEntitySentimentBreakdown(ctx, input)
+      case 'find_profile_facts':
+        return await toolFindProfileFacts(ctx, input)
       case 'compare_periods':
         return await toolComparePeriods(ctx, input)
       case 'get_video_breakdown':
@@ -2207,7 +2404,7 @@ Two kinds of evidence, both used together. Individual examples: tool results tag
 
 Citations: tool results tag individual comments with a "ref" like "C4" and videos with a "video_ref" like "V2". When a sentence states something drawn from specific comments or videos — a quote, an example, a count about a video — put the matching refs in square brackets right after that claim, like "Several viewers ask about delivery [C2][C5]." Only use refs that appear in this turn's tool results; never invent one. Greetings, general statements and suggestions need no citation.
 
-For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count. For questions about brands, companies, competitors, products or organizations people name — which ones come up, or what people say about one of them — use get_entity_mentions (or search_comments with its entity filter to combine it with dates or sentiment).`
+For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count. For questions about brands, companies, competitors, products or organizations people name — which ones come up, or what people say about one of them — use get_entity_mentions (or search_comments with its entity filter to combine it with dates or sentiment). For how people feel about ONE such entity, or what's driving complaints/praise about it, use get_entity_sentiment_breakdown — one call, with focus_category for the slice asked about. For what the creator's own Business Profile says (delivery, hours, prices, services...), use find_profile_facts.`
 
     const history: Array<{ role: string; content: string }> = Array.isArray(conversation_history)
       ? conversation_history

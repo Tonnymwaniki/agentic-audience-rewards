@@ -3,6 +3,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { refreshAudienceInsights } from '@/lib/audience-insights'
 import { runInsightAgent } from '@/lib/insight-agent'
 import { runKnowledgeGapAgent } from '@/lib/knowledge-gaps'
+import { syncKnowledgeEmbeddings } from '@/lib/knowledge-embeddings'
 import { isCronAuthorized } from '@/lib/cron-auth'
 import { logError } from '@/lib/logger'
 
@@ -49,6 +50,9 @@ export async function GET(request: NextRequest) {
         insightAgent: async (s, c, insights, windows, t) => ({
           trends: await runInsightAgent(s, c, insights, windows, t),
           knowledgeGaps: await runKnowledgeGapAgent(s, c, t),
+          // Entity and profile-fact embeddings (lib/knowledge-embeddings): catches
+          // anything the analysis and profile-save hooks missed.
+          embeddings: await syncKnowledgeEmbeddings(s, c),
         }),
       })
       results.push({ creator_id: creatorId, stored, insightAgent })

@@ -223,6 +223,9 @@ export async function findOrphanedRows(
     'entity_aliases',
     // Also ON DELETE CASCADE (migration 43).
     'surfaced_insights',
+    // Also ON DELETE CASCADE (migration 45).
+    'entity_embeddings',
+    'profile_fact_embeddings',
     'creators',
   ]
 
