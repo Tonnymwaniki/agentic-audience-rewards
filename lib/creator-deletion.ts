@@ -218,6 +218,9 @@ export async function findOrphanedRows(
     'audience_insights',
     'content_ideas_cache',
     'research_conversations',
+    // Removed by ON DELETE CASCADE with the creator row (migration 42), so it has no
+    // explicit delete above; still checked here so a failed cascade can't hide.
+    'entity_aliases',
     'creators',
   ]
 
@@ -229,7 +232,9 @@ export async function findOrphanedRows(
       .eq(column, creatorId)
 
     if (error) {
-      // An unreadable table can't be declared clean.
+      // A table that doesn't exist yet (its migration not run) holds nothing to
+      // leave behind; any OTHER unreadable table can't be declared clean.
+      if (error.code === 'PGRST205' || error.code === '42P01') continue
       leftovers[table] = -1
       continue
     }

@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { ENTITY_EXTRACTION_RULES, normalizeEntities } from '@/lib/entities'
 import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
@@ -107,6 +108,11 @@ export type CategorizedComment = {
   sentiment: CommentSentiment | null
   /** The single strongest emotion, or 'none'. */
   emotion: CommentEmotion | null
+  /**
+   * Named brands/companies/products/organizations, canonical names (lib/entities).
+   * [] = scanned, none mentioned; null = the model omitted the key (not scanned).
+   */
+  entities: string[] | null
   /** null = screened and clean, OR not screened — see escalationScreened. */
   escalation: EscalationType | null
   /** False when the model omitted the escalation key entirely. */
@@ -453,7 +459,9 @@ Also give each comment's "language" — the language it is WRITTEN in, not its t
 - "mixed": contains at least one whole English phrase or sentence AND at least one Swahili or Sheng phrase or sentence (e.g. "Create another channel ya wadau ya kuleta hizi updates man", or a long English comment ending in a Swahili sentence). This takes precedence: a mostly-Swahili/Sheng comment that also has a full English sentence is "mixed".
 - null: no words to judge (emoji only) or another language entirely.
 
-Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topics": ["..."], "confidence": 0.0-1.0, "escalation": null, "language": "english", "sentiment": "positive", "emotion": "admiration"}]
+Also give each comment its ${ENTITY_EXTRACTION_RULES}
+
+Respond with ONLY a JSON array, no preamble, no markdown code fences, in this exact format: [{"id": "...", "category": "...", "topics": ["..."], "confidence": 0.0-1.0, "escalation": null, "language": "english", "sentiment": "positive", "emotion": "admiration", "entities": []}]
 
 Comments:
 ${JSON.stringify(batch)}${retrySuffix}`
@@ -471,8 +479,8 @@ ${JSON.stringify(batch)}${retrySuffix}`
           },
           body: JSON.stringify({
             model: 'claude-haiku-4-5-20251001',
-            // Room for the language, sentiment and emotion fields on all 10 items.
-            max_tokens: 1800,
+            // Room for the language, sentiment, emotion and entities fields on all 10 items.
+            max_tokens: 2200,
             messages: [{ role: 'user', content: prompt }],
           }),
           signal: controller.signal,
@@ -539,6 +547,8 @@ ${JSON.stringify(batch)}${retrySuffix}`
             language: normalizeLanguage(item.language),
             sentiment: normalizeSentiment(item.sentiment),
             emotion: normalizeEmotion(item.emotion),
+            // Absent key = not scanned (NULL), so coverage stays honest.
+            entities: Object.prototype.hasOwnProperty.call(item, 'entities') ? normalizeEntities(item.entities) : null,
             escalation: normalizeEscalation(item.escalation),
             escalationScreened,
           })
@@ -608,6 +618,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     language: c.language,
     sentiment: c.sentiment,
     emotion: c.emotion,
+    entities: c.entities,
     // Explicitly NULL: the column was created with DEFAULT now() (migration 7), so
     // omitting it stamped a "draft created" time on every categorized comment,
     // drafted or not — 94% of rows carried a draft timestamp with no draft. The
@@ -622,7 +633,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     .upsert(upsertData, { onConflict: 'comment_id' })
   // Columns added by later migrations (language: 24; sentiment/emotion: 26). Until
   // each exists, keep categorizing without it rather than failing every analysis.
-  const optionalColumns = ['language', 'sentiment', 'emotion', 'topics'] as const
+  const optionalColumns = ['language', 'sentiment', 'emotion', 'topics', 'entities'] as const
   const dropped: string[] = []
   for (let attempt = 0; attempt < optionalColumns.length && upsertError; attempt++) {
     const missing = optionalColumns.find(

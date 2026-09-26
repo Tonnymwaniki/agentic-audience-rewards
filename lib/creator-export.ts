@@ -153,6 +153,15 @@ export async function buildCreatorExport(
     creatorId
   )
 
+  // The creator's own entity-merge settings (migration 42). Tolerates the table not
+  // existing yet, so an export never fails for a migration that hasn't been run.
+  let entityAliases: unknown[] = []
+  try {
+    entityAliases = await pageAll(supabase, 'entity_aliases', 'alias_name, canonical_name, created_at', 'creator_id', creatorId)
+  } catch (err) {
+    if (!/entity_aliases/.test(String(err)) || !/(PGRST205|does not exist|schema cache)/i.test(String(err))) throw err
+  }
+
   return {
     export_version: 1,
     generated_at: new Date().toISOString(),
@@ -172,9 +181,11 @@ export async function buildCreatorExport(
       custom_profile_fields: customFields.length,
       channel_videos: channelVideos.length,
       channel_stats_snapshots: statsSnapshots.length,
+      entity_aliases: entityAliases.length,
     },
     profile,
     custom_profile_fields: customFields,
+    entity_aliases: entityAliases,
     posts,
     comments,
     comment_categorizations: categorizations,

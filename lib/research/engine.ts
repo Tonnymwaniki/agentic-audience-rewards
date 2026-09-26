@@ -13,6 +13,7 @@ import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerificatio
 import { logError, logWarn } from '@/lib/logger'
 import { resolveVerifiedPostIds } from '@/lib/channel-verification'
 import { countsAsRecognition } from '@/lib/rewards/status'
+import { aggregateEntities, entityKey, loadEntityAliases, mentionsEntity, relatedEntities, resolveEntity, type EntityAliases } from '@/lib/entities'
 import { engagementFact, loadPostEngagement } from '@/lib/engagement'
 
 const MAX_TOOL_ROUNDS = 5
@@ -42,6 +43,8 @@ export type ToolContext = {
    * never reported as awaiting approval — they can't be approved.
    */
   actionablePostIds: Set<string>
+  /** The creator's own entity aliases (migration 42); empty = nothing merged. */
+  entityAliases: EntityAliases
   /** Comments and videos returned by tools this turn, addressable by short ref for citations. */
   evidence: EvidenceRegistry
 }
@@ -99,6 +102,8 @@ type CategoryInfo = {
   /** The classifier's own sentiment and primary emotion (migration 20240101000026). */
   sentiment?: string | null
   emotion?: string | null
+  /** Named entities (migration 41). null/absent = not scanned yet; [] = none. */
+  entities?: string[] | null
   draft_reply: string | null
   draft_reply_approved_at: string | null
   draft_reply_created_at: string | null
@@ -206,6 +211,7 @@ let commentLanguageColumnAvailable = true
 let commentSentimentColumnsAvailable = true
 let commentTopicsColumnAvailable = true
 let commentSegmentColumnAvailable = true
+let commentEntitiesColumnAvailable = true
 
 async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): Promise<RichCommentRow[]> {
   if (postIds.length === 0) return []
@@ -226,7 +232,7 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
         posted_at,
         audience_member_id,
         audience_members ( display_name${commentSegmentColumnAvailable ? ', segment' : ''} ),
-        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentTopicsColumnAvailable ? ', topics' : ''}${commentLanguageColumnAvailable ? ', language' : ''}${commentSentimentColumnsAvailable ? ', sentiment, emotion' : ''} )
+        comment_categories ( category, topic, draft_reply, draft_reply_approved_at, draft_reply_created_at${commentTopicsColumnAvailable ? ', topics' : ''}${commentLanguageColumnAvailable ? ', language' : ''}${commentSentimentColumnsAvailable ? ', sentiment, emotion' : ''}${commentEntitiesColumnAvailable ? ', entities' : ''} )
       `
       )
       .in('post_id', postIds)
@@ -234,8 +240,10 @@ async function fetchRichComments(supabase: SupabaseClient, postIds: string[]): P
 
   while (hasMore) {
     let { data: batch, error } = await selectBatch(offset)
-    for (let attempt = 0; attempt < 2 && error; attempt++) {
-      if (commentLanguageColumnAvailable && /language/.test(error.message ?? '')) commentLanguageColumnAvailable = false
+    // One retry per optional column group that could be missing (five of them).
+    for (let attempt = 0; attempt < 5 && error; attempt++) {
+      if (commentEntitiesColumnAvailable && /entities/.test(error.message ?? '')) commentEntitiesColumnAvailable = false
+      else if (commentLanguageColumnAvailable && /language/.test(error.message ?? '')) commentLanguageColumnAvailable = false
       else if (commentSentimentColumnsAvailable && /(sentiment|emotion)/.test(error.message ?? '')) commentSentimentColumnsAvailable = false
       else if (commentTopicsColumnAvailable && /topics/.test(error.message ?? '')) commentTopicsColumnAvailable = false
       else if (commentSegmentColumnAvailable && /segment/.test(error.message ?? '')) commentSegmentColumnAvailable = false
@@ -298,6 +306,10 @@ type CommentSearchFilters = {
   language?: CommentLanguage
   emotion?: CommentEmotion
   segment?: AudienceSegment
+  /** A named entity (brand, product, organization), matched by canonical key. */
+  entity?: string
+  /** The creator's aliases, applied when matching `entity`. */
+  entityAliases?: EntityAliases
 }
 
 const DATE_ONLY = /^\d{4}-\d{2}-\d{2}$/
@@ -339,6 +351,7 @@ function commentMatchesFilters(c: RichCommentRow, filters: CommentSearchFilters)
   if (filters.language && getCatInfo(c)?.language !== filters.language) return false
   if (filters.emotion && getCatInfo(c)?.emotion !== filters.emotion) return false
   if (filters.segment && getMemberSegment(c) !== filters.segment) return false
+  if (filters.entity && !mentionsEntity(getCatInfo(c)?.entities, filters.entity, filters.entityAliases)) return false
   const postedAt = c.posted_at ? Date.parse(c.posted_at) : NaN
   if (filters.postedFrom && !(postedAt >= Date.parse(filters.postedFrom))) return false
   if (filters.postedBefore && !(postedAt < Date.parse(filters.postedBefore))) return false
@@ -462,6 +475,7 @@ function describeWindow(filters: CommentSearchFilters): string {
     filters.segment && `by ${filters.segment}s`,
     filters.category && `category ${filters.category}`,
     filters.language && `written in ${filters.language}`,
+    filters.entity && `mentioning ${filters.entity}`,
     filters.postId && 'on the chosen video',
   ]
     .filter(Boolean)
@@ -481,6 +495,7 @@ async function toolSearchComments(
     language?: unknown
     emotion?: unknown
     segment?: unknown
+    entity?: unknown
   }
 ) {
   const query = typeof input.query === 'string' ? input.query.trim() : ''
@@ -521,6 +536,12 @@ async function toolSearchComments(
     filters.segment = input.segment as AudienceSegment
   }
 
+  if (typeof input.entity === 'string' && input.entity.trim()) {
+    if (!entityKey(input.entity)) return { error: 'entity must name a brand, product or organization' }
+    filters.entity = input.entity.trim().slice(0, 80)
+    filters.entityAliases = ctx.entityAliases
+  }
+
   const from = parseDateBound(input.date_from, 'from')
   const to = parseDateBound(input.date_to, 'to')
   if (from.error || to.error) return { error: from.error || to.error }
@@ -537,11 +558,12 @@ async function toolSearchComments(
     filters.language ||
     filters.emotion ||
     filters.segment ||
+    filters.entity ||
     filters.postedFrom ||
     filters.postedBefore
   )
   if (!query && !hasFilter) {
-    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, emotion, language, category, post_id).' }
+    return { error: 'Provide a query, or at least one filter (date_from, date_to, sentiment, emotion, language, category, entity, post_id).' }
   }
 
   // Echoed back so the answer can state the exact window and filters it covers.
@@ -553,6 +575,7 @@ async function toolSearchComments(
     ...(filters.segment ? { segment: filters.segment } : {}),
     ...(filters.language ? { language: filters.language } : {}),
     ...(filters.category ? { category: filters.category } : {}),
+    ...(filters.entity ? { entity: filters.entity } : {}),
     ...(filters.postId ? { video: ctx.postMap.get(filters.postId) || 'Untitled video' } : {}),
   }
 
@@ -593,6 +616,24 @@ async function toolSearchComments(
   // searched for — themes, sentiment, emotions, languages and videos over every
   // matching comment, not just the 20 listed.
   const breakdownPromise = hasFilter ? computePeriodBreakdown(ctx, filters, describeWindow(filters)) : null
+
+  // The entity filter lives on comment_categories.entities, which the search SQL
+  // functions don't take, so an entity-scoped search runs over the same loader and
+  // filter predicate as the breakdown: every matching comment, filtered in code,
+  // with the query (if any) applied as a substring.
+  if (filters.entity) {
+    const [result, breakdown, coverage] = await Promise.all([
+      legacySubstringSearch(ctx, query, filters, filtersApplied),
+      breakdownPromise,
+      entityCoverage(ctx),
+    ])
+    return {
+      ...result,
+      search_mode: 'entity',
+      note: `count = comments naming ${filters.entity} (spelling variants merged)${query ? ' whose text also contains the query' : ''}; results are the newest 20. ${coverage}`,
+      ...(breakdown ? { breakdown } : {}),
+    }
+  }
 
   try {
     if (!query) {
@@ -638,6 +679,122 @@ async function toolSearchComments(
     console.warn('Search functions unavailable, using substring search:', err.message)
     const fallback = await legacySubstringSearch(ctx, query, filters, hasFilter ? filtersApplied : undefined)
     return breakdownPromise ? { ...fallback, breakdown: await breakdownPromise } : fallback
+  }
+}
+
+/** How much of the channel has been scanned for entities — stated with every entity answer. */
+async function entityCoverage(ctx: ToolContext, preloaded?: RichCommentRow[]): Promise<string> {
+  const rows = preloaded ?? (await fetchRichComments(ctx.supabase, ctx.postIds))
+  const agg = aggregateEntities(rows.map(c => ({ entities: getCatInfo(c)?.entities })), ctx.entityAliases)
+  return agg.unscanned === 0
+    ? `All ${agg.scanned} comments have been scanned for named entities.`
+    : `Only ${agg.scanned} of ${rows.length} comments have been scanned for named entities so far; the other ${agg.unscanned} were categorized before entity extraction existed, so counts may be incomplete — say so.`
+}
+
+const ENTITY_TOP_LIMIT = 15
+const ENTITY_EXAMPLES = 8
+
+/**
+ * Named entities (brands, companies, products, organizations) across the channel.
+ * Without `entity`: the most-mentioned entities with counts, sentiment and videos.
+ * With `entity`: what people say about that one — count, sentiment mix, videos and
+ * example comments with refs. Spelling variants are merged (lib/entities).
+ */
+async function toolGetEntityMentions(ctx: ToolContext, input: { entity?: unknown; post_id?: unknown }) {
+  let postIds = ctx.postIds
+  if (typeof input.post_id === 'string' && input.post_id) {
+    const resolved = resolvePostId(ctx, input.post_id)
+    if (!resolved) return { error: `No video found matching "${input.post_id}"` }
+    postIds = [resolved]
+  }
+  const comments = await fetchRichComments(ctx.supabase, postIds)
+  const agg = aggregateEntities(comments.map(c => ({ entities: getCatInfo(c)?.entities })), ctx.entityAliases)
+  const coverage = await entityCoverage(ctx, postIds === ctx.postIds ? comments : undefined)
+
+  const sentimentOf = (rows: RichCommentRow[]) => ({
+    positive: rows.filter(c => rowSentiment(c) === 'positive').length,
+    negative: rows.filter(c => rowSentiment(c) === 'negative').length,
+    neutral: rows.filter(c => rowSentiment(c) === 'neutral').length,
+    mixed: rows.filter(c => rowSentiment(c) === 'mixed').length,
+  })
+  const videosOf = (rows: RichCommentRow[]) => {
+    const v = new Map<string, number>()
+    for (const c of rows) v.set(c.post_id, (v.get(c.post_id) ?? 0) + 1)
+    return [...v].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id, n]) => ({ video: ctx.postMap.get(id) || 'Untitled video', comments: n }))
+  }
+
+  const name = typeof input.entity === 'string' ? input.entity.trim() : ''
+  if (!name) {
+    const top = agg.entities.slice(0, ENTITY_TOP_LIMIT)
+    return {
+      coverage,
+      scanned_comments: agg.scanned,
+      comments_naming_any_entity: agg.withAnyEntity,
+      distinct_entities: agg.entities.length,
+      evidence_ref: ctx.evidence.aggregate({
+        key: `entities:${postIds.join(',')}`,
+        label: 'comments naming a brand, product or organization',
+        comment_count: agg.withAnyEntity,
+        video_count: new Set(comments.filter(c => (getCatInfo(c)?.entities?.length ?? 0) > 0).map(c => c.post_id)).size,
+      }),
+      note: 'mentions = comments naming the entity (a comment counts once per entity). Spelling variants are already merged; "variants" shows what was merged. "possibly_related" lists entities counted SEPARATELY that may be the same thing (e.g. a company and its app) — mention them alongside rather than presenting either count as the whole picture.',
+      entities: top.map(e => {
+        const rows = comments.filter(c => mentionsEntity(getCatInfo(c)?.entities, e.entity, ctx.entityAliases))
+        const related = relatedEntities(e, agg.entities)
+        return {
+          entity: e.entity,
+          mentions: e.mentions,
+          sentiment_counts: sentimentOf(rows),
+          top_videos: videosOf(rows),
+          variants: e.variants,
+          ...(related.length ? { possibly_related: related.map(r => ({ entity: r.entity, mentions: r.mentions })) } : {}),
+        }
+      }),
+    }
+  }
+
+  const matching = comments
+    .filter(c => mentionsEntity(getCatInfo(c)?.entities, name, ctx.entityAliases))
+    .sort((a, b) => (b.posted_at || '').localeCompare(a.posted_at || ''))
+  const merged = agg.entities.find(e => e.key === entityKey(resolveEntity(name, ctx.entityAliases)))
+  const related = relatedEntities(merged ?? { entity: name, key: entityKey(name), mentions: 0, variants: {} }, agg.entities)
+  return {
+    entity: merged?.entity ?? name,
+    coverage,
+    mentions: matching.length,
+    ...(related.length
+      ? {
+          possibly_related: related.map(r => ({ entity: r.entity, mentions: r.mentions })),
+          possibly_related_note: 'Counted separately and NOT included in mentions — they may be the same thing (e.g. a company and its product). Mention them in the answer.',
+        }
+      : {}),
+    ...(matching.length
+      ? {
+          evidence_ref: ctx.evidence.aggregate({
+            key: `entity:${entityKey(name)}:${postIds.join(',')}`,
+            label: `comments naming ${merged?.entity ?? name}`,
+            comment_count: matching.length,
+            video_count: new Set(matching.map(c => c.post_id)).size,
+          }),
+          variants_merged: merged?.variants ?? {},
+          sentiment_counts: sentimentOf(matching),
+          top_videos: videosOf(matching),
+          examples: matching.slice(0, ENTITY_EXAMPLES).map(c => {
+            const video = ctx.postMap.get(c.post_id) || 'Untitled video'
+            return {
+              ref: ctx.evidence.comment({ id: c.id, text: c.text, author: getAuthor(c), post_id: c.post_id, video_title: video }),
+              author: getAuthor(c),
+              text: c.text,
+              video,
+              sentiment: rowSentiment(c),
+              posted_at: c.posted_at,
+            }
+          }),
+        }
+      : {
+          note: `No scanned comment names "${name}". It may be spelled differently in comments, or the comments naming it may not be scanned yet — try search_comments with it as the query.`,
+          closest_entities: agg.entities.slice(0, 10).map(e => e.entity),
+        }),
   }
 }
 
@@ -1655,7 +1812,24 @@ const TOOLS = [
           description:
             "Only comments by people in this audience segment. These five are the ONLY segments that exist — there is no 'budget-conscious', 'new viewer' or any other group, so never invent one; if a question asks about a group outside this list, say the data doesn't have it and answer with the closest real filter instead. Each is computed from that person's own history by fixed rules: potential_customer = has at least one comment showing buying interest (purchase_intent); critic = has 2+ negative comments and at least half of their comments are negative; loyal_fan = 3+ comments across 2+ videos, at least 70% positive; content_requester = has 2+ comments asking for content (content_request); casual_viewer = everyone else. People whose segment hasn't been computed yet match no segment filter.",
         },
+        entity: {
+          type: 'string',
+          description:
+            "Only comments that name this brand, company, product or organization (e.g. 'Safaricom', 'M-Pesa'). Matched on entities extracted during categorization, with spelling variants merged — so 'safaricom' finds 'Safaricom Kenya' too. Combine with sentiment, dates or a query. For an overview of which entities come up, or a summary of what people say about one, use get_entity_mentions.",
+        },
         post_id: { type: 'string', description: "Optional video id or title to restrict the search to" },
+      },
+    },
+  },
+  {
+    name: 'get_entity_mentions',
+    description:
+      "Named brands, companies, competitors, products and organizations that commenters mention BY NAME. With no entity: the most-mentioned ones across the channel (or one video), each with its mention count, sentiment mix and top videos — use this for 'what brands/companies/products come up', 'which competitors do people mention'. With entity: what people are saying about that one — mention count, sentiment mix, videos and example comments to quote. Spelling variants are merged ('Safaricom Kenya' and 'safaricom' are one entity). Always report the coverage line if it says not every comment has been scanned.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        entity: { type: 'string', description: "The brand/product/organization to look at, e.g. 'Safaricom'. Omit for the overview." },
+        post_id: { type: 'string', description: 'Optional video id or title to restrict to' },
       },
     },
   },
@@ -1851,6 +2025,8 @@ export async function executeTool(ctx: ToolContext, name: string, input: Record<
     switch (name) {
       case 'search_comments':
         return await toolSearchComments(ctx, input)
+      case 'get_entity_mentions':
+        return await toolGetEntityMentions(ctx, input)
       case 'compare_periods':
         return await toolComparePeriods(ctx, input)
       case 'get_video_breakdown':
@@ -1988,6 +2164,7 @@ export async function buildResearchContext(supabase: SupabaseClient, creator_id:
       postThumbnails: new Map(postList.map(p => [p.id, p.thumbnail_url as string | null])),
       // Callers pass the service client (the grant table is service-role only).
       actionablePostIds: await resolveVerifiedPostIds(supabase, creator_id, postList.map(p => p.id)),
+      entityAliases: await loadEntityAliases(supabase, creator_id),
       evidence: new EvidenceRegistry(),
     }
 
@@ -2030,7 +2207,7 @@ Two kinds of evidence, both used together. Individual examples: tool results tag
 
 Citations: tool results tag individual comments with a "ref" like "C4" and videos with a "video_ref" like "V2". When a sentence states something drawn from specific comments or videos — a quote, an example, a count about a video — put the matching refs in square brackets right after that claim, like "Several viewers ask about delivery [C2][C5]." Only use refs that appear in this turn's tool results; never invent one. Greetings, general statements and suggestions need no citation.
 
-For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count.`
+For broad, all-time questions about what the audience talks about, themes or trends, call get_audience_insights before searching comment by comment. Its counts cover ALL comments ever posted, so never use them for a question naming a time period ("last month", "this week", "the last 2 weeks"): call search_comments with date_from/date_to and use its breakdown for that period's themes, sentiment and totals. When the question is about how people feel (what they're unhappy about, what they love) or about a period of time, use search_comments with its sentiment and/or date_from/date_to filters, together in one call, so the answer rests on the actual matching comments and an exact count. For questions about brands, companies, competitors, products or organizations people name — which ones come up, or what people say about one of them — use get_entity_mentions (or search_comments with its entity filter to combine it with dates or sentiment).`
 
     const history: Array<{ role: string; content: string }> = Array.isArray(conversation_history)
       ? conversation_history
