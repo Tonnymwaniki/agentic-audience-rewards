@@ -104,7 +104,8 @@ export function templateInsight(c: InsightCandidate, postTitles: Map<string, str
 
 /** Step 2: one Claude call for all of a creator's candidates. */
 export async function judgeInsightCandidates({ candidates, postTitles }: JudgeInput): Promise<InsightJudgement[]> {
-  const payload = candidates.map(c => ({
+  const payload = candidates.map((c, i) => ({
+    id: `t${i + 1}`,
     theme: c.theme,
     change_in_share_of_comments: pct(c.trendPct),
     must_state_figure: requiredFigure(c),
@@ -129,7 +130,7 @@ A swing driven by one video CAN be notable when the audience's reaction is itsel
 If notable, write "insight": ONE sentence, at most 30 words, addressed to the creator ("your"), specific. It MUST contain the candidate's "must_state_figure" exactly as given (e.g. "367%") with its direction (up/down), and, when "main_video" is set, that video's title. Say what people are actually saying, but only what the sample comments clearly show. The windows are ${candidates[0].window.windowDays} days, so say "over the last ${candidates[0].window.windowDays} days" — never "this week" or "today". No hype, no advice, no quotes of commenters' words.
 Always give a short "reason" for your decision.
 
-Respond with ONLY a JSON array, one item per candidate, no markdown: [{"theme": "...", "notable": true, "reason": "...", "insight": "..."}] (insight null when not notable).
+Copy each candidate's "id" back exactly. Respond with ONLY a JSON array, one item per candidate, no markdown: [{"id": "t1", "notable": true, "reason": "...", "insight": "..."}] (insight null when not notable).
 
 Candidates:
 ${JSON.stringify(payload, null, 1)}`
@@ -154,11 +155,12 @@ ${JSON.stringify(payload, null, 1)}`
   if (!match) throw new Error('No JSON array in the insight judgement')
   const parsed = JSON.parse(match[0]) as Array<Record<string, unknown>>
 
-  const byTheme = new Map(candidates.map(c => [c.theme, c]))
+  // Matched back by our id, not by the model echoing the theme name.
+  const byId = new Map(candidates.map((c, i) => [`t${i + 1}`, c]))
   const out: InsightJudgement[] = []
   for (const item of parsed) {
-    const theme = typeof item.theme === 'string' ? item.theme : ''
-    const candidate = byTheme.get(theme)
+    const candidate = byId.get(typeof item.id === 'string' ? item.id.trim() : '')
+    const theme = candidate?.theme ?? ''
     if (!candidate || out.some(o => o.theme === theme)) continue
     const notable = item.notable === true
     const reason = typeof item.reason === 'string' ? item.reason : ''
@@ -178,6 +180,7 @@ ${JSON.stringify(payload, null, 1)}`
       insightSource: usable ? 'ai' : 'template',
     })
   }
+  if (out.length === 0) throw new Error(`Insight judgement returned no usable verdicts for ${candidates.length} candidates`)
   return out
 }
 
@@ -265,6 +268,13 @@ export async function runInsightAgent(
     const postTitles = new Map((posts ?? []).map(p => [p.id as string, (p.title as string) || 'Untitled video']))
 
     report.judgements = await (deps.judge ?? judgeInsightCandidates)({ candidates, postTitles })
+    // A candidate with no usable verdict isn't recorded (retried next run), but it
+    // is reported rather than silently lost.
+    const unjudged = candidates.filter(c => !report.judgements.some(j => j.theme === c.theme)).map(c => c.theme)
+    if (unjudged.length) {
+      report.errors.push(`no usable verdict for: ${unjudged.join(', ')} (retried next run)`)
+      logWarn('insightAgent', 'Candidates left unjudged by the model; retried next run', { creator_id: creatorId, themes: unjudged })
+    }
 
     for (const j of report.judgements.filter(x => x.notable && x.insight)) {
       const candidate = candidates.find(c => c.theme === j.theme)!

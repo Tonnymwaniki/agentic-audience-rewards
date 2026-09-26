@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refreshAudienceInsights } from '@/lib/audience-insights'
 import { runInsightAgent } from '@/lib/insight-agent'
+import { runKnowledgeGapAgent } from '@/lib/knowledge-gaps'
 import { isCronAuthorized } from '@/lib/cron-auth'
 import { logError } from '@/lib/logger'
 
@@ -41,9 +42,15 @@ export async function GET(request: NextRequest) {
 
   for (const creatorId of creatorIds) {
     try {
-      // The Insight Agent runs right after each creator's insights are stored, and
-      // turns genuinely notable swings into inbox notifications (lib/insight-agent).
-      const { stored, insightAgent } = await refreshAudienceInsights(supabase, creatorId, now, { insightAgent: runInsightAgent })
+      // Right after each creator's insights are stored, two proactive passes:
+      // notable trend swings (lib/insight-agent) and repeated questions the
+      // Business Profile can't answer yet (lib/knowledge-gaps).
+      const { stored, insightAgent } = await refreshAudienceInsights(supabase, creatorId, now, {
+        insightAgent: async (s, c, insights, windows, t) => ({
+          trends: await runInsightAgent(s, c, insights, windows, t),
+          knowledgeGaps: await runKnowledgeGapAgent(s, c, t),
+        }),
+      })
       results.push({ creator_id: creatorId, stored, insightAgent })
     } catch (err) {
       logError('api/cron/compute-insights', err, { creator_id: creatorId, stage: 'compute_for_creator' })

@@ -221,9 +221,9 @@ Rules:
 - Labels must read naturally to a small business owner, not like database columns.`
 }
 
-const KEY_PATTERN = /^[a-z][a-z0-9_]{1,48}$/
+export const KEY_PATTERN = /^[a-z][a-z0-9_]{1,48}$/
 /** The six fixed columns, in the shapes a model is likely to return them as. */
-const RESERVED_KEYS = new Set([
+export const RESERVED_KEYS = new Set([
   'business_phone', 'phone', 'phone_number', 'telephone',
   'business_whatsapp', 'whatsapp', 'whatsapp_number',
   'business_location', 'location', 'address', 'business_address',
@@ -234,8 +234,12 @@ const RESERVED_KEYS = new Set([
 
 type Suggestion = { field_key: string; field_label: string; reason: string }
 
-/** Drops anything malformed, reserved or duplicated, and enforces the cap. */
-function sanitize(raw: unknown): Suggestion[] {
+/**
+ * Drops anything malformed, reserved or duplicated, and enforces the cap. Also used
+ * by knowledge-gap detection (lib/knowledge-gaps.ts), so a gap-suggested field obeys
+ * exactly the same key/label rules as the originally generated ones.
+ */
+export function sanitize(raw: unknown): Suggestion[] {
   if (!Array.isArray(raw)) return []
   const seen = new Set<string>()
   const out: Suggestion[] = []

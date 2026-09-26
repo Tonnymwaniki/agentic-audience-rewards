@@ -95,6 +95,10 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
         // Written by the Insight Agent (lib/insight-agent.ts): about a theme across
         // many comments, so there is no commenter to show.
         const isInsight = item.type === 'insight'
+        // Written by knowledge-gap detection (lib/knowledge-gaps.ts): a repeated
+        // question the Business Profile can't answer yet, with a field added for it.
+        const isGap = item.type === 'knowledge_gap'
+        const isAgentNote = isInsight || isGap
 
         return (
           <li
@@ -117,12 +121,20 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                 104px off the left before any text. The reply is the thing being
                 read and edited, so it gets the width. */}
             <div className="flex items-start gap-3">
-              {isInsight ? (
+              {isAgentNote ? (
                 <span className="icon-badge icon-badge-purple flex-shrink-0" aria-hidden="true">
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 17l6-6 4 4 8-8" />
-                    <path d="M14 7h7v7" />
-                  </svg>
+                  {isGap ? (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.6v.6" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 17l6-6 4 4 8-8" />
+                      <path d="M14 7h7v7" />
+                    </svg>
+                  )}
                 </span>
               ) : (
                 <Avatar name={comment?.authorName || 'Unknown'} size={36} />
@@ -137,7 +149,7 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     />
                   )}
                   <p className="font-body text-sm font-medium text-text-primary">
-                    {isInsight ? 'Audience insight' : comment?.authorName || 'Unknown'}
+                    {isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : comment?.authorName || 'Unknown'}
                   </p>
                   {comment?.category && (
                     <span className={`badge badge-${comment.category}`}>
@@ -202,6 +214,15 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     className="inline-flex min-h-11 items-center text-xs text-purple-text hover:underline"
                   >
                     Explore in Research →
+                  </Link>
+                )}
+                {isGap && (
+                  <Link
+                    href="/dashboard/profile"
+                    onClick={() => void markRead(item.id)}
+                    className="inline-flex min-h-11 items-center text-xs text-purple-text hover:underline"
+                  >
+                    Open Business Profile →
                   </Link>
                 )}
                 {comment && (
