@@ -86,6 +86,11 @@ export async function fetchVideoMeta(videoId: string) {
   const statistics = item.statistics ?? {}
 
   return {
+    /**
+     * The complete videos.list item exactly as YouTube returned it, archived for
+     * fields not extracted below (migration 40). Never modified.
+     */
+    raw: item as unknown,
     title: snippet.title,
     description: snippet.description,
     thumbnailUrl,
@@ -128,6 +133,12 @@ export type FetchedComment = {
   updatedAt: string | null
   /** The commenter's avatar. Public on YouTube, but identifying — see migration 37. */
   authorProfileImageUrl: string | null
+  /**
+   * The complete API item exactly as YouTube returned it — a commentThreads.list
+   * item for a top-level comment, a comments.list item for a reply. Archived
+   * unmodified (migration 40) for fields not extracted above.
+   */
+  raw: unknown
 }
 
 export type FetchedReply = FetchedComment & {
@@ -178,6 +189,7 @@ export async function fetchVideoComments(videoId: string) {
         replyCount: parseCount(item.snippet.totalReplyCount) ?? 0,
         updatedAt: top.updatedAt ?? null,
         authorProfileImageUrl: top.authorProfileImageUrl ?? null,
+        raw: item,
       })
     }
 
@@ -247,6 +259,7 @@ export async function fetchCommentReplies(
             replyCount: 0,
             updatedAt: snippet.updatedAt ?? null,
             authorProfileImageUrl: snippet.authorProfileImageUrl ?? null,
+            raw: item,
           })
         }
 

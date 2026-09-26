@@ -17,6 +17,8 @@ type CommentRow = {
   parent_comment_id: string | null
   /** When the commenter last edited it (migration 37). is_edited is derived from it. */
   youtube_updated_at: string | null
+  /** The unmodified YouTube API item (migration 40). Write-only archive. */
+  raw_api_response: unknown
 }
 
 /**
@@ -24,11 +26,12 @@ type CommentRow = {
  * rejects it as unknown, so a deploy that lands before its migration keeps ingesting
  * (without that column) instead of failing every comment.
  */
-const optionalColumns: Record<'like_count' | 'reply_count' | 'parent_comment_id' | 'youtube_updated_at', boolean> = {
+const optionalColumns: Record<'like_count' | 'reply_count' | 'parent_comment_id' | 'youtube_updated_at' | 'raw_api_response', boolean> = {
   like_count: true,
   reply_count: true,
   parent_comment_id: true,
   youtube_updated_at: true,
+  raw_api_response: true,
 }
 
 /** audience_members.profile_image_url (migration 37); false once the DB rejects it. */
@@ -45,7 +48,8 @@ const optionalPostColumns: Record<
   | 'live_scheduled_start_at'
   | 'live_scheduled_end_at'
   | 'live_actual_start_at'
-  | 'live_actual_end_at',
+  | 'live_actual_end_at'
+  | 'raw_api_response',
   boolean
 > = {
   duration_seconds: true,
@@ -59,6 +63,7 @@ const optionalPostColumns: Record<
   live_scheduled_end_at: true,
   live_actual_start_at: true,
   live_actual_end_at: true,
+  raw_api_response: true,
 }
 
 /** The column an "unknown column" error names, if it's one of the optional ones. */
@@ -81,8 +86,10 @@ async function upsertComment(supabase: SupabaseService, row: CommentRow) {
   }
 
   let result = await attempt()
-  // One retry per missing column: at most four, and only on a fresh database.
-  for (let i = 0; i < 4; i++) {
+  // One retry per missing column, bounded by how many optional columns exist (a
+  // hard-coded 4 would have left the fifth, raw_api_response, failing every comment
+  // on a database missing all of them). Only reached on a database behind on migrations.
+  for (let i = 0; i < Object.keys(optionalColumns).length; i++) {
     const missing = missingOptionalColumn(result.error)
     if (!missing) break
     optionalColumns[missing] = false
@@ -156,6 +163,7 @@ async function storeComment(
     reply_count: comment.replyCount,
     parent_comment_id: args.parentCommentId ?? null,
     youtube_updated_at: comment.updatedAt,
+    raw_api_response: comment.raw,
   })
   if (error || !data) {
     logError('ingest.upsertComment', error, { post_id: args.postId, creator_id: args.creatorId, audience_member_id: member.id })
@@ -264,6 +272,8 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     live_scheduled_end_at: meta.liveScheduledEnd,
     live_actual_start_at: meta.liveActualStart,
     live_actual_end_at: meta.liveActualEnd,
+    // migration 40 — the complete videos.list item, unmodified. Write-only archive.
+    raw_api_response: meta.raw,
   }
 
   const upsertPost = () => {
