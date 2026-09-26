@@ -1,9 +1,7 @@
 import Link from 'next/link'
-import type { ActivityItem } from '@/lib/activity'
 import MascotIcon from '@/components/MascotIcon'
 import NotificationBell from '@/components/NotificationBell'
 import CategoryBreakdown, { type CategoryCounts, type VideoBreakdown } from './CategoryBreakdown'
-import RecognizedPeople, { type RecognizedPerson } from './RecognizedPeople'
 import BestTimeToPost from './BestTimeToPost'
 import type { ActivityWindow, WeekdayActivity, HourActivity, LatencyBucket } from '@/lib/timing'
 
@@ -23,7 +21,6 @@ type AgentSummaryProps = {
   totalCommentsCount: number
   categoryCounts: CategoryCounts
   videoBreakdowns: VideoBreakdown[]
-  recognizedPeople: RecognizedPerson[]
   activityWindows: ActivityWindow[]
   datedCommentCount: number
   weekdayActivity: WeekdayActivity[]
@@ -35,7 +32,12 @@ type AgentSummaryProps = {
   totalRecognizedCount: number
   repliesReadyCount: number
   purchaseIntentReadyCount: number
-  activity: ActivityItem[]
+  /**
+   * The Agent Workspace, rendered where Recent Activity used to be. A slot rather
+   * than data: it is an async server component that streams in behind its own
+   * Suspense boundary, so its queries never hold up the rest of this page.
+   */
+  workspace: React.ReactNode
 }
 
 function timeAgo(dateString: string): string {
@@ -210,28 +212,6 @@ const QUICK_ACTIONS: Array<{ href: string; label: string; description: string; t
   },
 ]
 
-const ACTIVITY_TONE: Record<ActivityItem['kind'], { dot: string; label: string }> = {
-  notification: { dot: 'bg-pink', label: 'Alert' },
-  pending_draft: { dot: 'bg-purple', label: 'Draft' },
-  reward: { dot: 'bg-teal', label: 'Reward' },
-}
-
-function ActivityRow({ item }: { item: ActivityItem }) {
-  const tone = ACTIVITY_TONE[item.kind]
-  return (
-    <li className="flex items-start gap-3 py-3">
-      <span className={`mt-1.5 h-2 w-2 flex-shrink-0 rounded-full ${tone.dot}`} aria-hidden="true" />
-      <div className="min-w-0 flex-1">
-        <p className="text-sm leading-relaxed text-text-primary">{item.text}</p>
-        <p className="mt-0.5 font-mono text-[10px] tracking-wide text-text-muted uppercase">
-          {tone.label}
-          {item.at ? ` · ${timeAgo(item.at)}` : ''}
-        </p>
-      </div>
-    </li>
-  )
-}
-
 // --- Page -----------------------------------------------------------------
 
 export default function AgentSummary({
@@ -244,7 +224,6 @@ export default function AgentSummary({
   totalCommentsCount,
   categoryCounts,
   videoBreakdowns,
-  recognizedPeople,
   activityWindows,
   datedCommentCount,
   weekdayActivity,
@@ -256,7 +235,7 @@ export default function AgentSummary({
   totalRecognizedCount,
   repliesReadyCount,
   purchaseIntentReadyCount,
-  activity,
+  workspace,
 }: AgentSummaryProps) {
   const quietDay = commentsReadCount === 0 && draftsWrittenCount === 0 && recognizedCount === 0
 
@@ -428,28 +407,8 @@ export default function AgentSummary({
           second copy on Agent Home meant approving in one place left the other
           showing stale work. The Quick Action above is the way in. */}
 
-      {/* --- Recent activity --- */}
-      <section className="card">
-        <h2 className="mb-3 font-display text-base font-semibold text-text-primary">Recent Activity</h2>
-
-        {/* People first, then the text stream. Recognitions are the part of this
-            feed a creator actually wants to look at, and a person with a level is
-            worth a card; the rest stays one line each. Reward lines are no longer
-            passed into the text feed, so nothing is said twice. */}
-        <RecognizedPeople people={recognizedPeople} />
-
-        {activity.length === 0 && recognizedPeople.length === 0 ? (
-          <p className="py-3 text-sm text-text-muted">
-            Nothing yet. Alerts, drafted replies and rewards will show up here as your agent works.
-          </p>
-        ) : activity.length === 0 ? null : (
-          <ul className="divide-y divide-white/5">
-            {activity.map((item, i) => (
-              <ActivityRow key={i} item={item} />
-            ))}
-          </ul>
-        )}
-      </section>
+      {/* --- Agent Workspace (replaced Recent Activity) --- */}
+      {workspace}
     </div>
   )
 }

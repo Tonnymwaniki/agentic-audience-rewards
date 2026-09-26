@@ -1,22 +1,19 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
 import { fetchInBatches } from '@/lib/supabase-helpers'
-import { loadHighlights } from '@/lib/highlights'
-import { buildActivityFeed } from '@/lib/activity'
 import { CONNECT_PATH } from '@/lib/onboarding'
 import CategoryPrompt from './CategoryPrompt'
 import AgentSummary from './AgentFeed'
-import { normalizeLevel } from '@/lib/levels'
 import {
   computeActivityWindows,
   computeWeeklyActivity,
   computeHourlyActivity,
   computeLatencyActivity,
 } from '@/lib/timing'
-import type { RecognizedPerson } from './RecognizedPeople'
 import RefreshOnFocus from './RefreshOnFocus'
 import AudienceAnalytics, { AudienceAnalyticsSkeleton } from './AudienceAnalytics'
 import { Suspense } from 'react'
+import AgentWorkspace, { AgentWorkspaceSkeleton } from './AgentWorkspace'
 import { logError } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/service'
 import { resolveVerifiedPostIds } from '@/lib/channel-verification'
@@ -26,11 +23,7 @@ import { computeAgentHeaderStats, type StatsRewardEvent } from '@/lib/agent-stat
 export const dynamic = 'force-dynamic'
 
 // Just a preview — the full set lives on Highlights, one click away.
-const ATTENTION_PREVIEW_LIMIT = 3
-const ACTIVITY_LIMIT = 5
 // A glanceable row, not a directory — Rewards is the full list.
-const RECOGNIZED_LIMIT = 6
-const RECOGNIZED_WINDOW_DAYS = 7
 
 // Server-clock based, and the server is UTC on Vercel. No per-creator timezone is
 // stored anywhere in the schema, so this is genuinely the best available signal —
@@ -159,7 +152,6 @@ export default async function AgentHomePage() {
     })
   }
 
-  const sevenDaysAgo = new Date(Date.now() - RECOGNIZED_WINDOW_DAYS * 24 * 60 * 60 * 1000)
 
   // --- Header stats are computed below by computeAgentHeaderStats (lib/agent-stats),
   // once reward events are loaded, so the page and its tests share the arithmetic.
@@ -185,8 +177,6 @@ export default async function AgentHomePage() {
 
   let rewardEventsForStats: StatsRewardEvent[] = []
   let latestRewardAt: string | null = null
-  let recentRewards: Array<{ personName: string; reason: string; at: string | null }> = []
-  let recognizedPeople: RecognizedPerson[] = []
 
   if (memberIds.length > 0) {
     // Batched: a single .in() with hundreds of member ids exceeds Supabase's URL
@@ -194,54 +184,20 @@ export default async function AgentHomePage() {
     const allEvents = await fetchInBatches<{
       audience_member_id: string
       created_at: string
-      reason: string
       status: string
-      audience_members: unknown
     }>(supabase, {
       table: 'reward_events',
-      select: 'audience_member_id, created_at, reason, status, audience_members ( id, display_name, level )',
+      select: 'audience_member_id, created_at, status',
       inColumn: 'audience_member_id',
       inValues: memberIds,
     })
     // Voided rewards (issued before ownership verification) are audit rows, not
-    // recognition: excluded from every count, list and timestamp below.
+    // recognition: excluded from the counts and from "last activity".
     const events = allEvents.filter(e => countsAsRecognition(e.status))
     rewardEventsForStats = allEvents
 
     for (const event of events) {
       if (!latestRewardAt || event.created_at > latestRewardAt) latestRewardAt = event.created_at
-    }
-
-    const sorted = [...events].sort(
-      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-    )
-
-    recentRewards = sorted.slice(0, ACTIVITY_LIMIT).map(event => ({
-      personName: (event.audience_members as { display_name: string } | null)?.display_name || 'Someone',
-      reason: event.reason,
-      at: event.created_at,
-    }))
-
-    // People recognized in the last 7 days, newest first, one card each: someone
-    // recognized three times this week is one person to celebrate, not three rows.
-    // `sorted` is already newest-first, so the first sighting of a member id is
-    // their most recent recognition and the reason shown is the latest one.
-    const seen = new Set<string>()
-    for (const event of sorted) {
-      if (new Date(event.created_at) < sevenDaysAgo) break
-      const member = event.audience_members as
-        | { id: string; display_name: string | null; level: string | null }
-        | null
-      if (!member?.id || seen.has(member.id)) continue
-      seen.add(member.id)
-      recognizedPeople.push({
-        id: member.id,
-        name: member.display_name || 'Someone',
-        level: normalizeLevel(member.level),
-        reason: event.reason,
-        at: event.created_at,
-      })
-      if (recognizedPeople.length >= RECOGNIZED_LIMIT) break
     }
   }
 
@@ -261,12 +217,13 @@ export default async function AgentHomePage() {
     actionablePostIds,
   })
 
+  // Only the newest notification's time is needed, for "last activity".
   const { data: recentNotifications, error: notificationError } = await supabase
     .from('notifications')
-    .select('message, created_at')
+    .select('created_at')
     .eq('creator_id', creator.id)
     .order('created_at', { ascending: false })
-    .limit(ACTIVITY_LIMIT)
+    .limit(1)
 
   if (notificationError) {
     logError('page.agent', notificationError, { creator_id: creator.id, stage: 'fetch_notifications' })
@@ -284,25 +241,6 @@ export default async function AgentHomePage() {
     .filter((value): value is string => Boolean(value))
     .sort()
     .pop() ?? null
-
-  // --- Pending drafts. The cards themselves now live in the notification inbox;
-  // this is still loaded because Recent Activity below is built from it. ---
-  // Same rule as Replies ready: a draft on an unverified channel is not pending work.
-  const { draftHighlights } = await loadHighlights(supabase, creator.id, ATTENTION_PREVIEW_LIMIT, actionablePostIds)
-
-  // --- Recent Activity. Built from data already loaded above rather than
-  // re-querying: draftHighlights doubles as the pending-draft stream. ---
-  const activity = buildActivityFeed(
-    {
-      notifications: (recentNotifications || []).map(n => ({ message: n.message, at: n.created_at })),
-      pendingDrafts: draftHighlights.map(h => ({
-        category: h.category || 'comment',
-        videoTitle: h.videoTitle,
-        at: h.postedAt,
-      })),
-    },
-    ACTIVITY_LIMIT
-  )
 
   // Busiest posting windows, in EAT. allComments already carries posted_at for the
   // 24h stats, so this is arithmetic over memory rather than another query.
@@ -374,10 +312,13 @@ export default async function AgentHomePage() {
         totalRecognizedCount={totalRecognizedCount}
         repliesReadyCount={repliesReadyCount}
         purchaseIntentReadyCount={purchaseIntentReadyCount}
-        activity={activity}
+        workspace={
+          <Suspense fallback={<AgentWorkspaceSkeleton />}>
+            <AgentWorkspace creatorId={creator.id} />
+          </Suspense>
+        }
         categoryCounts={categoryCounts}
         videoBreakdowns={videoBreakdowns}
-        recognizedPeople={recognizedPeople}
         activityWindows={activityWindows.windows}
         datedCommentCount={activityWindows.totalComments}
         weekdayActivity={weeklyActivity.days}
