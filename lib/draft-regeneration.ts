@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
+import { applyFactStatusesForDrafts, loadFactStatuses } from '@/lib/profile-fact-status'
 import {
   generateDraftReply,
   loadStyleExamples,
@@ -119,7 +120,11 @@ export async function regenerateDraftsForCreator(
   const styleExamples = await loadStyleExamples(supabase, creator_id)
   // Regeneration must see the same facts a first-pass draft sees, custom fields
   // included — otherwise re-drafting silently drops them from every reply.
-  const customFieldContext = customFieldsToContext(await loadCustomProfileFields(supabase, creator_id))
+  // Contradicted profile facts come out of the verified set and go in as uncertain.
+  const adjusted = applyFactStatusesForDrafts(businessProfile, await loadCustomProfileFields(supabase, creator_id), await loadFactStatuses(supabase, creator_id))
+  businessProfile = adjusted.profile
+  const customFieldContext = customFieldsToContext(adjusted.customFields)
+  const uncertainFacts = adjusted.uncertain
   if (styleExamples.length > 0) {
     console.log(`Draft regeneration: applying ${styleExamples.length} style example(s) from past edits.`)
   }
@@ -292,7 +297,7 @@ export async function regenerateDraftsForCreator(
         continue
       }
 
-      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples, customFieldContext)
+      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples, customFieldContext, uncertainFacts)
 
       const stamped = await markChecked(comment.id, {
         draft_reply: draft.text,

@@ -5,6 +5,7 @@ import { regenerateDraftsForCreator } from '@/lib/draft-regeneration'
 import { saveCustomProfileValues } from '@/lib/custom-profile-fields'
 import { logError, logInfo } from '@/lib/logger'
 import { syncProfileFactEmbeddings } from '@/lib/knowledge-embeddings'
+import { recordProfileEdits, snapshotProfileValues } from '@/lib/profile-fact-status'
 
 // The save itself returns immediately; this headroom is for the after() work,
 // which re-drafts replies across every one of the creator's videos.
@@ -53,6 +54,10 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // What the profile said before this save, so only fields whose value actually
+    // changes get a fresh "confirmed" timestamp (lib/profile-fact-status.ts).
+    const before = await snapshotProfileValues(supabase, creatorId)
+
     const customWritten =
       Object.keys(customFieldValues).length > 0
         ? await saveCustomProfileValues(supabase, creatorId, customFieldValues)
@@ -63,6 +68,13 @@ export async function POST(request: NextRequest) {
     // the custom-fields-only path below too.
     const refreshFactEmbeddings = () =>
       after(async () => {
+        // Edited fields are freshly confirmed and any contradiction of their old
+        // value ends; cleared fields lose their status.
+        try {
+          await recordProfileEdits(supabase, creatorId, before, await snapshotProfileValues(supabase, creatorId))
+        } catch (statusError) {
+          logError('api/creator/profile', statusError, { creator_id: creatorId, stage: 'fact_status' })
+        }
         const result = await syncProfileFactEmbeddings(supabase, creatorId)
         if (result.error) logError('api/creator/profile', new Error(result.error), { creator_id: creatorId, stage: 'fact_embeddings' })
       })

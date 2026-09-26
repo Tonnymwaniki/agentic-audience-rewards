@@ -4,6 +4,7 @@ import { refreshAudienceInsights } from '@/lib/audience-insights'
 import { runInsightAgent } from '@/lib/insight-agent'
 import { runKnowledgeGapAgent } from '@/lib/knowledge-gaps'
 import { syncKnowledgeEmbeddings } from '@/lib/knowledge-embeddings'
+import { runContradictionAgent } from '@/lib/profile-fact-status'
 import { isCronAuthorized } from '@/lib/cron-auth'
 import { logError } from '@/lib/logger'
 
@@ -53,6 +54,9 @@ export async function GET(request: NextRequest) {
           // Entity and profile-fact embeddings (lib/knowledge-embeddings): catches
           // anything the analysis and profile-save hooks missed.
           embeddings: await syncKnowledgeEmbeddings(s, c),
+          // After the embeddings, which it reads: recent comments that dispute a
+          // profile fact (lib/profile-fact-status).
+          contradictions: await runContradictionAgent(s, c, t),
         }),
       })
       results.push({ creator_id: creatorId, stored, insightAgent })

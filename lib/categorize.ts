@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ENTITY_EXTRACTION_RULES, normalizeEntities } from '@/lib/entities'
-import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
+import { loadCustomProfileFields, customFieldsToContext, type CustomProfileField } from '@/lib/custom-profile-fields'
+import { applyFactStatusesForDrafts, loadFactStatuses } from '@/lib/profile-fact-status'
 import { createServiceClient } from '@/lib/supabase/service'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
@@ -150,9 +151,16 @@ const PROFILE_AWARE_CATEGORIES = new Set(['question', 'purchase_intent'])
 // profile is missing or entirely empty, leaving the original prompt untouched.
 function buildProfileContext(
   profile: BusinessProfile | null | undefined,
-  customFields: string[] = []
+  customFields: string[] = [],
+  uncertainFacts: string[] = []
 ): string {
-  if (!profile && customFields.length === 0) return ''
+  // Profile facts customers are currently disputing (lib/profile-fact-status.ts):
+  // offered as context, explicitly NOT as fact, so a draft never asserts a value
+  // several people are saying is wrong.
+  const uncertainNote = uncertainFacts.length
+    ? ` UNCERTAIN details — customers have recently reported something different, so do NOT state these as fact: ${uncertainFacts.join('; ')}. If the question is about one of these, say you'll confirm the current details rather than quoting either version.`
+    : ''
+  if (!profile && customFields.length === 0) return uncertainNote
 
   const parts: string[] = []
   if (profile?.business_phone) parts.push(`phone: ${profile.business_phone}`)
@@ -168,9 +176,9 @@ function buildProfileContext(
   // a real verified fact it may quote, and must not invent.
   for (const pair of customFields) parts.push(pair)
 
-  if (parts.length === 0) return ''
+  if (parts.length === 0) return uncertainNote
 
-  return ` The business's real, verified details — ${parts.join('; ')}. If the customer's question directly matches one of these (asking for contact, location, hours, delivery), include the ACTUAL real answer in your drafted reply rather than a generic "please reach out" response. Only state details listed above — never invent, guess, or approximate any detail that isn't listed, and don't imply one exists. If the question doesn't match any of this profile data, draft a reply as before.`
+  return `${uncertainNote} The business's real, verified details — ${parts.join('; ')}. If the customer's question directly matches one of these (asking for contact, location, hours, delivery), include the ACTUAL real answer in your drafted reply rather than a generic "please reach out" response. Only state details listed above — never invent, guess, or approximate any detail that isn't listed, and don't imply one exists. If the question doesn't match any of this profile data, draft a reply as before.`
 }
 
 /** One past correction: what the agent drafted, and what the creator actually sent. */
@@ -261,7 +269,9 @@ export async function generateDraftReply(
   category: string,
   profile?: BusinessProfile | null,
   styleExamples?: StyleExample[] | null,
-  customFields?: string[] | null
+  customFields?: string[] | null,
+  /** Contradicted profile facts, from applyFactStatusesForDrafts — never stated as fact. */
+  uncertainFacts?: string[] | null
 ): Promise<DraftReplyResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
@@ -269,7 +279,7 @@ export async function generateDraftReply(
   try {
     const instruction = DRAFT_REPLY_INSTRUCTIONS[category] ?? DRAFT_REPLY_INSTRUCTIONS.purchase_intent
     const profileContext = PROFILE_AWARE_CATEGORIES.has(category)
-      ? buildProfileContext(profile, customFields ?? [])
+      ? buildProfileContext(profile, customFields ?? [], uncertainFacts ?? [])
       : ''
     // Style applies to every category: how someone signs off or phrases things is
     // not specific to questions or purchase intent the way business facts are.
@@ -673,6 +683,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   let businessProfile: BusinessProfile | null = null
   let styleExamples: StyleExample[] = []
   let customFieldContext: string[] = []
+  let loadedCustomFields: CustomProfileField[] = []
 
   // One post fetch covers both needs: title/description for the relevance check,
   // and creator_id so the business profile can be looked up below.
@@ -705,6 +716,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       // a complaint's reply should not be quoting the creator's price list.
       if (post.creator_id && draftable.some(c => PROFILE_AWARE_CATEGORIES.has(c.category))) {
         const fields = await loadCustomProfileFields(supabase, post.creator_id)
+        loadedCustomFields = fields
         customFieldContext = customFieldsToContext(fields)
         if (customFieldContext.length > 0) {
           console.log(`Categorize: applying ${customFieldContext.length} custom profile field(s).`)
@@ -752,6 +764,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   }
 
   const notifiable: Array<{ commentId: string; category: string; text: string }> = []
+
+  // Contradicted profile facts come out of the verified set and go in as uncertain.
+  let uncertainFacts: string[] = []
+  if (postCreatorId && (businessProfile || loadedCustomFields.length)) {
+    const adjusted = applyFactStatusesForDrafts(businessProfile, loadedCustomFields, await loadFactStatuses(supabase, postCreatorId))
+    businessProfile = adjusted.profile
+    customFieldContext = customFieldsToContext(adjusted.customFields)
+    uncertainFacts = adjusted.uncertain
+  }
 
   // Drafting makes LLM calls per comment but writes nothing to posts, so a long
   // pass would look dead to stale-run detection (lib/analysis-staleness.ts).
@@ -804,7 +825,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         continue
       }
 
-      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext)
+      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts)
       const draftReply = draft.text
       await supabase
         .from('comment_categories')

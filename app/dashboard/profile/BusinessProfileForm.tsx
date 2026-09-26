@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import type { CustomProfileField } from '@/lib/custom-profile-fields'
+import FactStatusNote, { type FactStatusView } from './FactStatusNote'
 
 type ProfileFields = {
   display_name: string
@@ -60,10 +61,13 @@ const FIELDS: Array<{
 export default function BusinessProfileForm({
   initial,
   customFields,
+  factStatuses = {},
 }: {
   initial: ProfileFields
   /** AI-suggested, per-business. Empty until a category has been set. */
   customFields: CustomProfileField[]
+  /** Stale / contradicted fields only, keyed "fixed:<column>" or "custom:<field_key>". */
+  factStatuses?: Record<string, FactStatusView>
 }) {
   const [values, setValues] = useState<ProfileFields>(initial)
   // Keyed by field_key, which is what the API expects back under custom_fields.
@@ -132,6 +136,9 @@ export default function BusinessProfileForm({
             className="flex h-11 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
           />
           {field.hint && <p className="mt-1 text-xs text-text-muted">{field.hint}</p>}
+          {factStatuses[`fixed:${field.key}`] && (
+            <FactStatusNote source="fixed" fieldKey={field.key} status={factStatuses[`fixed:${field.key}`]} />
+          )}
         </div>
       ))}
 
@@ -150,6 +157,9 @@ export default function BusinessProfileForm({
         <p className="mt-1 text-xs text-text-muted">
           Free text — describe it however it actually works for you.
         </p>
+        {factStatuses['fixed:delivery_info'] && (
+          <FactStatusNote source="fixed" fieldKey="delivery_info" status={factStatuses['fixed:delivery_info']} />
+        )}
       </div>
 
       {/* --- AI-suggested, per-business. Visually separated and explicitly labelled
@@ -210,6 +220,9 @@ export default function BusinessProfileForm({
                 onChange={e => updateCustom(field.fieldKey, e.target.value)}
                 className="flex h-11 w-full rounded-lg border border-white/10 bg-surface px-4 text-sm text-text-primary placeholder:text-text-muted focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none"
               />
+              {factStatuses[`custom:${field.fieldKey}`] && (
+                <FactStatusNote source="custom" fieldKey={field.fieldKey} status={factStatuses[`custom:${field.fieldKey}`]} />
+              )}
             </div>
           ))}
         </div>

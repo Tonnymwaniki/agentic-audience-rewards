@@ -98,7 +98,9 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
         // Written by knowledge-gap detection (lib/knowledge-gaps.ts): a repeated
         // question the Business Profile can't answer yet, with a field added for it.
         const isGap = item.type === 'knowledge_gap'
-        const isAgentNote = isInsight || isGap
+        // Written by the contradiction pass (lib/profile-fact-status.ts).
+        const isContradiction = item.type === 'profile_contradiction'
+        const isAgentNote = isInsight || isGap || isContradiction
 
         return (
           <li
@@ -123,7 +125,13 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
             <div className="flex items-start gap-3">
               {isAgentNote ? (
                 <span className="icon-badge icon-badge-purple flex-shrink-0" aria-hidden="true">
-                  {isGap ? (
+                  {isContradiction ? (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M12 3l9 16H3z" />
+                      <path d="M12 10v4" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                  ) : isGap ? (
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <circle cx="12" cy="12" r="9" />
                       <path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.7.3-1 .9-1 1.6v.6" />
@@ -149,7 +157,7 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     />
                   )}
                   <p className="font-body text-sm font-medium text-text-primary">
-                    {isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : comment?.authorName || 'Unknown'}
+                    {isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : isContradiction ? 'Profile may be out of date' : comment?.authorName || 'Unknown'}
                   </p>
                   {comment?.category && (
                     <span className={`badge badge-${comment.category}`}>
@@ -216,13 +224,13 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     Explore in Research →
                   </Link>
                 )}
-                {isGap && (
+                {(isGap || isContradiction) && (
                   <Link
                     href="/dashboard/profile"
                     onClick={() => void markRead(item.id)}
                     className="inline-flex min-h-11 items-center text-xs text-purple-text hover:underline"
                   >
-                    Open Business Profile →
+                    {isContradiction ? 'Review Business Profile →' : 'Open Business Profile →'}
                   </Link>
                 )}
                 {comment && (

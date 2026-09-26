@@ -4,6 +4,10 @@ import PageHeader from '@/components/PageHeader'
 import BusinessProfileForm from './BusinessProfileForm'
 import { loadCustomProfileFields } from '@/lib/custom-profile-fields'
 import { logError } from '@/lib/logger'
+import { createServiceClient } from '@/lib/supabase/service'
+import { describeAge, factKey, factState, loadFactStatuses } from '@/lib/profile-fact-status'
+import { FIXED_PROFILE_FIELDS } from '@/lib/knowledge-gaps'
+import type { FactStatusView } from './FactStatusNote'
 
 export const dynamic = 'force-dynamic'
 
@@ -45,6 +49,18 @@ export default async function BusinessProfilePage() {
   // limits this to the signed-in creator's own rows.
   const customFields = await loadCustomProfileFields(supabase, creator.id)
 
+  // Stale / contradicted states. Service client: profile_fact_status is readable only
+  // by the service role; creator.id comes from the session above.
+  const statuses = await loadFactStatuses(createServiceClient(), creator.id)
+  const factStatuses: Record<string, FactStatusView> = {}
+  const view = (key: string, value: string | null) => {
+    const s = factState(statuses.get(key), value?.trim() || null)
+    if (s.state === 'stale') factStatuses[key] = { state: 'stale', ageLabel: describeAge(s.ageDays) }
+    if (s.state === 'contradicted') factStatuses[key] = { state: 'contradicted', summary: s.summary, example: s.example }
+  }
+  for (const f of FIXED_PROFILE_FIELDS) view(factKey('fixed', f.column), (creator as Record<string, string | null>)[f.column] ?? null)
+  for (const f of customFields) view(factKey('custom', f.fieldKey), f.fieldValue)
+
   return (
     <div className="mx-auto max-w-2xl">
       <PageHeader title="Business Profile" backHref="/dashboard/agent" backLabel="Agent Home" />
@@ -70,6 +86,7 @@ export default async function BusinessProfilePage() {
           delivery_info: creator.delivery_info || '',
         }}
         customFields={customFields}
+        factStatuses={factStatuses}
       />
     </div>
   )

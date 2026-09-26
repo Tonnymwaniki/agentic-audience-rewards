@@ -15,6 +15,7 @@ import { resolveVerifiedPostIds } from '@/lib/channel-verification'
 import { countsAsRecognition } from '@/lib/rewards/status'
 import { aggregateEntities, entityKey, loadEntityAliases, mentionsEntity, relatedEntities, resolveEntity, type EntityAliases } from '@/lib/entities'
 import { matchEntities, matchProfileFacts } from '@/lib/knowledge-embeddings'
+import { describeAge, factKey, factState, loadFactStatuses } from '@/lib/profile-fact-status'
 import { engagementFact, loadPostEngagement } from '@/lib/engagement'
 
 const MAX_TOOL_ROUNDS = 5
@@ -958,9 +959,26 @@ async function toolFindProfileFacts(ctx: ToolContext, input: { question?: unknow
   if (relevant.length === 0) {
     return { facts: [], note: "No field in the creator's Business Profile is about this. Say the profile doesn't cover it." }
   }
+  // Confidence status (lib/profile-fact-status.ts): a CONTRADICTED fact must not be
+  // presented as settled; a STALE one may be out of date.
+  const statuses = await loadFactStatuses(ctx.supabase, ctx.creatorId)
+  const withStatus = relevant.map(m => {
+    const value = m.content.startsWith(`${m.field_label}: `) ? m.content.slice(m.field_label.length + 2) : m.content
+    const s = factState(statuses.get(factKey(m.source, m.field_key)), value)
+    return {
+      field: m.field_label,
+      content: m.content,
+      similarity: m.similarity,
+      match: m.similarity >= FACT_STRONG_MIN_SIMILARITY ? 'strong' : 'possible',
+      status: s.state,
+      ...(s.state === 'contradicted' ? { customers_report: s.summary, example_comment: s.example } : {}),
+      ...(s.state === 'stale' ? { last_confirmed: describeAge(s.ageDays) } : {}),
+    }
+  })
+  const flagged = withStatus.some(f => f.status !== 'ok')
   return {
-    note: `Matched by meaning. "strong" = the field is about this; "possible" = it may be. Either way, check the value actually answers the question and say plainly if it doesn't (e.g. a delivery field that only covers Nairobi doesn't answer "do you ship internationally" with a yes).`,
-    facts: relevant.map(m => ({ field: m.field_label, content: m.content, similarity: m.similarity, match: m.similarity >= FACT_STRONG_MIN_SIMILARITY ? 'strong' : 'possible' })),
+    note: `Matched by meaning. "strong" = the field is about this; "possible" = it may be. Either way, check the value actually answers the question and say plainly if it doesn't (e.g. a delivery field that only covers Nairobi doesn't answer "do you ship internationally" with a yes).${flagged ? ' STATUS: "contradicted" = several customers recently said something different — present the value as uncertain, not as fact, and mention what customers report. "stale" = not reconfirmed in 90+ days — say it may be out of date.' : ''}`,
+    facts: withStatus,
   }
 }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
+import { applyFactStatusesForDrafts, loadFactStatuses } from '@/lib/profile-fact-status'
 import {
   generateDraftReply,
   loadStyleExamples,
@@ -98,11 +99,13 @@ export async function POST(request: NextRequest) {
     const styleExamples = creatorId ? await loadStyleExamples(supabase, creatorId) : []
     // And the same for the creator's own custom fields, so a single "Regenerate"
     // produces a reply with the same facts available as the batch path.
-    const customFieldContext = creatorId
-      ? customFieldsToContext(await loadCustomProfileFields(supabase, creatorId))
-      : []
+    // Contradicted profile facts come out of the verified set and go in as uncertain.
+    const adjusted = creatorId
+      ? applyFactStatusesForDrafts(businessProfile, await loadCustomProfileFields(supabase, creatorId), await loadFactStatuses(supabase, creatorId))
+      : { profile: businessProfile, customFields: [], uncertain: [] }
+    const customFieldContext = customFieldsToContext(adjusted.customFields)
 
-    const draft = await generateDraftReply(comment.text, category, businessProfile, styleExamples, customFieldContext)
+    const draft = await generateDraftReply(comment.text, category, adjusted.profile, styleExamples, customFieldContext, adjusted.uncertain)
 
     await supabase
       .from('comment_categories')
