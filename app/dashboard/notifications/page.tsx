@@ -3,6 +3,8 @@ import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
 import NotificationsList, { type InboxItem } from './NotificationsList'
 import { logError } from '@/lib/logger'
+import { createServiceClient } from '@/lib/supabase/service'
+import { resolveVerifiedPostIds } from '@/lib/channel-verification'
 
 export const dynamic = 'force-dynamic'
 
@@ -102,10 +104,20 @@ export default async function NotificationsPage() {
     )
   }
 
-  const items: InboxItem[] = ((rows || []) as unknown as NotificationRow[]).map(row => {
+  const notificationRows = (rows || []) as unknown as NotificationRow[]
+
+  // Drafts are approvable only on channels whose ownership is verified. Service
+  // client because the grant table is service-role only; creator.id is from the
+  // session. Fails closed: a post that can't be resolved is not actionable.
+  const postIds = [...new Set(notificationRows.map(r => r.comments?.post_id).filter((id): id is string => Boolean(id)))]
+  const actionablePostIds = await resolveVerifiedPostIds(createServiceClient(), creator.id, postIds)
+
+  const items: InboxItem[] = notificationRows.map(row => {
     const comment = row.comments
     const info = comment?.comment_categories ?? null
     const approved = Boolean(info?.draft_reply_approved_at)
+    const pendingDraft = !approved && Boolean(info?.draft_reply)
+    const draftLocked = pendingDraft && !actionablePostIds.has(comment?.post_id ?? '')
 
     return {
       id: row.id,
@@ -124,11 +136,13 @@ export default async function NotificationsPage() {
             category: info?.category ?? null,
             // A draft that has already been approved is no longer actionable, so the
             // card renders as history rather than offering Approve a second time.
-            draftReply: approved ? null : info?.draft_reply ?? null,
+            // Locked drafts are withheld here, so the editor never renders them.
+            draftReply: approved || draftLocked ? null : info?.draft_reply ?? null,
             finalReplyText: info?.final_reply_text ?? null,
             draftConfidence: info?.draft_confidence ?? null,
             escalationFlag: info?.escalation_flag ?? null,
             approved,
+            draftLocked,
           }
         : null,
     }

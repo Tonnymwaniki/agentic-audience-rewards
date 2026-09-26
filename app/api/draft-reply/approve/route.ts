@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
-import { logError } from '@/lib/logger'
+import { logError, logInfo } from '@/lib/logger'
+import { checkPostVerification, VERIFY_OWNERSHIP_MESSAGE, VERIFY_OWNERSHIP_PATH } from '@/lib/channel-verification'
 
 export async function POST(request: NextRequest) {
   try {
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
     // Confirm the comment belongs to one of this creator's posts before touching it.
     const { data: comment, error: commentError } = await supabase
       .from('comments')
-      .select('id, posts (creator_id)')
+      .select('id, post_id, posts (creator_id)')
       .eq('id', comment_id)
       .single()
 
@@ -29,6 +30,24 @@ export async function POST(request: NextRequest) {
 
     if (commentError || !comment || ownerCreatorId !== creatorId) {
       return NextResponse.json({ error: 'Comment not found' }, { status: 404 })
+    }
+
+    // CAPABILITY GATE, same as drafting: approving puts a reply in the channel
+    // owner's voice, so it needs proven ownership. This is the enforcement behind
+    // hiding pre-verification drafts from the inbox — a hidden draft must not stay
+    // approvable by calling this endpoint directly.
+    const verification = await checkPostVerification(supabase, creatorId, comment.post_id as string)
+    if (!verification.verified) {
+      logInfo('api/draft-reply/approve', 'Refused: channel ownership not verified', {
+        creator_id: creatorId,
+        comment_id,
+        post_id: comment.post_id,
+        reason: verification.reason,
+      })
+      return NextResponse.json(
+        { error: VERIFY_OWNERSHIP_MESSAGE, reason: verification.reason, verify_url: VERIFY_OWNERSHIP_PATH },
+        { status: 403 }
+      )
     }
 
     // Read the agent's original before writing, so "was this edited?" is decided

@@ -608,6 +608,13 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     language: c.language,
     sentiment: c.sentiment,
     emotion: c.emotion,
+    // Explicitly NULL: the column was created with DEFAULT now() (migration 7), so
+    // omitting it stamped a "draft created" time on every categorized comment,
+    // drafted or not — 94% of rows carried a draft timestamp with no draft. The
+    // timestamp is written only below, alongside an actual draft. These are always
+    // new rows (only uncategorized comments reach this upsert), so nothing real is
+    // cleared. Migration 39 drops the default as well.
+    draft_reply_created_at: null,
   }))
 
   let { error: upsertError } = await supabase

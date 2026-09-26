@@ -1,6 +1,7 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { countsAsRecognition } from '@/lib/rewards/status'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import MascotIcon from '@/components/MascotIcon'
 import LogoutButton from './LogoutButton'
@@ -208,13 +209,14 @@ export default async function MePage() {
     if (memberIds.length > 0) {
       // Distinct people, not events: someone recognized three times is one person
       // here, which is what "people recognized" says.
-      const events = await fetchInBatches<{ audience_member_id: string }>(supabase, {
+      const events = await fetchInBatches<{ audience_member_id: string; status: string }>(supabase, {
         table: 'reward_events',
-        select: 'audience_member_id',
+        select: 'audience_member_id, status',
         inColumn: 'audience_member_id',
         inValues: memberIds,
       })
-      peopleRecognized = new Set(events.map(e => e.audience_member_id)).size
+      // Voided rewards are audit rows, not recognition.
+      peopleRecognized = new Set(events.filter(e => countsAsRecognition(e.status)).map(e => e.audience_member_id)).size
     }
   }
 

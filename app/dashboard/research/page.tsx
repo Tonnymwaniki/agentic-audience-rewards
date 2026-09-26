@@ -1,5 +1,8 @@
 import { redirect } from 'next/navigation'
 import { createClient } from '@/lib/supabase/server'
+import { countsAsRecognition } from '@/lib/rewards/status'
+import { createServiceClient } from '@/lib/supabase/service'
+import { resolveVerifiedPostIds } from '@/lib/channel-verification'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { computeTrendingGroups, computeSentiment, type TrendingComment } from '@/lib/trending'
 import ResearchChat from './ResearchChat'
@@ -204,8 +207,13 @@ async function loadSidebarData(
 
     const commentById = new Map(comments.map(c => [c.id, c]))
 
+    // Only drafts on verified channels are waiting on approval; pre-verification
+    // drafts on unverified channels can't be approved. Service client for the
+    // grant lookup; creatorId is from the session.
+    const actionablePostIds = await resolveVerifiedPostIds(createServiceClient(), creatorId, postIds)
     const pending = categories
       .filter(c => c.draft_reply && !c.draft_reply_approved_at)
+      .filter(c => actionablePostIds.has(commentById.get(c.comment_id)?.post_id ?? ''))
       .sort((a, b) => {
         const aTime = a.draft_reply_created_at ? new Date(a.draft_reply_created_at).getTime() : 0
         const bTime = b.draft_reply_created_at ? new Date(b.draft_reply_created_at).getTime() : 0
@@ -237,15 +245,18 @@ async function loadSidebarData(
       const rewardEvents = await fetchInBatches<{
         reason: string
         created_at: string
+        status: string
         audience_members: unknown
       }>(supabase, {
         table: 'reward_events',
-        select: 'reason, created_at, audience_members ( display_name )',
+        select: 'reason, created_at, status, audience_members ( display_name )',
         inColumn: 'audience_member_id',
         inValues: memberIds,
       })
 
+      // Voided rewards are not recognition, so they are not "X recognized" insights.
       const recentRewards = rewardEvents
+        .filter(e => countsAsRecognition(e.status))
         .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
         .slice(0, SIDEBAR_INSIGHTS_LIMIT)
 

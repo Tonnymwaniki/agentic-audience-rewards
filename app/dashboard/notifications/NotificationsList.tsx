@@ -20,6 +20,11 @@ export type InboxComment = {
   draftConfidence: string | null
   escalationFlag: string | null
   approved: boolean
+  /**
+   * A draft exists but its channel's ownership is not verified (written before
+   * verification existed). Kept, never offered for approval — draftReply is null.
+   */
+  draftLocked: boolean
 }
 
 export type InboxItem = {
@@ -163,6 +168,16 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                   finalReplyText={comment.finalReplyText}
                   onApproved={() => void markRead(item.id)}
                 />
+              )}
+
+              {comment?.draftLocked && (
+                <p className="mt-2 rounded-md border border-white/10 bg-surface-hover p-3 text-xs leading-snug text-text-muted">
+                  A reply was drafted before channel verification existed. Replies on this channel need verified
+                  ownership, so it can&apos;t be approved.{' '}
+                  <a href="/api/auth/youtube/start" className="text-purple-text underline hover:text-purple-hover">
+                    Verify ownership
+                  </a>
+                </p>
               )}
 
               {comment?.approved && <p className="mt-2 text-xs text-green">Reply approved</p>}

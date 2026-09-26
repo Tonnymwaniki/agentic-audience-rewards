@@ -6,6 +6,9 @@ import TrackVideoToggle from '@/components/TrackVideoToggle'
 import CommentsList from './CommentsList'
 import RegenerateDraftsButton from './RegenerateDraftsButton'
 import { logError } from '@/lib/logger'
+import { createServiceClient } from '@/lib/supabase/service'
+import { checkPostVerification } from '@/lib/channel-verification'
+import { countsAsRecognition } from '@/lib/rewards/status'
 import { formatEngagementRate, loadPostEngagement } from '@/lib/engagement'
 
 export const dynamic = 'force-dynamic'
@@ -110,6 +113,7 @@ export default async function PostInboxPage({
             category,
             topic,
             draft_reply,
+            draft_reply_approved_at,
             final_reply_text
           )
         `
@@ -143,6 +147,15 @@ export default async function PostInboxPage({
     )
   }
 
+  // Pending drafts are approvable only when this video's channel is verified
+  // (service client: the grant table is service-role only; creator.id is from the
+  // session). Approved replies stay visible as history either way.
+  const postVerified = (await checkPostVerification(createServiceClient(), creator.id, postId)).verified
+  const categoryOf = (comment: CommentRow) =>
+    comment.comment_categories as unknown as { draft_reply?: string | null; draft_reply_approved_at?: string | null } | null
+  const isLockedDraft = (comment: CommentRow) =>
+    !postVerified && Boolean(categoryOf(comment)?.draft_reply) && !categoryOf(comment)?.draft_reply_approved_at
+
   const formattedComments = comments.map(comment => ({
     id: comment.id,
     text: comment.text,
@@ -151,7 +164,8 @@ export default async function PostInboxPage({
     profileSummary: (comment.audience_members as unknown as { profile_summary: string | null } | null)?.profile_summary || null,
     category: (comment.comment_categories as unknown as { category: string; topic: string; draft_reply?: string | null } | null)?.category || 'other',
     topic: (comment.comment_categories as unknown as { category: string; topic: string; draft_reply?: string | null } | null)?.topic || null,
-    draftReply: (comment.comment_categories as unknown as { draft_reply?: string | null } | null)?.draft_reply || null,
+    draftReply: isLockedDraft(comment) ? null : categoryOf(comment)?.draft_reply || null,
+    draftLocked: isLockedDraft(comment),
     finalReplyText: (comment.comment_categories as unknown as { final_reply_text?: string | null } | null)?.final_reply_text || null,
     audienceMemberId: comment.audience_member_id,
   }))
@@ -163,11 +177,13 @@ export default async function PostInboxPage({
   if (memberIds.length > 0) {
     const { data: rewardEvents } = await supabase
       .from('reward_events')
-      .select('audience_member_id, post_id')
+      .select('audience_member_id, post_id, status')
       .in('audience_member_id', memberIds)
 
     if (rewardEvents) {
       rewardEvents.forEach(e => {
+        // Voided rewards were never genuine recognition.
+        if (!countsAsRecognition(e.status)) return
         if (e.post_id === postId || e.post_id === null) {
           rewardedMemberIds.add(e.audience_member_id)
         }

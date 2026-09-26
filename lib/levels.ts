@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { logError } from '@/lib/logger'
+import { VOIDED_UNVERIFIED_STATUS } from '@/lib/rewards/status'
 
 /**
  * A person's level, combining how often the creator has recognized them with how
@@ -43,7 +44,11 @@ export const LEVEL_RULES: Record<AudienceLevel, string> = {
 export type LevelSignals = {
   totalComments: number
   distinctPosts: number
-  /** reward_events for this person. They belong to one creator, so this is already creator-scoped. */
+  /**
+   * GENUINE reward_events for this person — voided rows (issued before ownership
+   * verification) are not recognition and never raise a level. They belong to one
+   * creator, so this is already creator-scoped.
+   */
   recognitionCount: number
 }
 
@@ -126,6 +131,7 @@ export async function updateAudienceLevel(
     .from('reward_events')
     .select('id', { count: 'exact', head: true })
     .eq('audience_member_id', audienceMemberId)
+    .neq('status', VOIDED_UNVERIFIED_STATUS)
   if (rewardError) {
     logError('levels.updateAudienceLevel', rewardError, { audience_member_id: audienceMemberId, stage: 'count_reward_events' })
     return null

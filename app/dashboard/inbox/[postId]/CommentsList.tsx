@@ -15,6 +15,8 @@ type Comment = {
   topic: string | null
   hasReward?: boolean
   draftReply?: string | null
+  /** Drafted before ownership verification, channel still unverified: not approvable. */
+  draftLocked?: boolean
   finalReplyText?: string | null
   profileSummary?: string | null
 }
@@ -206,6 +208,16 @@ export default function CommentsList({ comments, peopleNoticed, repeatedCommentI
                     <p className="text-xs font-medium text-text-muted">🧠 What we know about this person</p>
                     <p className="mt-1 text-sm italic text-text-muted">{current.profileSummary}</p>
                   </div>
+                )}
+
+                {current.draftLocked && !getDraftReply(current) && (
+                  <p className="mt-5 rounded-md border border-white/10 bg-surface-hover p-3 text-xs leading-snug text-text-muted">
+                    A reply was drafted before channel verification existed. Replies on this channel need verified
+                    ownership, so it can&apos;t be approved.{' '}
+                    <a href="/api/auth/youtube/start" className="text-purple-text underline hover:text-purple-hover">
+                      Verify ownership
+                    </a>
+                  </p>
                 )}
 
                 {getDraftReply(current) && (

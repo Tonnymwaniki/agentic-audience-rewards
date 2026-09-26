@@ -1,13 +1,16 @@
 import { createServiceClient } from '@/lib/supabase/service'
 import Link from 'next/link'
 import { logError } from '@/lib/logger'
+import { VOIDED_UNVERIFIED_STATUS } from '@/lib/rewards/status'
+import { maskIdentity, publicReason, MIN_PUBLIC_REASON_LENGTH } from '@/lib/public-recognition'
 
 async function getStats() {
   const supabase = createServiceClient()
 
   const [commentsResult, eventsResult] = await Promise.all([
     supabase.from('comments').select('id', { count: 'exact', head: true }),
-    supabase.from('reward_events').select('audience_member_id', { count: 'exact', head: true }),
+    // Voided rewards (issued before ownership verification) were never recognition.
+    supabase.from('reward_events').select('audience_member_id', { count: 'exact', head: true }).neq('status', VOIDED_UNVERIFIED_STATUS),
   ])
 
   if (commentsResult.error) {
@@ -17,8 +20,6 @@ async function getStats() {
     logError('page.landing', eventsResult.error, { stage: 'count_reward_events' })
   }
 
-  console.log("Querying table: comment_categories")
-
   const { count: categoriesCount, error: categoriesError } = await supabase
     .from('comment_categories')
     .select('comment_id', { count: 'exact', head: true })
@@ -26,25 +27,17 @@ async function getStats() {
   if (categoriesError) {
     logError('page.landing', categoriesError, { stage: 'count_categories' })
   }
-  console.log("CATEGORIES COUNT RESULT:", categoriesCount)
-
-  console.log("LIVE PROOF RAW RESULTS:", {
-    comments: commentsResult.count,
-    categories: categoriesCount,
-    events: eventsResult.count,
-  })
 
   let uniqueRecognized = eventsResult.count || 0
   if (eventsResult.count && eventsResult.count > 0) {
     const { data: eventMembers, error: eventMembersError } = await supabase
       .from('reward_events')
       .select('audience_member_id')
+      .neq('status', VOIDED_UNVERIFIED_STATUS)
 
     if (eventMembersError) {
       logError('page.landing', eventMembersError, { stage: 'count_people_recognized' })
     }
-    console.log("PEOPLE RECOGNIZED RESULT:", eventMembers ? new Set(eventMembers.map(e => e.audience_member_id)).size : 'no data')
-
     if (eventMembers) {
       uniqueRecognized = new Set(eventMembers.map(e => e.audience_member_id)).size
     }
@@ -57,39 +50,53 @@ async function getStats() {
   }
 }
 
+/**
+ * Three recent recognitions for the public front page, with the same protections as
+ * /recognized: handles masked, quoted comment text stripped, internal vocabulary
+ * replaced (lib/public-recognition.ts).
+ *
+ * Only genuine rewards: claimed on-chain first, then ones awaiting claim. Both
+ * queries name their status explicitly, so a voided reward (status
+ * voided_unverified — issued before ownership verification) can never be chosen as
+ * an example of recognition. More candidates than needed are read because a reason
+ * that was mostly quotation is too thin to show once stripped.
+ */
 async function getRecentRewards() {
   const supabase = createServiceClient()
+  const SHOWN = 3
+  const CANDIDATES = 15
 
   const { data: mintedEvents, error: mintedError } = await supabase
     .from('reward_events')
-    .select('id, reason, audience_member_id, audience_members (display_name)')
+    .select('reason, audience_members (display_name)')
     .eq('status', 'minted')
     .order('created_at', { ascending: false })
-    .limit(3)
+    .limit(CANDIDATES)
 
   if (mintedError) {
-    logError('page.landing', mintedError, { stage: 'recent_rewards' })
+    logError('page.landing', mintedError, { stage: 'recent_rewards_minted' })
   }
 
-  const events = mintedEvents || []
+  const { data: pendingEvents, error: pendingError } = await supabase
+    .from('reward_events')
+    .select('reason, audience_members (display_name)')
+    .eq('status', 'pending')
+    .order('created_at', { ascending: false })
+    .limit(CANDIDATES)
 
-  if (events.length < 3) {
-    const { data: pendingEvents } = await supabase
-      .from('reward_events')
-      .select('id, reason, audience_member_id, audience_members (display_name)')
-      .eq('status', 'pending')
-      .order('created_at', { ascending: false })
-      .limit(3 - events.length)
-
-    if (pendingEvents) {
-      events.push(...pendingEvents)
-    }
+  if (pendingError) {
+    logError('page.landing', pendingError, { stage: 'recent_rewards_pending' })
   }
 
-  return events.map(event => ({
-    display_name: (event.audience_members as unknown as { display_name: string } | null)?.display_name || 'Someone',
-    reason: event.reason || '',
-  }))
+  // Masked and cleaned HERE, before anything becomes a prop, so the real handle and
+  // the raw reason never reach the HTML or the serialised RSC payload.
+  return [...(mintedEvents ?? []), ...(pendingEvents ?? [])]
+    .map(event => ({
+      display_name: maskIdentity((event.audience_members as unknown as { display_name: string | null } | null)?.display_name ?? null),
+      reason: publicReason(event.reason),
+    }))
+    .filter(event => event.reason.length >= MIN_PUBLIC_REASON_LENGTH)
+    .slice(0, SHOWN)
 }
 
 function AnimatedMockup() {

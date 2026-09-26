@@ -84,7 +84,13 @@ function getCategoryInfo(row: CommentRow): CategoryInfo | null {
 export async function loadHighlights(
   supabase: SupabaseClient,
   creatorId: string,
-  limit: number
+  limit: number,
+  /**
+   * Posts whose drafts are actionable (channel ownership verified). Drafts on any
+   * other post are not pending work and are left out BEFORE the limit is applied,
+   * so they cannot crowd actionable drafts out of the preview. Omitted = no drafts.
+   */
+  actionablePostIds: Set<string> = new Set()
 ): Promise<HighlightsResult> {
   const { data: posts, error: postsError } = await supabase
     .from('posts')
@@ -155,7 +161,8 @@ export async function loadHighlights(
           cat?.category === category &&
           !cat.escalation_flag &&
           cat.draft_reply &&
-          !cat.draft_reply_approved_at
+          !cat.draft_reply_approved_at &&
+          actionablePostIds.has(c.post_id)
         )
       })
       .sort(sortByDraftRecency)

@@ -11,3 +11,12 @@ export const VOIDED_UNVERIFIED_MESSAGE =
 export function isVoidedReward(status: string | null | undefined): boolean {
   return status === VOIDED_UNVERIFIED_STATUS
 }
+
+/**
+ * Whether a reward row represents genuine recognition. Voided rows are kept as an
+ * audit trail but never count toward "people recognized", lifetime summaries or
+ * anything else presented as recognition — they were never valid rewards.
+ */
+export function countsAsRecognition(status: string | null | undefined): boolean {
+  return !isVoidedReward(status)
+}

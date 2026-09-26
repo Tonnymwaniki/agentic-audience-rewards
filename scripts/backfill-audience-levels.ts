@@ -6,7 +6,10 @@
  * comments or recognitions arrive. Day to day it isn't needed: lib/audience-memory.ts
  * recomputes a person's level whenever their profile is refreshed.
  *
- * Writes ONLY audience_members.level.
+ * Writes ONLY audience_members.level, and only for members whose level changes;
+ * every change is reported as from -> to.
+ *
+ * Voided rewards (status voided_unverified) are not recognition and are not counted.
  *
  * Unlike the segment backfill this covers EVERY member, not just those with
  * comments: someone recognized for a comment that was later deleted still has a
@@ -24,6 +27,7 @@ loadEnvConfig(process.cwd())
 
 import { createServiceClient } from '../lib/supabase/service'
 import { computeLevel, signalsFromHistory, LEVELS, type AudienceLevel } from '../lib/levels'
+import { countsAsRecognition } from '../lib/rewards/status'
 
 const dryRun = process.argv.includes('--dry-run')
 
@@ -58,16 +62,16 @@ async function main() {
 
   // Three bulk reads, grouped in memory, rather than two queries per member — a
   // channel with thousands of people would otherwise cost thousands of round trips.
-  const members = await readAll<{ id: string }>(
-    (from, to) => supabase.from('audience_members').select('id').order('id').range(from, to),
+  const members = await readAll<{ id: string; level: string | null }>(
+    (from, to) => supabase.from('audience_members').select('id, level').order('id').range(from, to),
     'audience members'
   )
   const comments = await readAll<{ audience_member_id: string | null; post_id: string }>(
     (from, to) => supabase.from('comments').select('audience_member_id, post_id').order('id').range(from, to),
     'comments'
   )
-  const rewards = await readAll<{ audience_member_id: string | null }>(
-    (from, to) => supabase.from('reward_events').select('audience_member_id').order('id').range(from, to),
+  const rewards = await readAll<{ audience_member_id: string | null; status: string }>(
+    (from, to) => supabase.from('reward_events').select('audience_member_id, status').order('id').range(from, to),
     'reward events'
   )
 
@@ -81,15 +85,18 @@ async function main() {
 
   const rewardsByMember = new Map<string, number>()
   for (const r of rewards) {
-    if (!r.audience_member_id) continue
+    if (!r.audience_member_id || !countsAsRecognition(r.status)) continue
     rewardsByMember.set(r.audience_member_id, (rewardsByMember.get(r.audience_member_id) ?? 0) + 1)
   }
 
   console.log(
-    `${members.length} members, ${comments.length} comments, ${rewards.length} recognitions loaded.`
+    `${members.length} members, ${comments.length} comments, ${rewards.length} reward events loaded ` +
+      `(${rewards.filter(r => !countsAsRecognition(r.status)).length} voided, not counted).`
   )
 
   const tally: Record<string, number> = Object.fromEntries(LEVELS.map(l => [l, 0]))
+  const before: Record<string, number> = {}
+  const transitions: Record<string, number> = {}
   const updates: Array<{ id: string; level: AudienceLevel }> = []
 
   for (const member of members) {
@@ -97,10 +104,16 @@ async function main() {
       signalsFromHistory(commentsByMember.get(member.id) ?? [], rewardsByMember.get(member.id) ?? 0)
     )
     tally[level]++
+    const old = member.level ?? 'null'
+    before[old] = (before[old] ?? 0) + 1
+    if (member.level === level) continue
+    transitions[`${old} -> ${level}`] = (transitions[`${old} -> ${level}`] ?? 0) + 1
     updates.push({ id: member.id, level })
   }
 
-  console.log(`level mix: ${JSON.stringify(tally)}`)
+  console.log(`level mix before: ${JSON.stringify(before)}`)
+  console.log(`level mix after:  ${JSON.stringify(tally)}`)
+  console.log(`changes (${updates.length}): ${JSON.stringify(transitions)}`)
   if (dryRun) {
     console.log('DRY RUN — nothing written.')
     return

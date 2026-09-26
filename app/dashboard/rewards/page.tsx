@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { countsAsRecognition } from '@/lib/rewards/status'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import PageHeader from '@/components/PageHeader'
 import MascotIcon from '@/components/MascotIcon'
@@ -217,7 +218,12 @@ export default async function RewardsPage({
   //
   // "People" is deliberately distinct members, not event count: one person can be
   // recognized on more than one video, and counting events would overstate reach.
-  const peopleRecognizedCount = new Set(formattedEvents.map(e => e.audienceMemberId)).size
+  //
+  // Voided rows stay in the list below (struck through, for the audit trail) but
+  // are not recognition, so they are left out of this count.
+  const peopleRecognizedCount = new Set(
+    formattedEvents.filter(e => countsAsRecognition(e.status)).map(e => e.audienceMemberId)
+  ).size
   const pendingClaimsCount = formattedEvents.filter(e => e.status === 'pending').length
 
   return (

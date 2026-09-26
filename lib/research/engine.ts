@@ -11,6 +11,8 @@ import { SEGMENTS, type AudienceSegment } from '@/lib/segments'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 import { logError, logWarn } from '@/lib/logger'
+import { resolveVerifiedPostIds } from '@/lib/channel-verification'
+import { countsAsRecognition } from '@/lib/rewards/status'
 import { engagementFact, loadPostEngagement } from '@/lib/engagement'
 
 const MAX_TOOL_ROUNDS = 5
@@ -34,6 +36,12 @@ export type ToolContext = {
   postIds: string[]
   postMap: Map<string, string>
   postThumbnails: Map<string, string | null>
+  /**
+   * Posts on channels whose ownership is verified: only their drafts are pending
+   * work. Drafts written before verification existed, on unverified channels, are
+   * never reported as awaiting approval — they can't be approved.
+   */
+  actionablePostIds: Set<string>
   /** Comments and videos returned by tools this turn, addressable by short ref for citations. */
   evidence: EvidenceRegistry
 }
@@ -1038,12 +1046,14 @@ async function fetchCreatorRewardEvents(ctx: ToolContext): Promise<RewardEventRo
   const memberIds = (members || []).map(m => m.id)
   if (memberIds.length === 0) return []
 
-  return fetchInBatches<RewardEventRow>(ctx.supabase, {
+  const events = await fetchInBatches<RewardEventRow>(ctx.supabase, {
     table: 'reward_events',
     select: 'id, post_id, audience_member_id, reason, status, created_at, audience_members ( display_name )',
     inColumn: 'audience_member_id',
     inValues: memberIds,
   })
+  // Voided rewards were never recognition; Research never reports them as such.
+  return events.filter(e => countsAsRecognition(e.status))
 }
 
 function daysAgo(days: number): Date {
@@ -1092,7 +1102,7 @@ async function toolGetPendingActions(ctx: ToolContext) {
 
   const pending = comments.filter(c => {
     const cat = getCatInfo(c)
-    return cat?.draft_reply && !cat.draft_reply_approved_at
+    return cat?.draft_reply && !cat.draft_reply_approved_at && ctx.actionablePostIds.has(c.post_id)
   })
 
   const priority = (category: string) => (category === 'purchase_intent' ? 0 : category === 'complaint' ? 1 : category === 'question' ? 2 : 3)
@@ -1196,7 +1206,7 @@ async function toolGetChannelOverview(ctx: ToolContext) {
     for (const topic of cat.topics?.length ? cat.topics : [cat.topic]) {
       if (topic) topicCounts[topic] = (topicCounts[topic] || 0) + 1
     }
-    if (cat.draft_reply && !cat.draft_reply_approved_at) pendingInquiries++
+    if (cat.draft_reply && !cat.draft_reply_approved_at && ctx.actionablePostIds.has(c.post_id)) pendingInquiries++
   }
 
   const categoryPercentages: Record<string, number> = {}
@@ -1384,7 +1394,7 @@ async function toolGetWeeklyDigest(ctx: ToolContext) {
     const cat = getCatInfo(c)
 
     // Pending inquiries are current state, not a this-week-only measure.
-    if (cat?.draft_reply && !cat.draft_reply_approved_at) pendingInquiries++
+    if (cat?.draft_reply && !cat.draft_reply_approved_at && ctx.actionablePostIds.has(c.post_id)) pendingInquiries++
 
     const posted = new Date(c.posted_at)
     if (isNaN(posted.getTime()) || posted < weekCutoff) continue
@@ -1976,6 +1986,8 @@ export async function buildResearchContext(supabase: SupabaseClient, creator_id:
       postIds: postList.map(p => p.id),
       postMap: new Map(postList.map(p => [p.id, p.title])),
       postThumbnails: new Map(postList.map(p => [p.id, p.thumbnail_url as string | null])),
+      // Callers pass the service client (the grant table is service-role only).
+      actionablePostIds: await resolveVerifiedPostIds(supabase, creator_id, postList.map(p => p.id)),
       evidence: new EvidenceRegistry(),
     }
 

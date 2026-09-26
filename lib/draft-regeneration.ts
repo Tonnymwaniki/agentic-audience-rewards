@@ -221,9 +221,12 @@ export async function regenerateDraftsForCreator(
   // the back of the queue. Called for EVERY outcome — drafted, skipped, or failed —
   // because an unstamped comment stays at the front and blocks the next run.
   async function markChecked(commentId: string, extra: Record<string, unknown> = {}) {
+    // Clearing a draft clears its creation time too — a draft_reply_created_at
+    // with no draft_reply reads as "a draft was written" to anything counting them.
+    const cleared = 'draft_reply' in extra && extra.draft_reply === null ? { draft_reply_created_at: null } : {}
     const { error } = await supabase
       .from('comment_categories')
-      .update({ draft_reply_checked_at: new Date().toISOString(), ...extra })
+      .update({ draft_reply_checked_at: new Date().toISOString(), ...extra, ...cleared })
       .eq('comment_id', commentId)
 
     if (error) {
