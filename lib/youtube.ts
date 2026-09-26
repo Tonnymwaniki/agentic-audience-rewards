@@ -59,7 +59,9 @@ export async function fetchVideoMeta(videoId: string) {
   // snippet, statistics and contentDetails in ONE request — videos.list accepts
   // multiple parts, so asking separately would multiply the quota cost for the same
   // data.
-  url.searchParams.set('part', 'snippet,statistics,contentDetails')
+  // liveStreamingDetails added for stream/premiere times. Extra parts on
+  // videos.list do not change the quota cost — it is 1 unit per call regardless.
+  url.searchParams.set('part', 'snippet,statistics,contentDetails,liveStreamingDetails')
   url.searchParams.set('id', videoId)
   url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
 
@@ -98,6 +100,17 @@ export async function fetchVideoMeta(videoId: string) {
     viewCount: parseCount(statistics.viewCount),
     durationSeconds: parseIsoDuration(item.contentDetails?.duration),
     youtubeCategory: await youtubeCategoryName(snippet.categoryId),
+    // YouTube's own public comment count — not what we ingested.
+    commentCount: parseCount(statistics.commentCount),
+    tags: Array.isArray(snippet.tags) ? (snippet.tags as string[]) : null,
+    // contentDetails.caption is the STRING "true"/"false", not a boolean, and only
+    // covers captions the uploader published — not YouTube's auto-generated ones.
+    hasCaptions:
+      item.contentDetails?.caption === 'true' ? true : item.contentDetails?.caption === 'false' ? false : null,
+    liveScheduledStart: item.liveStreamingDetails?.scheduledStartTime ?? null,
+    liveScheduledEnd: item.liveStreamingDetails?.scheduledEndTime ?? null,
+    liveActualStart: item.liveStreamingDetails?.actualStartTime ?? null,
+    liveActualEnd: item.liveStreamingDetails?.actualEndTime ?? null,
   }
 }
 
@@ -111,6 +124,10 @@ export type FetchedComment = {
   likeCount: number
   /** Replies YouTube reports on this thread (top-level comments only). */
   replyCount: number
+  /** When the commenter last edited it; equals publishedAt if never edited. */
+  updatedAt: string | null
+  /** The commenter's avatar. Public on YouTube, but identifying — see migration 37. */
+  authorProfileImageUrl: string | null
 }
 
 export type FetchedReply = FetchedComment & {
@@ -159,6 +176,8 @@ export async function fetchVideoComments(videoId: string) {
         publishedAt: top.publishedAt,
         likeCount: parseCount(top.likeCount) ?? 0,
         replyCount: parseCount(item.snippet.totalReplyCount) ?? 0,
+        updatedAt: top.updatedAt ?? null,
+        authorProfileImageUrl: top.authorProfileImageUrl ?? null,
       })
     }
 
@@ -226,6 +245,8 @@ export async function fetchCommentReplies(
             // Replies can't be replied to on YouTube; a nested reply's parent is
             // still the top-level comment.
             replyCount: 0,
+            updatedAt: snippet.updatedAt ?? null,
+            authorProfileImageUrl: snippet.authorProfileImageUrl ?? null,
           })
         }
 

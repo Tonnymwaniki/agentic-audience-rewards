@@ -120,7 +120,15 @@ export async function runAnalysis(
             })
           } else if (statusData.analysis_status === 'error') {
             stop()
-            resolve({ status: 'error', error: 'Analysis failed. Please try again.' })
+            // An interrupted run (lib/analysis-staleness.ts) didn't fail on its
+            // content — its background job was killed — so say that plainly.
+            const interrupted = statusData.analysis_stage?.startsWith('interrupted')
+            resolve({
+              status: 'error',
+              error: interrupted
+                ? 'Analysis was interrupted before it finished. Please run it again.'
+                : 'Analysis failed. Please try again.',
+            })
           }
         } catch {
           // Polling errors are non-fatal; the next tick retries.

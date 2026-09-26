@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation'
 import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import PageHeader from '@/components/PageHeader'
 import PasteVideoLink from './PasteVideoLink'
@@ -8,6 +9,7 @@ import VideoGrid from './VideoGrid'
 import { logError } from '@/lib/logger'
 import { getChannelVerificationSummary, type ChannelSummary } from '@/lib/channel-verification'
 import ChannelVerificationBanner from './ChannelVerificationBanner'
+import { engagementLabel, formatEngagementRate, loadPostEngagement } from '@/lib/engagement'
 
 export const dynamic = 'force-dynamic'
 
@@ -170,6 +172,10 @@ export default async function InboxPage() {
   // An analyzed video is shown from its post row, which is the one that carries the
   // comment counts. Videos the sync found but nobody has analyzed yet are shown from
   // their channel_videos row, dimmed, with an Analyze button.
+  // One batched read for every analyzed card, via the same helper Research uses,
+  // so the card and the agent can never quote different rates for one video.
+  const engagementByPost = await loadPostEngagement(supabase, postList.map(p => p.id))
+
   const analyzedCards = postList.map(post => ({
     id: post.id,
     postId: post.id,
@@ -178,6 +184,11 @@ export default async function InboxPage() {
     sortedAt: post.ingested_at,
     durationSeconds: (post.duration_seconds as number | null) ?? null,
     viewCount: (post.view_count as number | null) ?? null,
+    engagement: (() => {
+      const e = engagementByPost.get(post.id)
+      const rate = e ? formatEngagementRate(e.rate) : null
+      return e && rate ? { rate, likesHidden: e.likesHidden, full: engagementLabel(e) ?? rate } : null
+    })(),
     thumbnailUrl: post.thumbnail_url,
     total: totalCounts[post.id] || 0,
     categorized: categorizedCounts[post.id] || 0,
@@ -214,8 +225,14 @@ export default async function InboxPage() {
   // Per-channel ownership status. Never throws the page: a failure here means the
   // banner is absent, not that My Videos is unavailable.
   let channelSummary: ChannelSummary[] = []
+  //
+  // Service client, not the cookie client: the summary reads youtube_oauth_tokens,
+  // which has RLS enabled and no policies. Under the signed-in user's session that
+  // read returns zero rows WITHOUT an error, so every channel — including ones the
+  // creator genuinely verified — was shown as unverified. Safe to bypass RLS here
+  // because creator.id was derived from the session above, never from the request.
   try {
-    channelSummary = await getChannelVerificationSummary(supabase, creator.id)
+    channelSummary = await getChannelVerificationSummary(createServiceClient(), creator.id)
   } catch (summaryError) {
     logError('page.inbox', summaryError, { creator_id: creator.id, stage: 'channel_verification_summary' })
   }

@@ -34,15 +34,27 @@ export async function refreshChannelStats(
     return { success: false, error: err instanceof Error ? err.message : 'Failed to fetch channel stats' }
   }
 
-  const { error: updateError } = await supabase
+  const baseUpdate = {
+    subscriber_count: stats.subscriberCount,
+    channel_view_count: stats.viewCount,
+    channel_video_count: stats.videoCount,
+    channel_stats_updated_at: new Date().toISOString(),
+  }
+
+  // Migration 37 columns. Tried first; on a database without them the write is
+  // retried without, so a code deploy that lands before the migration still keeps
+  // the core stats current instead of failing the whole refresh.
+  let { error: updateError } = await supabase
     .from('creators')
-    .update({
-      subscriber_count: stats.subscriberCount,
-      channel_view_count: stats.viewCount,
-      channel_video_count: stats.videoCount,
-      channel_stats_updated_at: new Date().toISOString(),
-    })
+    .update({ ...baseUpdate, channel_created_at: stats.createdAt, channel_country: stats.country })
     .eq('id', creatorId)
+
+  if (updateError && (updateError.code === 'PGRST204' || updateError.code === '42703')) {
+    logWarn('channelStats.refresh', 'Channel created/country columns missing (migration 37); writing core stats only', {
+      creator_id: creatorId,
+    })
+    ;({ error: updateError } = await supabase.from('creators').update(baseUpdate).eq('id', creatorId))
+  }
 
   if (updateError) {
     logError('channelStats.refresh', updateError, { stage: 'write_current_stats' })

@@ -6,6 +6,7 @@ import TrackVideoToggle from '@/components/TrackVideoToggle'
 import CommentsList from './CommentsList'
 import RegenerateDraftsButton from './RegenerateDraftsButton'
 import { logError } from '@/lib/logger'
+import { formatEngagementRate, loadPostEngagement } from '@/lib/engagement'
 
 export const dynamic = 'force-dynamic'
 
@@ -203,9 +204,44 @@ export default async function PostInboxPage({
 
   const repeatedCommentIds = Array.from(repeatedCommentIdsSet)
 
+  // Same helper as the My Videos card and the Research agent — one definition of
+  // the number, so the three can never disagree about a video.
+  const engagement = (await loadPostEngagement(supabase, [post.id])).get(post.id) ?? null
+  const engagementRate = engagement ? formatEngagementRate(engagement.rate) : null
+
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader title={post.title} backHref="/dashboard/inbox" backLabel="My Videos" />
+
+      {engagement && (
+        <section aria-labelledby="engagement-rate" className="card mb-4">
+          <div className="flex items-baseline justify-between gap-3">
+            <h2 id="engagement-rate" className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+              Engagement rate
+            </h2>
+            {engagementRate && (
+              <p className="font-display text-2xl leading-none font-semibold text-teal">{engagementRate}</p>
+            )}
+          </div>
+          {engagementRate ? (
+            <p className="mt-2 text-xs leading-relaxed text-text-muted">
+              {engagement.comments.toLocaleString()} comments
+              {engagement.likes !== null ? ` + ${engagement.likes.toLocaleString()} likes` : ''}
+              {' '}over {engagement.views!.toLocaleString()} views.{' '}
+              {/* The definition travels with the number, so it is not mistaken for a
+                  count of people — likes aren't individually identifiable, so a
+                  viewer who likes AND comments is counted twice. */}
+              That&apos;s interactions per view, not unique people.
+              {engagement.likesHidden && ' Likes are hidden on this video, so only comments are counted.'}
+              {engagement.commentsFromIngest && " Comment count is what we ingested, not YouTube's public total."}
+            </p>
+          ) : (
+            <p className="mt-2 text-xs text-text-muted">
+              Unavailable — YouTube doesn&apos;t report a view count for this video.
+            </p>
+          )}
+        </section>
+      )}
 
       <div className="mb-4 flex flex-wrap items-start gap-2">
         <Link

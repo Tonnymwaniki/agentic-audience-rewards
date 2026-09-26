@@ -1,6 +1,7 @@
 {
   "crons": [
     { "path": "/api/cron/poll-comments", "schedule": "0 6 * * *" },
-    { "path": "/api/cron/compute-insights", "schedule": "30 6 * * *" }
+    { "path": "/api/cron/compute-insights", "schedule": "30 6 * * *" },
+    { "path": "/api/cron/stale-runs", "schedule": "0 7 * * *" }
   ]
 }

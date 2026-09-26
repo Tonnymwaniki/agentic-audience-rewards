@@ -4,6 +4,10 @@ export type ChannelStats = {
   subscriberCount: number | null
   viewCount: number | null
   videoCount: number | null
+  /** snippet.publishedAt — when the channel was created. */
+  createdAt: string | null
+  /** snippet.country — owner-declared, often null. Not the audience's location. */
+  country: string | null
 }
 
 export type ChannelVideo = {
@@ -271,7 +275,9 @@ export async function fetchChannelStats(channelUrlOrHandle: string): Promise<Cha
   }
 
   const url = new URL(`${YOUTUBE_API_BASE}/channels`)
-  url.searchParams.set('part', 'statistics')
+  // snippet added for creation date and country. Still one channels.list call and
+  // still 1 quota unit — the part list does not change the cost.
+  url.searchParams.set('part', 'statistics,snippet')
   url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
   url.searchParams.set('maxResults', '1')
 
@@ -294,10 +300,14 @@ export async function fetchChannelStats(channelUrlOrHandle: string): Promise<Cha
   if (!stats) {
     throw new Error('Channel not found')
   }
+  const snippet = data.items?.[0]?.snippet ?? {}
 
   return {
     subscriberCount: parseCount(stats.subscriberCount),
     viewCount: parseCount(stats.viewCount),
     videoCount: parseCount(stats.videoCount),
+    createdAt: (snippet.publishedAt as string | undefined) ?? null,
+    // Self-declared by the owner in YouTube settings; frequently absent.
+    country: (snippet.country as string | undefined) ?? null,
   }
 }

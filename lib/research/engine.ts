@@ -11,6 +11,7 @@ import { SEGMENTS, type AudienceSegment } from '@/lib/segments'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 import { logError, logWarn } from '@/lib/logger'
+import { engagementFact, loadPostEngagement } from '@/lib/engagement'
 
 const MAX_TOOL_ROUNDS = 5
 const ANTHROPIC_TIMEOUT_MS = 25000
@@ -888,10 +889,32 @@ async function toolGetVideoBreakdown(ctx: ToolContext, input: { post_id_or_title
   const postId = resolvePostId(ctx, idOrTitle)
   if (!postId) return { error: `No video found matching "${idOrTitle}"` }
 
-  const comments = await fetchRichComments(ctx.supabase, [postId])
+  const [comments, engagementByPost] = await Promise.all([
+    fetchRichComments(ctx.supabase, [postId]),
+    loadPostEngagement(ctx.supabase, [postId]),
+  ])
 
   const title = ctx.postMap.get(postId) || 'Untitled video'
-  return { video_ref: ctx.evidence.video(postId, title), video_title: title, ...videoBreakdown(comments) }
+  const engagement = engagementByPost.get(postId)
+
+  return {
+    video_ref: ctx.evidence.video(postId, title),
+    video_title: title,
+    ...videoBreakdown(comments),
+    // Performance, alongside the comment analysis. `engagement_fact` is a
+    // ready-made sentence carrying the definition and any caveats, so the model
+    // quotes the metric correctly rather than restating it loosely — "engagement"
+    // is easy to overclaim as a count of people, which it is not.
+    ...(engagement
+      ? {
+          engagement_rate_percent: engagement.rate === null ? null : Number(engagement.rate.toFixed(4)),
+          engagement_fact: engagementFact(engagement, title),
+          views: engagement.views,
+          likes: engagement.likes,
+          public_comment_count: engagement.commentsFromIngest ? null : engagement.comments,
+        }
+      : {}),
+  }
 }
 
 // Same underlying data as get_video_breakdown, reshaped specifically for a rich
@@ -1654,7 +1677,7 @@ const TOOLS = [
   },
   {
     name: 'get_video_breakdown',
-    description: 'Category counts and top topics for one specific video, identified by its post id or (partial) title.',
+    description: 'Category counts, top topics AND performance for one specific video, identified by its post id or (partial) title. Performance includes views, likes, the public comment count and engagement_rate_percent. When discussing how a video performed, quote engagement_fact verbatim or closely — it states the definition ((comments + likes) ÷ views) and any caveats. Never describe engagement rate as a number of people or unique viewers: likes are not individually identifiable, so it is a ratio of interactions to views.',
     input_schema: {
       type: 'object',
       properties: {

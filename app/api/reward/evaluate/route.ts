@@ -4,6 +4,7 @@ import { evaluateRewards, type EvaluateProgressCallback } from '@/lib/rewards/ev
 import { createServiceClient } from '@/lib/supabase/service'
 import { requireCreator, requirePostOwnership } from '@/lib/api-auth'
 import { logError } from '@/lib/logger'
+import { checkPostVerification, getVerifiedChannelIds, VERIFY_OWNERSHIP_MESSAGE, VERIFY_OWNERSHIP_PATH } from '@/lib/channel-verification'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -23,6 +24,27 @@ export async function POST(request: NextRequest) {
     if (post_id) {
       const owned = await requirePostOwnership(authResult.auth.supabase, creator_id, post_id)
       if (!owned.ok) return owned.response
+    }
+
+    // Ownership gate, checked HERE — synchronously, before anything is started.
+    //
+    // This used to be left to evaluateRewards inside the background job. That job
+    // would mark the post 'running', be refused by the gate, and then write
+    // analysis_status='error' / 'evaluation_failed' — while this route had already
+    // answered {"success":true,"status":"started"}. The creator was told analysis
+    // had failed and to try again, for a refusal no retry could ever change, and a
+    // post whose analysis had in fact completed was relabelled as broken.
+    const verification = post_id
+      ? await checkPostVerification(authResult.auth.supabase, creator_id, post_id)
+      : (await getVerifiedChannelIds(authResult.auth.supabase, creator_id)).length > 0
+        ? { verified: true as const, reason: 'verified' as const }
+        : { verified: false as const, reason: 'no_grant' as const }
+
+    if (!verification.verified) {
+      return NextResponse.json(
+        { error: VERIFY_OWNERSHIP_MESSAGE, reason: verification.reason, verify_url: VERIFY_OWNERSHIP_PATH },
+        { status: 403 }
+      )
     }
 
     after(async () => {

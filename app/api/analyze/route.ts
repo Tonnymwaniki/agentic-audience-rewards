@@ -55,6 +55,23 @@ async function processAnalysisInBackground(postId: string, creatorId: string) {
 
     const evaluateResult = await evaluateRewards(creatorId, postId, evaluateProgress)
 
+    // The ownership gate refusing evaluation is NOT a failed analysis. Reading is
+    // open to every channel; only acting (recognising and rewarding people) needs
+    // verified ownership. For an unverified channel the analysis the creator is
+    // entitled to has finished successfully, so it is recorded as done — with a
+    // stage that says rewards were skipped and why — rather than as an error the
+    // UI would present as "Analysis failed. Please try again."
+    if ('blocked' in evaluateResult && evaluateResult.blocked === 'unverified_channel') {
+      await updatePostStatus(postId, {
+        analysis_status: 'done',
+        analysis_stage: 'complete_unverified',
+        comments_categorized: categorizeResult.categorized,
+        members_total: 0,
+        members_evaluated: 0,
+      })
+      return
+    }
+
     if (!evaluateResult.success) {
       await updatePostStatus(postId, { analysis_status: 'error', analysis_stage: 'evaluation_failed' })
       return

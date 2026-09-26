@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import { isVoidedReward, VOIDED_UNVERIFIED_MESSAGE } from '@/lib/rewards/status'
 
 type CopyLinkButtonProps = {
   claimToken: string
@@ -25,6 +26,11 @@ export default function CopyLinkButton({ claimToken, status, txHash }: CopyLinkB
       )
     }
     return <span className="text-xs text-text-muted">Claimed</span>
+  }
+
+  // No claim link for a voided reward — it could never be redeemed.
+  if (isVoidedReward(status)) {
+    return <span className="text-xs text-text-muted" title={VOIDED_UNVERIFIED_MESSAGE}>Not claimable</span>
   }
 
   if (status !== 'pending') {

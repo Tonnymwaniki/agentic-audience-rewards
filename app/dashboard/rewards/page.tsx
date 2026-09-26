@@ -49,6 +49,11 @@ const STATUS_STYLES: Record<string, string> = {
   pending: 'border-gold/30 bg-gold-dim text-gold-light',
   minted: 'border-teal/30 bg-teal-dim text-teal',
   claimed: 'border-green/30 bg-green-dim text-green',
+  voided_unverified: 'border-white/10 bg-surface-hover text-text-muted line-through',
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  voided_unverified: 'voided',
 }
 
 function StatusPill({ status }: { status: string }) {
@@ -57,7 +62,7 @@ function StatusPill({ status }: { status: string }) {
     <span
       className={`inline-flex flex-shrink-0 rounded-full border px-2 py-0.5 font-mono text-[10px] tracking-wide uppercase ${style}`}
     >
-      {status}
+      {STATUS_LABELS[status] ?? status}
     </span>
   )
 }

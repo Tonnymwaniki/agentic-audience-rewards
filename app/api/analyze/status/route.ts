@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
+import { reconcileStaleRuns } from '@/lib/analysis-staleness'
 
 export async function GET(request: NextRequest) {
   const authResult = await requireCreator()
@@ -28,6 +29,24 @@ export async function GET(request: NextRequest) {
       { error: 'Post not found' },
       { status: 404 }
     )
+  }
+
+  // Stale-run detection on access. Only after the ownership check above, and
+  // scoped by the session's creator, so polling can never touch another account's
+  // post. A dead background job is resolved here into its real terminal state,
+  // which also ends the client's poll loop instead of leaving it spinning forever.
+  if (data.analysis_status === 'running') {
+    const [resolved] = await reconcileStaleRuns(authResult.auth.supabase, {
+      postId,
+      creatorId: authResult.auth.creatorId,
+    })
+    if (resolved) {
+      return NextResponse.json({
+        ...data,
+        analysis_status: resolved.outcome.status,
+        analysis_stage: resolved.outcome.stage,
+      })
+    }
   }
 
   return NextResponse.json(data)

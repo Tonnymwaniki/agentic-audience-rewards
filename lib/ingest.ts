@@ -15,6 +15,8 @@ type CommentRow = {
   reply_count: number
   /** The stored id of the top-level comment this answers; null for top-level comments. */
   parent_comment_id: string | null
+  /** When the commenter last edited it (migration 37). is_edited is derived from it. */
+  youtube_updated_at: string | null
 }
 
 /**
@@ -22,17 +24,41 @@ type CommentRow = {
  * rejects it as unknown, so a deploy that lands before its migration keeps ingesting
  * (without that column) instead of failing every comment.
  */
-const optionalColumns: Record<'like_count' | 'reply_count' | 'parent_comment_id', boolean> = {
+const optionalColumns: Record<'like_count' | 'reply_count' | 'parent_comment_id' | 'youtube_updated_at', boolean> = {
   like_count: true,
   reply_count: true,
   parent_comment_id: true,
+  youtube_updated_at: true,
 }
 
+/** audience_members.profile_image_url (migration 37); false once the DB rejects it. */
+let memberImageColumnAvailable = true
+
 /** Post columns added by migration 20240101000027, dropped until it has been run. */
-const optionalPostColumns: Record<'duration_seconds' | 'youtube_category' | 'channel_id', boolean> = {
+const optionalPostColumns: Record<
+  | 'duration_seconds'
+  | 'youtube_category'
+  | 'channel_id'
+  | 'tags'
+  | 'has_captions'
+  | 'youtube_comment_count'
+  | 'live_scheduled_start_at'
+  | 'live_scheduled_end_at'
+  | 'live_actual_start_at'
+  | 'live_actual_end_at',
+  boolean
+> = {
   duration_seconds: true,
   youtube_category: true,
   channel_id: true,
+  // migration 37
+  tags: true,
+  has_captions: true,
+  youtube_comment_count: true,
+  live_scheduled_start_at: true,
+  live_scheduled_end_at: true,
+  live_actual_start_at: true,
+  live_actual_end_at: true,
 }
 
 /** The column an "unknown column" error names, if it's one of the optional ones. */
@@ -55,8 +81,8 @@ async function upsertComment(supabase: SupabaseService, row: CommentRow) {
   }
 
   let result = await attempt()
-  // One retry per missing column: at most three, and only on a fresh database.
-  for (let i = 0; i < 3; i++) {
+  // One retry per missing column: at most four, and only on a fresh database.
+  for (let i = 0; i < 4; i++) {
     const missing = missingOptionalColumn(result.error)
     if (!missing) break
     optionalColumns[missing] = false
@@ -89,19 +115,31 @@ async function storeComment(
   comment: FetchedComment | FetchedReply,
   args: { postId: string; platformId: string; creatorId: string; parentCommentId?: string | null }
 ): Promise<string | null> {
-  const { data: member, error: memberError } = await supabase
-    .from('audience_members')
-    .upsert(
-      {
-        platform_id: args.platformId,
-        external_id: comment.authorChannelId,
-        display_name: comment.authorDisplayName,
-        creator_id: args.creatorId,
-      },
-      { onConflict: 'platform_id, external_id, creator_id' }
-    )
-    .select('id')
-    .single()
+  const memberRow: Record<string, unknown> = {
+    platform_id: args.platformId,
+    external_id: comment.authorChannelId,
+    display_name: comment.authorDisplayName,
+    creator_id: args.creatorId,
+  }
+  // Only set when YouTube sent one, so an upsert never blanks a stored avatar.
+  if (memberImageColumnAvailable && comment.authorProfileImageUrl) {
+    memberRow.profile_image_url = comment.authorProfileImageUrl
+  }
+
+  const upsertMember = (row: Record<string, unknown>) =>
+    supabase
+      .from('audience_members')
+      .upsert(row, { onConflict: 'platform_id, external_id, creator_id' })
+      .select('id')
+      .single()
+
+  let { data: member, error: memberError } = await upsertMember(memberRow)
+  if (memberError && 'profile_image_url' in memberRow && (memberError.code === 'PGRST204' || memberError.code === '42703')) {
+    memberImageColumnAvailable = false
+    console.warn('audience_members.profile_image_url does not exist yet (migration 37); ingesting without it')
+    delete memberRow.profile_image_url
+    ;({ data: member, error: memberError } = await upsertMember(memberRow))
+  }
 
   if (memberError || !member) {
     logError('ingest.upsertMember', memberError, { creator_id: args.creatorId, platform_id: args.platformId, post_id: args.postId })
@@ -117,6 +155,7 @@ async function storeComment(
     like_count: comment.likeCount,
     reply_count: comment.replyCount,
     parent_comment_id: args.parentCommentId ?? null,
+    youtube_updated_at: comment.updatedAt,
   })
   if (error || !data) {
     logError('ingest.upsertComment', error, { post_id: args.postId, creator_id: args.creatorId, audience_member_id: member.id })
@@ -217,6 +256,14 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     view_count: meta.viewCount,
     duration_seconds: meta.durationSeconds,
     youtube_category: meta.youtubeCategory,
+    // migration 37 — all public, all from calls already being made.
+    tags: meta.tags,
+    has_captions: meta.hasCaptions,
+    youtube_comment_count: meta.commentCount,
+    live_scheduled_start_at: meta.liveScheduledStart,
+    live_scheduled_end_at: meta.liveScheduledEnd,
+    live_actual_start_at: meta.liveActualStart,
+    live_actual_end_at: meta.liveActualEnd,
   }
 
   const upsertPost = () => {
@@ -228,14 +275,17 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
   }
 
   let { data: post, error: postError } = await upsertPost()
-  // One retry per missing column, only on a database without migration 27.
-  for (let i = 0; i < 2 && postError; i++) {
+  // One retry per optional column that could be missing. This was a hard-coded 2
+  // while there were already three optional columns, so a database missing all of
+  // them would have exhausted its retries and failed the ingest outright; it is now
+  // bounded by the actual number of optional columns.
+  for (let i = 0; i < Object.keys(optionalPostColumns).length && postError; i++) {
     const missing = (Object.keys(optionalPostColumns) as Array<keyof typeof optionalPostColumns>).find(
       c => (postError!.code === 'PGRST204' || postError!.code === '42703') && (postError!.message ?? '').includes(c)
     )
     if (!missing) break
     optionalPostColumns[missing] = false
-    console.warn(`posts.${missing} does not exist yet (migration 20240101000027); ingesting without it`)
+    console.warn(`posts.${missing} does not exist yet; ingesting without it (run the pending migration)`)
     ;({ data: post, error: postError } = await upsertPost())
   }
 

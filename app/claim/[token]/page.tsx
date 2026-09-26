@@ -8,6 +8,7 @@ import { redirect } from 'next/navigation'
 import { createServiceClient } from '@/lib/supabase/service'
 import PageHeader from '@/components/PageHeader'
 import ClaimWidget from './ClaimWidget'
+import { isVoidedReward, VOIDED_UNVERIFIED_MESSAGE } from '@/lib/rewards/status'
 
 export default async function ClaimPage({
   params,
@@ -66,6 +67,19 @@ export default async function ClaimPage({
               View on Snowtrace
             </a>
           )}
+        </div>
+      </div>
+    )
+  }
+
+  // Checked before the generic fallback so the recipient gets the real reason,
+  // not a vague "no longer available". Permanent: see lib/rewards/status.ts.
+  if (isVoidedReward(status)) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <div className="card max-w-md p-6 text-center">
+          <PageHeader title="Reward Voided" />
+          <p className="text-text-muted">{VOIDED_UNVERIFIED_MESSAGE}</p>
         </div>
       </div>
     )

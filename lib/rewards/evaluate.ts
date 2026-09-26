@@ -4,9 +4,24 @@ import { updateAudienceProfile } from '@/lib/audience-memory'
 import { decideReward, MAX_TOOL_ROUNDS } from '@/lib/rewards/decide'
 import type { RewardedPrecedent } from '@/lib/rewards/evaluate-tools'
 import { logError, logInfo, logWarn } from '@/lib/logger'
-import { checkPostVerification, getVerifiedChannelIds, VERIFY_OWNERSHIP_MESSAGE } from '@/lib/channel-verification'
+import { checkPostVerification, getVerifiedChannelIds, resolveVerifiedPostIds, VERIFY_OWNERSHIP_MESSAGE } from '@/lib/channel-verification'
 
 export type EvaluateProgressCallback = (evaluated: number, total: number) => void
+
+/**
+ * The post a creator-wide recognition is filed against: the member's most recent
+ * comment among the (already verified-only) comments passed in. Null only if the
+ * list is empty, which cannot happen for an eligible member.
+ */
+function latestVerifiedPostFor(
+  comments: Array<{ post_id: string; posted_at: string | null }>
+): string | null {
+  let best: { post_id: string; posted_at: string | null } | null = null
+  for (const c of comments) {
+    if (!best || (c.posted_at ?? '') > (best.posted_at ?? '')) best = c
+  }
+  return best?.post_id ?? null
+}
 
 export async function evaluateRewards(
   creator_id: string,
@@ -53,6 +68,62 @@ export async function evaluateRewards(
     }
   }
 
+  // --- The verified scope: which of this creator's posts may be ACTED on ------
+  //
+  // "Has at least one verified channel" (the check above) is necessary but was
+  // being treated as sufficient. A creator verified for channel A who had also
+  // analysed channel B then got creator-wide evaluations of B's audience — the
+  // exact thing post-scoped runs refuse. Every step below is now confined to posts
+  // on a channel this creator has proven they own:
+  //
+  //   * which members are candidates   (only people who engaged on verified posts)
+  //   * which comments are the evidence (their verified-post comments only)
+  //   * what the history tool may read  (the boundary for get_person_full_history)
+  //   * which post a reward is filed on (so the claim-time gate can check it)
+  //
+  // Post-scoped runs resolve to the single, already-verified post.
+  const { data: creatorPosts, error: creatorPostsError } = await supabase
+    .from('posts')
+    .select('id, title')
+    .eq('creator_id', creator_id)
+
+  if (creatorPostsError) {
+    logError('rewards.evaluate', creatorPostsError, { creator_id, stage: 'fetch_posts' })
+  }
+
+  // Two different sets, deliberately kept apart:
+  //
+  //   allVerifiedPostIds — every post on a channel this creator owns. The history
+  //     tool's boundary in BOTH modes: its whole purpose is to see a fan's
+  //     engagement across the creator's other videos, so a post-scoped run must not
+  //     narrow it to one post (an earlier version of this change did exactly that).
+  //
+  //   verifiedPostIds — the posts whose commenters are CANDIDATES. The one named
+  //     post when scoped (already verified above), otherwise all verified posts.
+  const allVerifiedPostIds = await resolveVerifiedPostIds(
+    supabase,
+    creator_id,
+    (creatorPosts || []).map(p => p.id)
+  )
+  const verifiedPostIds = post_id ? new Set([post_id]) : allVerifiedPostIds
+
+  // Logged in both modes: which posts supply candidates, and how wide the history
+  // tool may look. Makes the ownership scope of every run auditable after the fact.
+  logInfo('rewards.evaluate', 'Run scoped to verified channels', {
+    creator_id,
+    post_id: post_id ?? null,
+    posts_total: (creatorPosts || []).length,
+    candidate_posts: verifiedPostIds.size,
+    history_boundary_posts: allVerifiedPostIds.size,
+  })
+
+  if (!post_id) {
+    if (verifiedPostIds.size === 0) {
+      // Verified for a channel, but nothing analysed on it yet.
+      return { success: true, evaluated: 0, qualified: 0, results: [] }
+    }
+  }
+
   // Paged: PostgREST caps a response at 1000 rows, and a channel can easily have
   // more never-rewarded members than that. Without this, everyone past the first
   // 1000 was silently skipped — measured on a real channel, 337 of 1337 eligible
@@ -82,19 +153,18 @@ export async function evaluateRewards(
 
   const memberIds = audienceMembers.map(m => m.id)
 
-  const allComments: Array<{ id: string; audience_member_id: string; post_id: string; text: string }> = []
+  const allComments: Array<{ id: string; audience_member_id: string; post_id: string; text: string; posted_at: string | null }> = []
   const commentsBatchSize = 200
 
   for (let i = 0; i < memberIds.length; i += commentsBatchSize) {
     const batch = memberIds.slice(i, i + commentsBatchSize)
-    let query = supabase
+    // Confined to verified posts in BOTH modes. Previously only post-scoped runs
+    // were filtered, so a creator-wide run read comments on every channel.
+    const query = supabase
       .from('comments')
-      .select('id, audience_member_id, post_id, text')
+      .select('id, audience_member_id, post_id, text, posted_at')
       .in('audience_member_id', batch)
-
-    if (post_id) {
-      query = query.eq('post_id', post_id)
-    }
+      .in('post_id', Array.from(verifiedPostIds))
 
     let page = 0
     const pageSize = 1000
@@ -137,7 +207,7 @@ export async function evaluateRewards(
     categories = categoryRows
   }
 
-  const commentsByMember = new Map<string, Array<{ id: string; post_id: string; text: string }>>()
+  const commentsByMember = new Map<string, Array<{ id: string; post_id: string; text: string; posted_at: string | null }>>()
   for (const comment of comments) {
     const list = commentsByMember.get(comment.audience_member_id) || []
     list.push(comment)
@@ -182,16 +252,10 @@ export async function evaluateRewards(
   // deliberately looks across ALL of this creator's videos even when the run is
   // scoped to one post_id, which is the point of the tool — but it must stay inside
   // this creator's posts, so those ids are the boundary it queries within.
-  const { data: creatorPosts, error: creatorPostsError } = await supabase
-    .from('posts')
-    .select('id, title')
-    .eq('creator_id', creator_id)
-
-  if (creatorPostsError) {
-    logError('rewards.evaluate', creatorPostsError, { creator_id, stage: 'fetch_posts' })
-  }
-
-  const creatorPostIds = (creatorPosts || []).map(p => p.id)
+  // The history tool's boundary. It still looks across videos — that is its
+  // purpose — but only across VERIFIED ones, so a recognition can never be
+  // justified by engagement on a channel the creator does not own.
+  const creatorPostIds = Array.from(allVerifiedPostIds)
   const postTitles = new Map((creatorPosts || []).map(p => [p.id, p.title as string]))
 
   // Precedent is identical for every member in this run, so it is fetched at most
@@ -280,6 +344,13 @@ export async function evaluateRewards(
         continue
       }
 
+      // Filed against a real, verified post in BOTH modes. Creator-wide runs used to
+      // write post_id: null, and the claim-time ownership gate skips rewards with no
+      // post — so every creator-wide reward bypassed it. It is now the member's most
+      // recent comment on a verified channel, which is also the most honest answer to
+      // "which video is this recognition for?".
+      const rewardPostId = post_id || latestVerifiedPostFor(commentsByMember.get(member.id) || [])
+
       const { error: insertError } = await supabase
         .from('reward_events')
         .insert({
@@ -289,11 +360,11 @@ export async function evaluateRewards(
           confidence: decision.confidence,
           status: 'pending',
           claim_token: crypto.randomUUID(),
-          post_id: post_id || null,
+          post_id: rewardPostId,
         })
 
       if (insertError) {
-        logError('rewards.evaluate', insertError, { creator_id, audience_member_id: member.id, post_id: post_id || null, stage: 'insert_reward_event' })
+        logError('rewards.evaluate', insertError, { creator_id, audience_member_id: member.id, post_id: rewardPostId, stage: 'insert_reward_event' })
       } else {
         const { error: updateError } = await supabase
           .from('audience_members')

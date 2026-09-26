@@ -735,7 +735,19 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
   const notifiable: Array<{ commentId: string; category: string; text: string }> = []
 
+  // Drafting makes LLM calls per comment but writes nothing to posts, so a long
+  // pass would look dead to stale-run detection (lib/analysis-staleness.ts).
+  // Re-reporting the unchanged categorized count leaves the progress UI as it is
+  // but refreshes the post's heartbeat; throttled so it isn't a write per comment.
+  let lastHeartbeat = Date.now()
+  const heartbeat = () => {
+    if (Date.now() - lastHeartbeat < 30_000) return
+    lastHeartbeat = Date.now()
+    onProgress?.(categorized.length)
+  }
+
   for (const comment of draftable) {
+    heartbeat()
     const text = uncategorizedTextMap.get(comment.id)
     if (!text) continue
 

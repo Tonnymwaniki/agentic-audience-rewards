@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import Avatar from '@/components/Avatar'
 import PageHeader from '@/components/PageHeader'
 import { logError } from '@/lib/logger'
+import { VOIDED_UNVERIFIED_STATUS } from '@/lib/rewards/status'
 
 /**
  * Masks a commenter's identity for this PUBLIC page.
@@ -113,6 +114,9 @@ export default async function RecognizedPage() {
       )
     `
     )
+    // A voided reward was never valid (issued on a channel its creator had not
+    // proven they own) and would otherwise render as "Awaiting claim" forever.
+    .neq('status', VOIDED_UNVERIFIED_STATUS)
     .order('created_at', { ascending: false })
     .limit(50)
 

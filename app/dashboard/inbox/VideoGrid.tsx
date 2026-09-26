@@ -20,6 +20,12 @@ export type VideoCardData = {
   /** Both null for videos that exist only in the channel index — nothing is fetched for them. */
   durationSeconds: number | null
   viewCount: number | null
+  /**
+   * (comments + likes) ÷ views, pre-formatted. Null for unanalyzed videos and for
+   * any video YouTube reports no views for — a rate over zero views is undefined,
+   * and showing "0%" would falsely read as "nobody engaged".
+   */
+  engagement?: { rate: string; likesHidden: boolean; full: string } | null
 }
 
 type SortKey = 'analyzed_first' | 'recent' | 'needs_analysis' | 'fully_analyzed'
@@ -143,6 +149,22 @@ function AnalyzedCard({
           {video.total > 0 ? `${video.categorized}/${video.total}` : '0 comments'}
           {formatViews(video.viewCount) ? ` · ${formatViews(video.viewCount)}` : ''}
         </p>
+        {video.engagement && (
+          // Its own line: the meta line above is already a single truncated row at
+          // card width, and a truncated caveat is worse than none. The full wording
+          // (including the "likes hidden" caveat) is in the title and aria-label.
+          // Wraps rather than truncates. At card width the "comments only" caveat was
+          // cut to "com…" — present in the DOM (so a text check passed) but
+          // unreadable, which defeats the point of putting it on its own line.
+          <p
+            className="mt-0.5 text-[11px] leading-snug text-text-muted"
+            title={video.engagement.full}
+            aria-label={video.engagement.full}
+          >
+            <span className="font-medium text-teal">{video.engagement.rate}</span> engagement
+            {video.engagement.likesHidden && <span className="text-text-muted/70"> · comments only</span>}
+          </p>
+        )}
       </div>
     </Link>
   )

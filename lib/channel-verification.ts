@@ -341,3 +341,31 @@ export async function getChannelVerificationSummary(
     // Unverified first: the row that needs action leads.
     .sort((a, b) => Number(a.verified) - Number(b.verified) || b.postCount - a.postCount)
 }
+
+/**
+ * Which of these posts belong to a channel this creator has verified.
+ *
+ * The per-post form of isChannelVerified, for callers that act across many posts
+ * at once (creator-wide reward evaluation). One grant lookup for the whole set,
+ * then a local channel read per post — posts.channel_id is populated, so this is
+ * not a network round trip per post except for rows that predate migration 36.
+ *
+ * Fails closed: a post whose channel cannot be resolved is NOT included.
+ */
+export async function resolveVerifiedPostIds(
+  supabase: SupabaseClient,
+  creatorId: string,
+  postIds: string[]
+): Promise<Set<string>> {
+  const verified = new Set<string>()
+  if (postIds.length === 0) return verified
+
+  const channelIds = await getVerifiedChannelIds(supabase, creatorId)
+  if (channelIds.length === 0) return verified
+
+  for (const postId of postIds) {
+    const channelId = await resolvePostChannelId(supabase, postId)
+    if (channelId && channelIds.includes(channelId)) verified.add(postId)
+  }
+  return verified
+}

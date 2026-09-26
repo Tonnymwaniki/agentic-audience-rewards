@@ -7,6 +7,7 @@ import { privateKeyToAccount } from 'thirdweb/wallets'
 import dotenv from 'dotenv'
 import { logError, logInfo, logWarn } from '@/lib/logger'
 import { checkPostVerification } from '@/lib/channel-verification'
+import { isVoidedReward, VOIDED_UNVERIFIED_MESSAGE, VOIDED_UNVERIFIED_STATUS } from '@/lib/rewards/status'
 dotenv.config({ path: '.env.local' })
 
 export async function POST(request: NextRequest) {
@@ -37,6 +38,19 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         { error: 'Invalid claim token' },
         { status: 404 }
+      )
+    }
+
+    // Voided rows are refused BEFORE the ownership gate, so the answer never
+    // depends on the channel's current verification state: a channel verified
+    // today does not revive a reward voided for predating verification.
+    if (isVoidedReward(rewardEvent.status)) {
+      logInfo('api/reward/mint', 'Refused: reward voided (predates ownership verification)', {
+        reward_event_id: rewardEvent.id, post_id: rewardEvent.post_id ?? null,
+      })
+      return NextResponse.json(
+        { error: VOIDED_UNVERIFIED_MESSAGE, status: VOIDED_UNVERIFIED_STATUS },
+        { status: 410 }
       )
     }
 
