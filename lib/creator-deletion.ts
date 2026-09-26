@@ -221,6 +221,8 @@ export async function findOrphanedRows(
     // Removed by ON DELETE CASCADE with the creator row (migration 42), so it has no
     // explicit delete above; still checked here so a failed cascade can't hide.
     'entity_aliases',
+    // Also ON DELETE CASCADE (migration 43).
+    'surfaced_insights',
     'creators',
   ]
 

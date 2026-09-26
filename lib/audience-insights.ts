@@ -240,6 +240,26 @@ function pickRepresentatives(members: CommentRow[], embeddings: Map<string, numb
 }
 
 /**
+ * What a theme's trend was computed from — the two windows' counts and the recent
+ * comments themselves. Not stored; the Insight Agent (lib/insight-agent.ts) uses it
+ * to judge whether a swing rests on enough comments to mean anything, and to show
+ * Claude what is actually being said.
+ */
+export type TrendWindow = {
+  recent: number
+  previous: number
+  totalRecent: number
+  totalPrevious: number
+  windowDays: number
+  recentSentiment: SentimentBreakdown
+  previousSentiment: SentimentBreakdown
+  /** Recent-window comments on this theme per video, most first. */
+  recentByPost: Array<{ post_id: string; comments: number }>
+  /** Up to 8 recent comments on this theme, cleaned, longest first. */
+  recentSamples: Array<{ id: string; post_id: string; text: string }>
+}
+
+/**
  * Computes one creator's insights without writing anything. Deterministic for a
  * given `now` and data, so it can be inspected or tested before being stored.
  */
@@ -248,6 +268,15 @@ export async function computeAudienceInsights(
   creatorId: string,
   now: Date = new Date()
 ): Promise<AudienceInsight[]> {
+  return (await computeAudienceInsightsDetailed(supabase, creatorId, now)).insights
+}
+
+/** computeAudienceInsights plus each stored theme's trend window (keyed by topic). */
+export async function computeAudienceInsightsDetailed(
+  supabase: SupabaseClient,
+  creatorId: string,
+  now: Date = new Date()
+): Promise<{ insights: AudienceInsight[]; windows: Map<string, TrendWindow> }> {
   const comments = await loadCreatorComments(supabase, creatorId)
   const computedAt = now.toISOString()
 
@@ -267,7 +296,7 @@ export async function computeAudienceInsights(
     .filter(([, members]) => members.length >= MIN_THEME_COMMENTS)
     .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
     .slice(0, TOP_THEMES)
-  if (top.length === 0) return []
+  if (top.length === 0) return { insights: [], windows: new Map() }
 
   const day = 24 * 60 * 60 * 1000
   const recentStart = now.getTime() - TREND_WINDOW_DAYS * day
@@ -295,7 +324,29 @@ export async function computeAudienceInsights(
     if (row.embedding) embeddings.set(row.id, typeof row.embedding === 'string' ? JSON.parse(row.embedding) : row.embedding)
   }
 
-  return top.map(([theme, members]) => {
+  const windows = new Map<string, TrendWindow>()
+  const insights = top.map(([theme, members]) => {
+    const recentMembers = members.filter(m => period(m) === 'recent')
+    const previousMembers = members.filter(m => period(m) === 'previous')
+    const recentPosts = new Map<string, number>()
+    for (const m of recentMembers) recentPosts.set(m.post_id, (recentPosts.get(m.post_id) ?? 0) + 1)
+    windows.set(theme, {
+      recent: recentMembers.length,
+      previous: previousMembers.length,
+      totalRecent,
+      totalPrevious,
+      windowDays: TREND_WINDOW_DAYS,
+      recentSentiment: computeSentiment(recentMembers),
+      previousSentiment: computeSentiment(previousMembers),
+      recentByPost: [...recentPosts].sort((a, b) => b[1] - a[1]).map(([post_id, n]) => ({ post_id, comments: n })),
+      recentSamples: recentMembers
+        .map(m => ({ id: m.id, post_id: m.post_id, text: cleanText(m.text) }))
+        .filter(m => m.text.length >= MIN_REPRESENTATIVE_CHARS)
+        .sort((a, b) => b.text.length - a.text.length)
+        .slice(0, 8)
+        .map(m => ({ ...m, text: m.text.slice(0, 280) })),
+    })
+
     const trend = computeTrend(
       members.filter(m => period(m) === 'recent').length,
       members.filter(m => period(m) === 'previous').length,
@@ -321,6 +372,7 @@ export async function computeAudienceInsights(
       computed_at: computedAt,
     }
   })
+  return { insights, windows }
 }
 
 /**
@@ -333,9 +385,10 @@ export async function computeAudienceInsights(
 export async function refreshAudienceInsights(
   supabase: SupabaseClient,
   creatorId: string,
-  now: Date = new Date()
-): Promise<{ stored: number }> {
-  const insights = await computeAudienceInsights(supabase, creatorId, now)
+  now: Date = new Date(),
+  options: { insightAgent?: InsightAgentHook } = {}
+): Promise<{ stored: number; insightAgent?: unknown }> {
+  const { insights, windows } = await computeAudienceInsightsDetailed(supabase, creatorId, now)
   const computedAt = now.toISOString()
 
   if (insights.length > 0) {
@@ -350,8 +403,27 @@ export async function refreshAudienceInsights(
     .lt('computed_at', computedAt)
   if (deleteError) throw new Error(`Could not clear old insights: ${deleteError.message}`)
 
-  return { stored: insights.length }
+  // Proactive step: surface genuinely notable swings to the creator's inbox. Runs
+  // only after the insights are safely stored, and can never fail the refresh.
+  let insightAgent: unknown
+  if (options.insightAgent) {
+    try {
+      insightAgent = await options.insightAgent(supabase, creatorId, insights, windows, now)
+    } catch (err) {
+      insightAgent = { error: err instanceof Error ? err.message : String(err) }
+    }
+  }
+  return { stored: insights.length, ...(insightAgent !== undefined ? { insightAgent } : {}) }
 }
+
+/** The Insight Agent's entry point, injected so this module doesn't import it. */
+export type InsightAgentHook = (
+  supabase: SupabaseClient,
+  creatorId: string,
+  insights: AudienceInsight[],
+  windows: Map<string, TrendWindow>,
+  now: Date
+) => Promise<unknown>
 
 export type StoredInsight = AudienceInsight & { id: string }
 

@@ -92,6 +92,9 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
         const comment = item.comment
         const escalation = normalizeEscalation(comment?.escalationFlag ?? null)
         const actionable = Boolean(comment?.draftReply)
+        // Written by the Insight Agent (lib/insight-agent.ts): about a theme across
+        // many comments, so there is no commenter to show.
+        const isInsight = item.type === 'insight'
 
         return (
           <li
@@ -114,7 +117,16 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                 104px off the left before any text. The reply is the thing being
                 read and edited, so it gets the width. */}
             <div className="flex items-start gap-3">
-              <Avatar name={comment?.authorName || 'Unknown'} size={36} />
+              {isInsight ? (
+                <span className="icon-badge icon-badge-purple flex-shrink-0" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M3 17l6-6 4 4 8-8" />
+                    <path d="M14 7h7v7" />
+                  </svg>
+                </span>
+              ) : (
+                <Avatar name={comment?.authorName || 'Unknown'} size={36} />
+              )}
 
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -125,7 +137,7 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     />
                   )}
                   <p className="font-body text-sm font-medium text-text-primary">
-                    {comment?.authorName || 'Unknown'}
+                    {isInsight ? 'Audience insight' : comment?.authorName || 'Unknown'}
                   </p>
                   {comment?.category && (
                     <span className={`badge badge-${comment.category}`}>
@@ -183,6 +195,15 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
               {comment?.approved && <p className="mt-2 text-xs text-green">Reply approved</p>}
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
+                {isInsight && (
+                  <Link
+                    href="/dashboard/research"
+                    onClick={() => void markRead(item.id)}
+                    className="inline-flex min-h-11 items-center text-xs text-purple-text hover:underline"
+                  >
+                    Explore in Research →
+                  </Link>
+                )}
                 {comment && (
                   <Link
                     href={`/dashboard/inbox/${comment.postId}`}

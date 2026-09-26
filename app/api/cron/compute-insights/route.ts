@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { refreshAudienceInsights } from '@/lib/audience-insights'
+import { runInsightAgent } from '@/lib/insight-agent'
 import { isCronAuthorized } from '@/lib/cron-auth'
 import { logError } from '@/lib/logger'
 
@@ -36,12 +37,14 @@ export async function GET(request: NextRequest) {
 
   const creatorIds = [...new Set((posts ?? []).map(p => p.creator_id as string))]
   const now = new Date()
-  const results: Array<{ creator_id: string; stored?: number; error?: string }> = []
+  const results: Array<{ creator_id: string; stored?: number; insightAgent?: unknown; error?: string }> = []
 
   for (const creatorId of creatorIds) {
     try {
-      const { stored } = await refreshAudienceInsights(supabase, creatorId, now)
-      results.push({ creator_id: creatorId, stored })
+      // The Insight Agent runs right after each creator's insights are stored, and
+      // turns genuinely notable swings into inbox notifications (lib/insight-agent).
+      const { stored, insightAgent } = await refreshAudienceInsights(supabase, creatorId, now, { insightAgent: runInsightAgent })
+      results.push({ creator_id: creatorId, stored, insightAgent })
     } catch (err) {
       logError('api/cron/compute-insights', err, { creator_id: creatorId, stage: 'compute_for_creator' })
       results.push({ creator_id: creatorId, error: err instanceof Error ? err.message : 'Unknown error' })
