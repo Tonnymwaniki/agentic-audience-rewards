@@ -10,6 +10,7 @@ import {
   truncateMessages,
 } from '@/lib/research/conversations'
 import { logError, logWarn, logInfo } from '@/lib/logger'
+import { checkResearchQuota } from '@/lib/entitlements'
 
 // Gives the tool-use loop (up to ~6 sequential Claude calls) room to finish within
 // one invocation. Vercel Hobby caps this at 60s, Pro at 300s.
@@ -31,6 +32,14 @@ export async function POST(request: NextRequest) {
 
     if (!message) {
       return NextResponse.json({ error: 'Missing message' }, { status: 400 })
+    }
+
+    const entitlement = await checkResearchQuota(supabase, creatorId)
+    if (!entitlement.allowed) {
+      return NextResponse.json(
+        { error: entitlement.reason, upgrade_required: true, limit: entitlement.limit, used: entitlement.used },
+        { status: 402 }
+      )
     }
 
     let ctx

@@ -69,6 +69,21 @@ const ACCOUNT_LINKS = [
     ),
   },
   {
+    href: '/dashboard/billing',
+    tone: 'gold',
+    label: 'Billing',
+    description: 'Plan, usage limits, and upgrading to Pro',
+    icon: (
+      <svg {...linkIconProps}>
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M2.25 8.25h19.5M2.25 9h19.5m-16.5 5.25h6m-6 2.25h3m-9-7.5v6.75a2.25 2.25 0 0 0 2.25 2.25h13.5a2.25 2.25 0 0 0 2.25-2.25V9a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 9Z"
+        />
+      </svg>
+    ),
+  },
+  {
     // The only route back to the platform hub. The header wordmark used to carry
     // that link; when it was removed the hub became reachable only by typing the
     // URL, so it lives here — reachable at every width, since this page is the

@@ -8,6 +8,7 @@ import { requireCreator } from '@/lib/api-auth'
 import { embedPostCommentsSafely } from '@/lib/embeddings'
 import { logError } from '@/lib/logger'
 import { syncEntityEmbeddings } from '@/lib/knowledge-embeddings'
+import { checkCanAnalyzeVideo } from '@/lib/entitlements'
 
 async function updatePostStatus(postId: string, updates: Record<string, unknown>) {
   const supabase = createServiceClient()
@@ -98,6 +99,14 @@ export async function POST(request: NextRequest) {
     const authResult = await requireCreator()
     if (!authResult.ok) return authResult.response
     const creator_id = authResult.auth.creatorId
+
+    const entitlement = await checkCanAnalyzeVideo(authResult.auth.supabase, creator_id)
+    if (!entitlement.allowed) {
+      return NextResponse.json(
+        { error: entitlement.reason, upgrade_required: true, limit: entitlement.limit, used: entitlement.used },
+        { status: 402 }
+      )
+    }
 
     const { youtube_url } = await request.json()
 
