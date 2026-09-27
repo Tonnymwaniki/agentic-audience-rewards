@@ -5,6 +5,8 @@ import { decideReward, MAX_TOOL_ROUNDS } from '@/lib/rewards/decide'
 import type { RewardedPrecedent } from '@/lib/rewards/evaluate-tools'
 import { logError, logInfo, logWarn } from '@/lib/logger'
 import { checkPostVerification, getVerifiedChannelIds, resolveVerifiedPostIds, VERIFY_OWNERSHIP_MESSAGE } from '@/lib/channel-verification'
+import { getMonthlyCostUsd } from '@/lib/ai-usage'
+import { AI_MONTHLY_BUDGET_USD, getCreatorPlan } from '@/lib/entitlements'
 
 export type EvaluateProgressCallback = (evaluated: number, total: number) => void
 
@@ -263,6 +265,19 @@ export async function evaluateRewards(
   // can populate it for the whole batch.
   const precedentCache: { value: RewardedPrecedent | null } = { value: null }
 
+  // Checked periodically, not once up front: app/api/analyze/route.ts already
+  // gates a NEW video behind checkCanAnalyzeVideo before this function ever
+  // starts, but that's a per-video gate — a single run here can still cover
+  // thousands of eligible members (a creator-wide run, or one video with a huge
+  // comment thread), and each one costs real Anthropic calls (decide, sometimes
+  // critique, sometimes an audience-profile update). Re-checking every
+  // BUDGET_CHECK_INTERVAL members means a run that's about to blow through the
+  // plan's monthly AI budget stops itself instead of finishing regardless.
+  const BUDGET_CHECK_INTERVAL = 10
+  const plan = await getCreatorPlan(supabase, creator_id)
+  const budgetUsd = AI_MONTHLY_BUDGET_USD[plan]
+  let budgetExceeded = false
+
   let evaluated = 0
   let qualified = 0
   const results: Array<{
@@ -278,7 +293,21 @@ export async function evaluateRewards(
     overturned?: boolean
   }> = []
 
-  for (const member of eligibleMembers) {
+  for (let i = 0; i < eligibleMembers.length; i++) {
+    const member = eligibleMembers[i]
+
+    if (i > 0 && i % BUDGET_CHECK_INTERVAL === 0) {
+      const usedUsd = await getMonthlyCostUsd(supabase, creator_id)
+      if (usedUsd >= budgetUsd) {
+        budgetExceeded = true
+        logWarn('rewards.evaluate', 'Stopping run early: monthly AI budget reached', {
+          creator_id, post_id: post_id || null, plan, used_usd: usedUsd, budget_usd: budgetUsd,
+          evaluated_so_far: evaluated, remaining_members: eligibleMembers.length - i,
+        })
+        break
+      }
+    }
+
     const memberComments = commentsByMember.get(member.id) || []
 
     const distinctPosts = new Set(memberComments.map(c => c.post_id)).size
@@ -300,7 +329,7 @@ export async function evaluateRewards(
 
     try {
       const { decision, toolsUsed, critique } = await decideReward(
-        { supabase, creatorPostIds, postTitles, memberIds, precedentCache },
+        { supabase, creatorPostIds, postTitles, memberIds, precedentCache, creatorId: creator_id },
         member,
         signals
       )
@@ -324,7 +353,7 @@ export async function evaluateRewards(
       }
 
       try {
-        await updateAudienceProfile(member.id)
+        await updateAudienceProfile(member.id, creator_id)
       } catch (profileErr) {
         logError('rewards.evaluate', profileErr, { creator_id, audience_member_id: member.id, stage: 'update_audience_profile' })
       }
@@ -410,7 +439,12 @@ export async function evaluateRewards(
     evaluated,
     qualified,
     overturned_by_critic: results.filter(r => r.overturned).length,
+    budget_exceeded: budgetExceeded,
   })
 
-  return { success: true, evaluated, qualified, results }
+  // A budget stop is not a failure — everything evaluated so far was evaluated
+  // correctly and is kept. members_total on the post stays at the pre-run
+  // eligible count (set by the caller before this runs) so the UI can show
+  // "142 of 900 evaluated, budget reached" rather than silently looking finished.
+  return { success: true, evaluated, qualified, results, budgetExceeded }
 }

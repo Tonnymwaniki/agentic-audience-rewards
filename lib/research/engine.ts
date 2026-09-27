@@ -11,6 +11,7 @@ import { SEGMENTS, type AudienceSegment } from '@/lib/segments'
 import { EvidenceRegistry, extractCitations, type Evidence } from '@/lib/research/evidence'
 import { verifyResearchAnswer, withNote, UNVERIFIED_NOTE, type AnswerVerification, type ToolCallDigest } from '@/lib/research/verify-answer'
 import { logError, logWarn } from '@/lib/logger'
+import { recordAiUsage } from '@/lib/ai-usage'
 import { resolveVerifiedPostIds } from '@/lib/channel-verification'
 import { countsAsRecognition } from '@/lib/rewards/status'
 import { aggregateEntities, entityKey, loadEntityAliases, mentionsEntity, relatedEntities, resolveEntity, type EntityAliases } from '@/lib/entities'
@@ -2309,7 +2310,11 @@ type AnthropicContentBlock = {
 async function callClaude(
   system: string,
   messages: Array<{ role: string; content: unknown }>,
-  tools: typeof TOOLS | undefined
+  tools: typeof TOOLS | undefined,
+  /** For AI-spend attribution (lib/ai-usage.ts). Optional so any other caller of
+   *  this internal helper doesn't need to supply one, but runResearchTurn's own
+   *  calls below always do. */
+  usageCtx?: { supabase: SupabaseClient; creatorId: string } | null
 ): Promise<{ content: AnthropicContentBlock[]; stop_reason: string }> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), ANTHROPIC_TIMEOUT_MS)
@@ -2337,6 +2342,16 @@ async function callClaude(
     }
 
     const data = await response.json()
+
+    if (usageCtx) {
+      recordAiUsage(usageCtx.supabase, {
+        creatorId: usageCtx.creatorId,
+        feature: 'research_chat',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+      })
+    }
+
     return { content: data.content || [], stop_reason: data.stop_reason }
   } finally {
     clearTimeout(timeoutId)
@@ -2452,8 +2467,10 @@ For broad, all-time questions about what the audience talks about, themes or tre
     // same current anomaly state, so the last one simply wins.
     let anomalyCard: AnomalyCard | null = null
 
+    const usageCtx = { supabase: ctx.supabase, creatorId: ctx.creatorId }
+
     for (let round = 0; round < MAX_TOOL_ROUNDS; round++) {
-      const result = await callClaude(systemPrompt, messages, TOOLS)
+      const result = await callClaude(systemPrompt, messages, TOOLS, usageCtx)
       const toolUseBlocks = result.content.filter(b => b.type === 'tool_use')
 
       console.log("RESEARCH TOOLS CALLED THIS TURN:", toolUseBlocks.map(t => ({ name: t.name, input: t.input })))
@@ -2513,7 +2530,7 @@ For broad, all-time questions about what the audience talks about, themes or tre
     // Hit MAX_TOOL_ROUNDS while Claude still wanted to call tools — force one
     // final answer without tools so the user isn't left with nothing.
     if (finalText === null) {
-      const result = await callClaude(systemPrompt, messages, undefined)
+      const result = await callClaude(systemPrompt, messages, undefined, usageCtx)
       finalText = result.content.find(b => b.type === 'text')?.text || null
     }
 

@@ -7,6 +7,7 @@ import {
 } from '@/lib/rewards/evaluate-tools'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { logError, logWarn, logInfo } from '@/lib/logger'
+import { recordAiUsage } from '@/lib/ai-usage'
 
 /**
  * Tool rounds allowed per person. Two is enough to fetch both tools once each and
@@ -55,7 +56,9 @@ export type CritiqueOutcome = {
 export async function critiqueDecision(
   member: { display_name: string },
   signals: Record<string, unknown>,
-  decision: RewardDecision
+  decision: RewardDecision,
+  /** For AI-spend attribution (lib/ai-usage.ts). */
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
 ): Promise<{ decision: RewardDecision; outcome: CritiqueOutcome }> {
   const unchanged = { decision, outcome: { critiqued: true, overturned: false, critique: null } }
 
@@ -91,6 +94,17 @@ Set "stands" to false ONLY if you would genuinely decide differently now; in tha
     if (!response.ok) throw new Error(`Anthropic API error: ${response.status}`)
 
     const data = await response.json()
+
+    if (usageCtx) {
+      recordAiUsage(usageCtx.supabase, {
+        creatorId: usageCtx.creatorId,
+        feature: 'reward_critique',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+        postId: usageCtx.postId,
+      })
+    }
+
     const text = data.content?.[0]?.text
     if (!text) throw new Error('Empty critique response')
 
@@ -151,6 +165,8 @@ export type DecisionContext = {
   memberIds: string[]
   /** Cached across the batch: precedent is identical for every member in a run. */
   precedentCache: { value: RewardedPrecedent | null }
+  /** For AI-spend attribution (lib/ai-usage.ts). */
+  creatorId: string
 }
 
 /**
@@ -173,7 +189,8 @@ export async function decideReward(
   critique: CritiqueOutcome
 }> {
   const noCritique: CritiqueOutcome = { critiqued: false, overturned: false, critique: null }
-  const { supabase, creatorPostIds, postTitles, memberIds, precedentCache } = ctx
+  const { supabase, creatorPostIds, postTitles, memberIds, precedentCache, creatorId } = ctx
+  const usageCtx = { supabase, creatorId }
 
     const prompt = `You are deciding which audience members deserve on-chain recognition for genuine engagement with a content creator. This audience member's activity: ${JSON.stringify({ ...signals, audience_member_id: member.id })}.
 
@@ -239,6 +256,12 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
       }
 
       const data = await response.json()
+      recordAiUsage(supabase, {
+        creatorId,
+        feature: 'reward_decide',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+      })
       content = (data.content || []) as ContentBlock[]
       const toolUses = content.filter(
         (block): block is Extract<ContentBlock, { type: 'tool_use' }> => block.type === 'tool_use'
@@ -321,7 +344,7 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
       return { decision, toolsUsed, critique: noCritique }
     }
 
-    const reviewed = await critiqueDecision(member, signals, decision)
+    const reviewed = await critiqueDecision(member, signals, decision, usageCtx)
 
     if (reviewed.outcome.overturned) {
       logInfo('rewards.decide.critique', 'Self-critique overturned the decision', {

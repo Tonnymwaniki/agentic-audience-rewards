@@ -2,8 +2,13 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { updateAudienceSegment } from '@/lib/segments'
 import { updateAudienceLevel } from '@/lib/levels'
 import { logError, logInfo } from '@/lib/logger'
+import { recordAiUsage } from '@/lib/ai-usage'
 
-export async function updateAudienceProfile(audience_member_id: string) {
+/** creatorId is optional for backward compatibility with any other caller, but
+ *  every call from the reward-evaluation loop (its main caller, and the only one
+ *  that runs at real volume) should pass it — otherwise this call's real
+ *  Anthropic spend is invisible to that creator's AI budget (lib/entitlements.ts). */
+export async function updateAudienceProfile(audience_member_id: string, creatorId?: string | null) {
   console.log("AUDIENCE MEMORY: starting for member", audience_member_id)
 
   const supabase = createServiceClient()
@@ -64,6 +69,16 @@ export async function updateAudienceProfile(audience_member_id: string) {
     }
 
     const data = await response.json()
+
+    if (creatorId) {
+      recordAiUsage(supabase, {
+        creatorId,
+        feature: 'audience_profile',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+      })
+    }
+
     const summary = data.content?.[0]?.text?.trim()
 
     if (!summary) {

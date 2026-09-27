@@ -81,7 +81,9 @@ async function processAnalysisInBackground(postId: string, creatorId: string) {
 
     await updatePostStatus(postId, {
       analysis_status: 'done',
-      analysis_stage: 'complete',
+      // Distinct stage so the UI can say why fewer members than expected were
+      // evaluated, rather than presenting a budget-limited run as fully complete.
+      analysis_stage: evaluateResult.budgetExceeded ? 'complete_budget_reached' : 'complete',
       comments_categorized: categorizeResult.categorized,
       members_evaluated: evaluateResult.evaluated,
     })

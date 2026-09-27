@@ -7,6 +7,7 @@ import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 import { logError, logWarn, logInfo } from '@/lib/logger'
 import { checkPostVerification } from '@/lib/channel-verification'
+import { recordAiUsage } from '@/lib/ai-usage'
 
 export type ProgressCallback = (count: number) => void
 
@@ -271,7 +272,9 @@ export async function generateDraftReply(
   styleExamples?: StyleExample[] | null,
   customFields?: string[] | null,
   /** Contradicted profile facts, from applyFactStatusesForDrafts — never stated as fact. */
-  uncertainFacts?: string[] | null
+  uncertainFacts?: string[] | null,
+  /** For AI-spend attribution (lib/ai-usage.ts) — optional so tests/direct calls don't need it. */
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
 ): Promise<DraftReplyResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
@@ -314,6 +317,16 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE} For a drafted reply, "high" means t
     const data = await response.json()
     const content = data.content?.[0]?.text
 
+    if (usageCtx) {
+      recordAiUsage(usageCtx.supabase, {
+        creatorId: usageCtx.creatorId,
+        feature: 'draft_reply',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+        postId: usageCtx.postId,
+      })
+    }
+
     if (!content) {
       throw new Error('Empty response from Anthropic')
     }
@@ -346,7 +359,8 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE} For a drafted reply, "high" means t
 export async function isBusinessRelevant(
   commentText: string,
   postTitle: string,
-  postDescription: string
+  postDescription: string,
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
 ): Promise<boolean> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
@@ -376,6 +390,16 @@ export async function isBusinessRelevant(
     const data = await response.json()
     const content = data.content?.[0]?.text?.trim().toLowerCase()
 
+    if (usageCtx) {
+      recordAiUsage(usageCtx.supabase, {
+        creatorId: usageCtx.creatorId,
+        feature: 'business_relevance',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+        postId: usageCtx.postId,
+      })
+    }
+
     return content === 'business'
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
@@ -391,7 +415,8 @@ export async function isBusinessRelevant(
 
 export async function categorizeComments(
   comments: { id: string; text: string }[],
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
 ) {
   const results: Array<CategorizedComment> = []
 
@@ -401,10 +426,10 @@ export async function categorizeComments(
     const batch = comments.slice(i, i + batchSize)
     const batchIds = new Set(batch.map(c => c.id))
 
-    let batchResults = await processBatch(batch, batchIds, false)
+    let batchResults = await processBatch(batch, batchIds, false, usageCtx)
 
     if (batchResults.length === 0) {
-      batchResults = await processBatch(batch, batchIds, true)
+      batchResults = await processBatch(batch, batchIds, true, usageCtx)
     }
 
     if (batchResults.length === 0) {
@@ -421,7 +446,8 @@ export async function categorizeComments(
 async function processBatch(
   batch: { id: string; text: string }[],
   batchIds: Set<string>,
-  isRetry: boolean
+  isRetry: boolean,
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
 ) {
   const batchResults: Array<CategorizedComment> = []
 
@@ -514,6 +540,16 @@ ${JSON.stringify(batch)}${retrySuffix}`
 
     const data = await response.json()
     const content = data.content?.[0]?.text
+
+    if (usageCtx) {
+      recordAiUsage(usageCtx.supabase, {
+        creatorId: usageCtx.creatorId,
+        feature: 'categorize',
+        model: 'claude-haiku-4-5-20251001',
+        usage: data.usage,
+        postId: usageCtx.postId,
+      })
+    }
 
     if (!content) {
       throw new Error('Empty response from Anthropic')
@@ -609,7 +645,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     return { success: true, categorized: 0 }
   }
 
-  const categorized = await categorizeComments(uncategorized, onProgress)
+  // Fetched early and reused for AI-spend attribution (lib/ai-usage.ts) even when
+  // there's nothing draftable below — categorization itself is the single biggest
+  // per-comment cost, so it must be attributed whether or not any comment ends up
+  // getting a drafted reply.
+  const { data: postForUsage } = await supabase.from('posts').select('creator_id').eq('id', post_id).maybeSingle()
+  const usageCreatorId = postForUsage?.creator_id ?? null
+  const usageCtx = usageCreatorId ? { supabase, creatorId: usageCreatorId, postId: post_id } : null
+
+  const categorized = await categorizeComments(uncategorized, onProgress, usageCtx)
 
   if (categorized.length === 0) {
     return { success: true, categorized: 0 }
@@ -811,7 +855,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       }
 
       if (relevanceCheckCategories.has(comment.category)) {
-        const isRelevant = await isBusinessRelevant(text, postTitle, postDescription)
+        const isRelevant = await isBusinessRelevant(text, postTitle, postDescription, usageCtx)
         if (!isRelevant) continue
       }
 
@@ -825,7 +869,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         continue
       }
 
-      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts)
+      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts, usageCtx)
       const draftReply = draft.text
       await supabase
         .from('comment_categories')
