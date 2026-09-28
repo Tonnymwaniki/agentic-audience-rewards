@@ -117,7 +117,18 @@ export function normalizeKenyanPhone(input: string): string {
  * polling checkTransactionStatus (verified).
  */
 export async function initiateStkPush(req: StkPushRequest): Promise<StkPushResult> {
-  const channelId = requireEnv('PAYHERO_CHANNEL_ID')
+  const channelIdRaw = requireEnv('PAYHERO_CHANNEL_ID')
+  // PayHero's own PHP SDK (ph-class.php's SendCustomerMpesaStkPush) sends this
+  // field as an integer, not a string — env vars are always strings, so this
+  // must be cast explicitly. Sent as a string, PayHero's account-lookup on this
+  // field silently fails and returns the misleading "The passed channel does
+  // not belong to the account" error, even for a channel confirmed correct and
+  // Active on the dashboard (see PayHero support ticket TIC-53198238, which
+  // reproduced the SAME channel ID working fine through PayHero's own test tool).
+  const channelId = Number(channelIdRaw)
+  if (!Number.isInteger(channelId)) {
+    throw new Error(`PAYHERO_CHANNEL_ID must be a whole number, got "${channelIdRaw}"`)
+  }
   const phoneNumber = normalizeKenyanPhone(req.phoneNumber)
 
   const raw = await payheroFetch('/payments', {
