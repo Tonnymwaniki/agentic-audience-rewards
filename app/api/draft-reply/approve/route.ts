@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
-import { logError, logInfo } from '@/lib/logger'
+import { logError, logInfo, logWarn } from '@/lib/logger'
 import { checkPostVerification, VERIFY_OWNERSHIP_MESSAGE, VERIFY_OWNERSHIP_PATH } from '@/lib/channel-verification'
+import { getCreatorPlan } from '@/lib/entitlements'
+import { sendReplyToYouTube } from '@/lib/youtube-reply'
 
 export async function POST(request: NextRequest) {
   try {
@@ -20,13 +22,16 @@ export async function POST(request: NextRequest) {
     const { supabase, creatorId } = authResult.auth
 
     // Confirm the comment belongs to one of this creator's posts before touching it.
+    // external_comment_id and the post's channel_id are fetched now (not only on
+    // the send path below) since both are cheap and come from the same row.
     const { data: comment, error: commentError } = await supabase
       .from('comments')
-      .select('id, post_id, posts (creator_id)')
+      .select('id, post_id, external_comment_id, posts (creator_id, channel_id)')
       .eq('id', comment_id)
       .single()
 
-    const ownerCreatorId = (comment?.posts as unknown as { creator_id: string } | null)?.creator_id
+    const postInfo = comment?.posts as unknown as { creator_id: string; channel_id: string | null } | null
+    const ownerCreatorId = postInfo?.creator_id
 
     if (commentError || !comment || ownerCreatorId !== creatorId) {
       return NextResponse.json({ error: 'Comment not found' }, { status: 404 })
@@ -96,10 +101,60 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Failed to approve draft reply' }, { status: 500 })
     }
 
+    // Approving the draft (above) and actually posting it to YouTube (below) are
+    // deliberately separate steps: approval always succeeds once ownership is
+    // verified, so a creator's decision is never lost to a YouTube-side failure.
+    // Sending is gated to Pro and only attempted when the channel's grant actually
+    // carries write access — everyone else gets `skipped`, not an error, since
+    // "not sending" is the correct behavior for them, not a malfunction.
+    let sendOutcome: { status: 'sent' | 'failed' | 'skipped'; error: string | null; youtubeCommentId: string | null } = {
+      status: 'skipped',
+      error: null,
+      youtubeCommentId: null,
+    }
+
+    const plan = await getCreatorPlan(supabase, creatorId)
+    if (plan === 'pro' && postInfo?.channel_id && comment.external_comment_id) {
+      const result = await sendReplyToYouTube(supabase, {
+        creatorId,
+        channelId: postInfo.channel_id,
+        parentExternalCommentId: comment.external_comment_id,
+        text: finalText,
+      })
+
+      if (result.ok) {
+        sendOutcome = { status: 'sent', error: null, youtubeCommentId: result.youtubeCommentId }
+      } else if (result.reason === 'missing_scope') {
+        // Not a failure worth logging as an error — this is the expected state for
+        // every Pro creator who hasn't yet re-connected with reply-sending enabled.
+        sendOutcome = { status: 'skipped', error: result.error, youtubeCommentId: null }
+      } else {
+        sendOutcome = { status: 'failed', error: result.error, youtubeCommentId: null }
+        logWarn('api/draft-reply/approve', 'Reply approved but could not be sent to YouTube', {
+          creator_id: creatorId,
+          comment_id,
+          reason: result.reason,
+          error: result.error,
+        })
+      }
+
+      await supabase
+        .from('comment_categories')
+        .update({
+          reply_send_status: sendOutcome.status,
+          reply_sent_at: sendOutcome.status === 'sent' ? new Date().toISOString() : null,
+          youtube_reply_comment_id: sendOutcome.youtubeCommentId,
+          reply_send_error: sendOutcome.error,
+        })
+        .eq('comment_id', comment_id)
+    }
+
     return NextResponse.json({
       success: true,
       final_reply_text: finalText,
       reply_was_edited: wasEdited,
+      reply_send_status: sendOutcome.status,
+      ...(sendOutcome.error ? { reply_send_error: sendOutcome.error } : {}),
     })
   } catch (err) {
     logError('api/draft-reply/approve', err, { stage: 'request' })

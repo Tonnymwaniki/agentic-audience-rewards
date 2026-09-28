@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { logError, logWarn } from '@/lib/logger'
-import { fetchOwnedChannelsForCreator } from '@/lib/youtube-oauth'
+import { fetchOwnedChannelsForCreator, hasReplyScope } from '@/lib/youtube-oauth'
+import { getCreatorPlan } from '@/lib/entitlements'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,7 +27,7 @@ export async function GET() {
 
   const { data: grant, error } = await supabase
     .from('youtube_oauth_tokens')
-    .select('channel_id, channel_title')
+    .select('channel_id, channel_title, scope')
     .eq('creator_id', creatorId)
     .maybeSingle()
 
@@ -34,6 +35,11 @@ export async function GET() {
     // Not an error: simply nobody has connected Google on this account yet.
     return NextResponse.json({ connected: false, channels: [] })
   }
+
+  // Surfaced so the Connect page can offer "enable reply-sending" only to a Pro
+  // creator whose grant doesn't already carry it, rather than every creator.
+  const plan = await getCreatorPlan(supabase, creatorId)
+  const replyScopeGranted = hasReplyScope(grant.scope)
 
   const channels = await fetchOwnedChannelsForCreator(supabase, creatorId, grant.channel_id)
 
@@ -58,6 +64,8 @@ export async function GET() {
   return NextResponse.json({
     connected: true,
     refreshed: channels.refreshed,
+    plan,
+    replyScopeGranted,
     channels: channels.channels.map(channel => ({
       id: channel.id,
       title: channel.title,

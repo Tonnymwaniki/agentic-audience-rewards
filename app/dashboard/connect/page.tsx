@@ -172,6 +172,8 @@ export default function ConnectPage() {
   const [ownedChannels, setOwnedChannels] = useState<OwnedChannel[] | null>(null)
   const [loadingChannels, setLoadingChannels] = useState(false)
   const [oauthNotice, setOauthNotice] = useState<string | null>(null)
+  const [plan, setPlan] = useState<'free' | 'pro' | null>(null)
+  const [replyScopeGranted, setReplyScopeGranted] = useState(false)
 
   const [phase, setPhase] = useState<Phase>('form')
   const [formError, setFormError] = useState<string | null>(null)
@@ -256,6 +258,8 @@ export default function ConnectPage() {
       .then(data => {
         if (cancelled) return
         setOwnedChannels(data.connected ? (data.channels ?? []) : [])
+        setPlan(data.plan ?? null)
+        setReplyScopeGranted(Boolean(data.replyScopeGranted))
         if (data.revoked) {
           setOauthNotice('Your Google connection was revoked. Reconnect to enable replies and rewards.')
         }
@@ -689,6 +693,42 @@ export default function ConnectPage() {
           </>
         )}
       </section>
+
+      {/* Reply-sending opt-in: only shown once a channel is verified, since there's
+          nothing to grant write access FOR otherwise. Pro-gated at the button
+          itself (not just server-side) so a Free creator sees the upsell instead
+          of a dead end. */}
+      {ownedChannels && ownedChannels.length > 0 && !replyScopeGranted && (
+        <section aria-labelledby="reply-sending" className="card">
+          <h2 id="reply-sending" className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
+            Reply sending
+          </h2>
+          <p className="mt-2 text-sm leading-relaxed text-text-primary">
+            {plan === 'pro'
+              ? "Let your agent post approved replies straight to YouTube, in your voice, once you've reviewed them."
+              : 'Posting approved replies straight to YouTube is a Pro feature.'}
+          </p>
+          {plan === 'pro' ? (
+            <a
+              href="/api/auth/youtube/start?replies=1"
+              className="btn-primary mt-4 flex w-full items-center justify-center gap-2"
+            >
+              Enable reply sending
+            </a>
+          ) : (
+            <a
+              href="/dashboard/billing"
+              className="btn-primary mt-4 flex w-full items-center justify-center gap-2"
+            >
+              Upgrade to Pro
+            </a>
+          )}
+          <p className="mt-2 text-xs leading-relaxed text-text-muted">
+            This asks for one extra, more sensitive Google permission (posting comments) — approved
+            drafts are still never sent without you reviewing them first.
+          </p>
+        </section>
+      )}
 
       {/* SECONDARY PATH, deliberately quieter. Analyzing a channel you don't own
           is legitimate research, so it stays available — with its limits stated up

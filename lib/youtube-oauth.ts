@@ -25,13 +25,28 @@ const YOUTUBE_CHANNELS_ENDPOINT = 'https://www.googleapis.com/youtube/v3/channel
 
 export const YOUTUBE_READONLY_SCOPE = 'https://www.googleapis.com/auth/youtube.readonly'
 export const YT_ANALYTICS_READONLY_SCOPE = 'https://www.googleapis.com/auth/yt-analytics.readonly'
+/**
+ * Write access — required to post a reply via comments.insert. Deliberately NOT
+ * part of REQUESTED_SCOPES below: it is a materially more sensitive grant than
+ * read-only access, only meaningful to a Pro creator, and asked for separately
+ * (see the `replies=1` branch of /api/auth/youtube/start) so a creator who just
+ * wants verified-ownership/analytics never sees a consent screen asking to post
+ * on their behalf. At meaningful scale this scope also requires Google's CASA
+ * security assessment for production use — flagged here, not solved here.
+ */
+export const YOUTUBE_FORCE_SSL_SCOPE = 'https://www.googleapis.com/auth/youtube.force-ssl'
 
 /**
- * Everything the consent screen asks for. Grants made before the analytics scope
- * was added lack it; prompt=consent below means reconnecting grants it, and
- * include_granted_scopes keeps the ones already held.
+ * Everything the DEFAULT (ownership-verification) consent screen asks for. Grants
+ * made before the analytics scope was added lack it; prompt=consent below means
+ * reconnecting grants it, and include_granted_scopes keeps the ones already held.
  */
 export const REQUESTED_SCOPES = [YOUTUBE_READONLY_SCOPE, YT_ANALYTICS_READONLY_SCOPE].join(' ')
+
+/** True once a stored grant's scope string includes write access. */
+export function hasReplyScope(scope: string | null | undefined): boolean {
+  return !!scope && scope.split(' ').includes(YOUTUBE_FORCE_SSL_SCOPE)
+}
 
 /** Name of the httpOnly cookie holding the signed CSRF state. */
 export const OAUTH_STATE_COOKIE = 'yt_oauth_state'
@@ -173,13 +188,13 @@ export function decryptToken(stored: string): string {
 
 // --- Google calls -------------------------------------------------------------
 
-export function buildConsentUrl(state: string): string {
+export function buildConsentUrl(state: string, extraScopes: string[] = []): string {
   const { clientId, redirectUri } = oauthConfig()
   const url = new URL(GOOGLE_AUTH_ENDPOINT)
   url.searchParams.set('client_id', clientId)
   url.searchParams.set('redirect_uri', redirectUri)
   url.searchParams.set('response_type', 'code')
-  url.searchParams.set('scope', REQUESTED_SCOPES)
+  url.searchParams.set('scope', [REQUESTED_SCOPES, ...extraScopes].join(' '))
   url.searchParams.set('state', state)
   // offline + consent is what actually returns a refresh token. Google issues one
   // only on the FIRST authorization for a client/user pair unless prompt=consent

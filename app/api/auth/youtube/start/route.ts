@@ -1,4 +1,4 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { logError, logInfo } from '@/lib/logger'
 import {
@@ -6,7 +6,9 @@ import {
   createState,
   OAUTH_STATE_COOKIE,
   STATE_TTL_SECONDS,
+  YOUTUBE_FORCE_SSL_SCOPE,
 } from '@/lib/youtube-oauth'
+import { requiresPro } from '@/lib/entitlements'
 
 export const dynamic = 'force-dynamic'
 
@@ -21,17 +23,30 @@ export const dynamic = 'force-dynamic'
  * GET rather than POST because it ends in a browser redirect the user follows from
  * a link or button. The state cookie is what protects it, not the method.
  */
-export async function GET() {
+export async function GET(request: NextRequest) {
   const result = await requireCreator()
   if (!result.ok) return result.response
 
-  const { creatorId } = result.auth
+  const { supabase, creatorId } = result.auth
+
+  // Opt-in only: ?replies=1 additionally requests write access so approved
+  // drafts can actually post to YouTube (app/api/draft-reply/approve). Gated to
+  // Pro here, at the point consent is requested, not just at send-time — a Free
+  // creator should never even see a "let this app post on your behalf" screen
+  // for a feature they can't use yet.
+  const wantsReplyScope = request.nextUrl.searchParams.get('replies') === '1'
+  if (wantsReplyScope && (await requiresPro(supabase, creatorId))) {
+    return NextResponse.json(
+      { error: 'Reply-sending is a Pro feature. Upgrade to enable it.', upgrade_required: true },
+      { status: 402 }
+    )
+  }
 
   try {
     const state = createState(creatorId)
-    const consentUrl = buildConsentUrl(state)
+    const consentUrl = buildConsentUrl(state, wantsReplyScope ? [YOUTUBE_FORCE_SSL_SCOPE] : [])
 
-    logInfo('api/auth/youtube/start', 'Starting YouTube OAuth', { creator_id: creatorId })
+    logInfo('api/auth/youtube/start', 'Starting YouTube OAuth', { creator_id: creatorId, reply_scope_requested: wantsReplyScope })
 
     const response = NextResponse.redirect(consentUrl)
     response.cookies.set(OAUTH_STATE_COOKIE, state, {
