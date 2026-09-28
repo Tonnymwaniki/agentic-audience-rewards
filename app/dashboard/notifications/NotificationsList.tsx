@@ -103,7 +103,10 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
         // Written by lib/billing.ts's activateProSubscription, right after a
         // real payment resolves — no comment involved, just a confirmation.
         const isBillingUpgrade = item.type === 'billing_upgraded'
-        const isAgentNote = isInsight || isGap || isContradiction || isBillingUpgrade
+        // Written by lib/billing.ts's downgradeToFree, when a lapsed Pro period
+        // isn't renewed and the cron moves the creator back to Free.
+        const isBillingDowngrade = item.type === 'billing_downgraded'
+        const isAgentNote = isInsight || isGap || isContradiction || isBillingUpgrade || isBillingDowngrade
 
         return (
           <li
@@ -132,6 +135,12 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M9 12.75 11.25 15 15 9.75" />
                       <circle cx="12" cy="12" r="9" />
+                    </svg>
+                  ) : isBillingDowngrade ? (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="9" />
+                      <path d="M12 8v4" />
+                      <path d="M12 16h.01" />
                     </svg>
                   ) : isContradiction ? (
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -165,7 +174,7 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     />
                   )}
                   <p className="font-body text-sm font-medium text-text-primary">
-                    {isBillingUpgrade ? "You're on Pro" : isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : isContradiction ? 'Profile may be out of date' : comment?.authorName || 'Unknown'}
+                    {isBillingUpgrade ? "You're on Pro" : isBillingDowngrade ? 'Back on Free' : isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : isContradiction ? 'Profile may be out of date' : comment?.authorName || 'Unknown'}
                   </p>
                   {comment?.category && (
                     <span className={`badge badge-${comment.category}`}>

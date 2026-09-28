@@ -69,101 +69,101 @@ export async function activateProSubscription(
   creatorId: string,
   transactionId: string
 ): Promise<void> {
-  const now = new Date()
+  // The whole body is one try/catch, deliberately: a transaction is marked
+  // 'confirmed' by the CALLER before this runs, so if anything in here fails —
+  // the subscriptions write, the creators write, or the plan simply not
+  // sticking — that transaction is now permanently stuck "confirmed" with no
+  // retry path (the status-poll fallback only re-checks 'pending' rows). That
+  // is the exact failure mode both PayHero bugs this session produced, so
+  // EVERY failure path here sends the admin alert, not just one of them.
+  try {
+    const now = new Date()
 
-  const { data: existing } = await supabase
-    .from('subscriptions')
-    .select('current_period_end, status')
-    .eq('creator_id', creatorId)
-    .maybeSingle()
+    const { data: existing } = await supabase
+      .from('subscriptions')
+      .select('current_period_end, status')
+      .eq('creator_id', creatorId)
+      .maybeSingle()
 
-  // A creator paying again before their current period lapses extends from
-  // whichever is later — their current expiry or now — rather than from now
-  // unconditionally, so renewing a few days early doesn't forfeit the remainder
-  // of the period already paid for.
-  const base =
-    existing?.status === 'active' && existing.current_period_end && new Date(existing.current_period_end) > now
-      ? new Date(existing.current_period_end)
-      : now
+    // A creator paying again before their current period lapses extends from
+    // whichever is later — their current expiry or now — rather than from now
+    // unconditionally, so renewing a few days early doesn't forfeit the
+    // remainder of the period already paid for.
+    const base =
+      existing?.status === 'active' && existing.current_period_end && new Date(existing.current_period_end) > now
+        ? new Date(existing.current_period_end)
+        : now
 
-  const periodEnd = new Date(base.getTime() + PRO_PLAN.periodDays * 24 * 60 * 60 * 1000)
+    const periodEnd = new Date(base.getTime() + PRO_PLAN.periodDays * 24 * 60 * 60 * 1000)
 
-  const { error: subError } = await supabase.from('subscriptions').upsert(
-    {
-      creator_id: creatorId,
-      plan: 'pro',
-      status: 'active',
-      amount_cents: proAmountCents(),
-      current_period_start: now.toISOString(),
-      current_period_end: periodEnd.toISOString(),
-      renewal_reminder_sent_at: null,
-      updated_at: now.toISOString(),
-    },
-    { onConflict: 'creator_id' }
-  )
+    const { error: subError } = await supabase.from('subscriptions').upsert(
+      {
+        creator_id: creatorId,
+        plan: 'pro',
+        status: 'active',
+        amount_cents: proAmountCents(),
+        current_period_start: now.toISOString(),
+        current_period_end: periodEnd.toISOString(),
+        renewal_reminder_sent_at: null,
+        updated_at: now.toISOString(),
+      },
+      { onConflict: 'creator_id' }
+    )
 
-  if (subError) {
-    logError('billing.activateProSubscription', subError, { creator_id: creatorId, transaction_id: transactionId })
-    throw new Error('Failed to activate subscription')
-  }
+    if (subError) throw new Error(`Failed to activate subscription: ${subError.message}`)
 
-  const { error: creatorError } = await supabase.from('creators').update({ plan: 'pro' }).eq('id', creatorId)
+    const { error: creatorError } = await supabase.from('creators').update({ plan: 'pro' }).eq('id', creatorId)
 
-  if (creatorError) {
-    logError('billing.activateProSubscription', creatorError, { creator_id: creatorId, transaction_id: transactionId })
-    throw new Error('Failed to update creator plan')
-  }
+    if (creatorError) throw new Error(`Failed to update creator plan: ${creatorError.message}`)
 
-  // Safety net: re-read what was actually written rather than trusting the
-  // update call's lack of an error. This is exactly the failure mode both
-  // PayHero bugs this session produced — a transaction resolving 'confirmed'
-  // while the creator silently stayed on Free — so it's checked right here, at
-  // the one place every payment funnels through, instead of relying on it
-  // being noticed later by a creator wondering why they still look Free.
-  const { data: verify } = await supabase.from('creators').select('plan').eq('id', creatorId).maybeSingle()
-  if (verify?.plan !== 'pro') {
-    logError('billing.activateProSubscription', new Error('Plan update did not take effect'), {
+    // Re-read what was actually written rather than trusting the update call's
+    // lack of an error — an UPDATE that matches zero rows (e.g. an RLS policy
+    // silently discarding it) still reports success with no error.
+    const { data: verify } = await supabase.from('creators').select('plan').eq('id', creatorId).maybeSingle()
+    if (verify?.plan !== 'pro') {
+      throw new Error(`Plan update did not take effect — observed plan is "${verify?.plan ?? 'unknown'}"`)
+    }
+
+    logInfo('billing.activateProSubscription', 'Pro subscription activated', {
       creator_id: creatorId,
       transaction_id: transactionId,
-      observed_plan: verify?.plan ?? null,
+      current_period_end: periodEnd.toISOString(),
     })
+
+    const periodEndLabel = periodEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+
+    // Best-effort from here — the subscription is already active and correct
+    // regardless of whether the notification or the email succeeds, so neither
+    // is allowed to turn into an error the caller has to handle.
+    await supabase.from('notifications').insert({
+      creator_id: creatorId,
+      type: 'billing_upgraded',
+      message: `You're on Notice Pro — unlimited video analysis and research chat, renews ${periodEndLabel}.`,
+    })
+
+    const email = await getCreatorEmail(supabase, creatorId)
+    if (email) {
+      await sendEmail({
+        to: email,
+        subject: "You're on Notice Pro",
+        html: `
+          <p>Thanks for upgrading to Notice Pro!</p>
+          <p><strong>Amount:</strong> KES ${PRO_PLAN.amountKes}<br/>
+          <strong>Renews:</strong> ${periodEndLabel}</p>
+          <p>You now have unlimited video analysis, unlimited research chat, and everything else Notice adds going forward.</p>
+        `,
+      })
+    }
+  } catch (err) {
+    logError('billing.activateProSubscription', err, { creator_id: creatorId, transaction_id: transactionId })
     await sendEmail({
       to: ADMIN_ALERT_EMAIL,
-      subject: 'Notice: a payment confirmed but the creator is still on Free',
-      html: `<p>Transaction <code>${transactionId}</code> for creator <code>${creatorId}</code> was marked confirmed, but the creator's plan reads "${verify?.plan ?? 'unknown'}" instead of "pro". This needs a manual fix — check <code>payhero_transactions</code> and <code>subscriptions</code> for this creator.</p>`,
+      subject: 'Notice: a payment confirmed but Pro activation failed',
+      html: `<p>Transaction <code>${transactionId}</code> for creator <code>${creatorId}</code> was marked confirmed, but activating Pro failed: ${
+        err instanceof Error ? err.message : String(err)
+      }. This creator paid but may still be on Free — check <code>payhero_transactions</code>, <code>subscriptions</code> and <code>creators</code> for this creator id.</p>`,
     })
-    return
-  }
-
-  logInfo('billing.activateProSubscription', 'Pro subscription activated', {
-    creator_id: creatorId,
-    transaction_id: transactionId,
-    current_period_end: periodEnd.toISOString(),
-  })
-
-  const periodEndLabel = periodEnd.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
-
-  // Everything below is best-effort: the subscription is already active and
-  // correct regardless of whether the notification or the email succeeds, so
-  // neither is allowed to turn into an error the caller has to handle.
-  await supabase.from('notifications').insert({
-    creator_id: creatorId,
-    type: 'billing_upgraded',
-    message: `You're on Notice Pro — unlimited video analysis and research chat, renews ${periodEndLabel}.`,
-  })
-
-  const email = await getCreatorEmail(supabase, creatorId)
-  if (email) {
-    await sendEmail({
-      to: email,
-      subject: "You're on Notice Pro",
-      html: `
-        <p>Thanks for upgrading to Notice Pro!</p>
-        <p><strong>Amount:</strong> KES ${PRO_PLAN.amountKes}<br/>
-        <strong>Renews:</strong> ${periodEndLabel}</p>
-        <p>You now have unlimited video analysis, unlimited research chat, and everything else Notice adds going forward.</p>
-      `,
-    })
+    throw err
   }
 }
 
@@ -191,4 +191,27 @@ export async function downgradeToFree(supabase: SupabaseClient, creatorId: strin
   }
 
   logInfo('billing.downgradeToFree', 'Subscription lapsed, downgraded to free', { creator_id: creatorId })
+
+  // Best-effort, same as activateProSubscription's confirmation: the downgrade
+  // itself already succeeded above regardless of whether either of these does.
+  // Without this, a creator whose renewal silently failed (or who just forgot)
+  // would only discover they're back on Free when a Pro feature stops working.
+  await supabase.from('notifications').insert({
+    creator_id: creatorId,
+    type: 'billing_downgraded',
+    message: "Your Pro period ended and wasn't renewed, so you're back on the Free plan. Upgrade any time from Billing.",
+  })
+
+  const email = await getCreatorEmail(supabase, creatorId)
+  if (email) {
+    await sendEmail({
+      to: email,
+      subject: 'Your Notice Pro period has ended',
+      html: `
+        <p>Your Pro subscription wasn't renewed, so your account is now back on the Free plan
+        (3 videos analyzed/month, 10 research questions/month, no reply-sending).</p>
+        <p>You can upgrade again any time from the Billing page in Notice.</p>
+      `,
+    })
+  }
 }
