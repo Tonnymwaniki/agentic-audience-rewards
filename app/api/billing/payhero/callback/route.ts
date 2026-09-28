@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
 
   const { data: transaction, error: fetchError } = await supabase
     .from('payhero_transactions')
-    .select('id, creator_id, status, external_reference')
+    .select('id, creator_id, status, external_reference, payhero_reference')
     .eq('external_reference', ref)
     .maybeSingle()
 
@@ -51,8 +51,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true })
   }
 
+  // GET /transaction-status only recognizes PAYHERO'S OWN reference (returned
+  // when the push was initiated, stored as payhero_reference) — our own
+  // external_reference is meaningless to their lookup and returns "transaction
+  // with the given reference not found" (confirmed live, not just from docs).
+  if (!transaction.payhero_reference) {
+    logWarn('api/billing/payhero/callback', 'No payhero_reference stored yet; cannot verify', { ref })
+    return NextResponse.json({ ok: true })
+  }
+
   try {
-    const result = await checkTransactionStatus(transaction.external_reference)
+    const result = await checkTransactionStatus(transaction.payhero_reference)
     await resolveTransaction(supabase, transaction, result)
   } catch (err) {
     // Leave it pending — the status-polling fallback (app/api/billing/status)

@@ -29,13 +29,18 @@ export async function GET(request: NextRequest) {
   if (ref) {
     const { data: transaction } = await supabase
       .from('payhero_transactions')
-      .select('id, creator_id, status, external_reference')
+      .select('id, creator_id, status, external_reference, payhero_reference')
       .eq('external_reference', ref)
       .maybeSingle()
 
-    if (transaction && transaction.creator_id === creatorId && transaction.status === 'pending') {
+    // GET /transaction-status only recognizes PAYHERO'S OWN reference (returned
+    // when the push was initiated, stored as payhero_reference) — polling with
+    // our own external_reference returns "transaction with the given reference
+    // not found" (confirmed live), leaving a real, already-paid transaction
+    // stuck showing as pending forever.
+    if (transaction && transaction.creator_id === creatorId && transaction.status === 'pending' && transaction.payhero_reference) {
       try {
-        const result = await checkTransactionStatus(ref)
+        const result = await checkTransactionStatus(transaction.payhero_reference)
 
         if (result.status === 'success') {
           await supabase
