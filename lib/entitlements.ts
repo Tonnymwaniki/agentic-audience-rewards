@@ -55,6 +55,38 @@ export async function getCreatorPlan(supabase: SupabaseClient, creatorId: string
   return data?.plan === 'pro' ? 'pro' : 'free'
 }
 
+/**
+ * True when `postId` is the earliest-ingested post on this creator's VERIFIED
+ * channel — i.e. their first-ever real video, not a "paste any channel"
+ * research target (which never reaches this check anyway, since sending
+ * requires ownership verification first).
+ *
+ * Backs the free trial of reply-sending: a Free creator can send replies on
+ * this one video only, so they can see the feature actually post to YouTube
+ * before deciding whether to upgrade. Scoped to `channelId` (the verified
+ * channel, passed in by the caller) rather than every post ever ingested,
+ * so a creator who analyzed several of their own videos before ever
+ * connecting Google still gets the OLDEST one as their free trial, not
+ * whichever they happen to approve first.
+ */
+export async function isFirstVerifiedPost(
+  supabase: SupabaseClient,
+  creatorId: string,
+  channelId: string,
+  postId: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from('posts')
+    .select('id')
+    .eq('creator_id', creatorId)
+    .eq('channel_id', channelId)
+    .order('ingested_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+
+  return data?.id === postId
+}
+
 function startOfMonthIso(): string {
   const now = new Date()
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString()

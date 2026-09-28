@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
 import { logError, logInfo, logWarn } from '@/lib/logger'
 import { checkPostVerification, VERIFY_OWNERSHIP_MESSAGE, VERIFY_OWNERSHIP_PATH } from '@/lib/channel-verification'
-import { getCreatorPlan } from '@/lib/entitlements'
+import { getCreatorPlan, isFirstVerifiedPost } from '@/lib/entitlements'
 import { sendReplyToYouTube } from '@/lib/youtube-reply'
 
 export async function POST(request: NextRequest) {
@@ -104,9 +104,11 @@ export async function POST(request: NextRequest) {
     // Approving the draft (above) and actually posting it to YouTube (below) are
     // deliberately separate steps: approval always succeeds once ownership is
     // verified, so a creator's decision is never lost to a YouTube-side failure.
-    // Sending is gated to Pro and only attempted when the channel's grant actually
-    // carries write access — everyone else gets `skipped`, not an error, since
-    // "not sending" is the correct behavior for them, not a malfunction.
+    // Sending is gated to Pro — OR, for a Free creator, their single oldest
+    // verified video, a one-time free trial so they can see a real reply land on
+    // YouTube before upgrading — and only attempted when the channel's grant
+    // actually carries write access. Everyone else gets `skipped`, not an error,
+    // since "not sending" is the correct behavior for them, not a malfunction.
     let sendOutcome: { status: 'sent' | 'failed' | 'skipped'; error: string | null; youtubeCommentId: string | null } = {
       status: 'skipped',
       error: null,
@@ -114,7 +116,13 @@ export async function POST(request: NextRequest) {
     }
 
     const plan = await getCreatorPlan(supabase, creatorId)
-    if (plan === 'pro' && postInfo?.channel_id && comment.external_comment_id) {
+    const eligibleForSend =
+      plan === 'pro' ||
+      (postInfo?.channel_id
+        ? await isFirstVerifiedPost(supabase, creatorId, postInfo.channel_id, comment.post_id as string)
+        : false)
+
+    if (eligibleForSend && postInfo?.channel_id && comment.external_comment_id) {
       const result = await sendReplyToYouTube(supabase, {
         creatorId,
         channelId: postInfo.channel_id,

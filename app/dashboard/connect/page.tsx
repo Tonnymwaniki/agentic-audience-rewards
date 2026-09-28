@@ -695,9 +695,10 @@ export default function ConnectPage() {
       </section>
 
       {/* Reply-sending opt-in: only shown once a channel is verified, since there's
-          nothing to grant write access FOR otherwise. Pro-gated at the button
-          itself (not just server-side) so a Free creator sees the upsell instead
-          of a dead end. */}
+          nothing to grant write access FOR otherwise. Open to every plan now — a
+          Free creator gets a one-time trial on their single oldest verified
+          video (enforced server-side in the approve route), so the button isn't
+          Pro-gated here; only the copy differs by plan. */}
       {ownedChannels && ownedChannels.length > 0 && !replyScopeGranted && (
         <section aria-labelledby="reply-sending" className="card">
           <h2 id="reply-sending" className="font-mono text-[10px] tracking-widest text-text-muted uppercase">
@@ -706,23 +707,14 @@ export default function ConnectPage() {
           <p className="mt-2 text-sm leading-relaxed text-text-primary">
             {plan === 'pro'
               ? "Let your agent post approved replies straight to YouTube, in your voice, once you've reviewed them."
-              : 'Posting approved replies straight to YouTube is a Pro feature.'}
+              : "Free on your oldest video, so you can see a real reply land on YouTube. Upgrade to Pro to send replies on every video."}
           </p>
-          {plan === 'pro' ? (
-            <a
-              href="/api/auth/youtube/start?replies=1"
-              className="btn-primary mt-4 flex w-full items-center justify-center gap-2"
-            >
-              Enable reply sending
-            </a>
-          ) : (
-            <a
-              href="/dashboard/billing"
-              className="btn-primary mt-4 flex w-full items-center justify-center gap-2"
-            >
-              Upgrade to Pro
-            </a>
-          )}
+          <a
+            href="/api/auth/youtube/start?replies=1"
+            className="btn-primary mt-4 flex w-full items-center justify-center gap-2"
+          >
+            Enable reply sending
+          </a>
           <p className="mt-2 text-xs leading-relaxed text-text-muted">
             This asks for one extra, more sensitive Google permission (posting comments) — approved
             drafts are still never sent without you reviewing them first.

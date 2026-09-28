@@ -8,7 +8,6 @@ import {
   STATE_TTL_SECONDS,
   YOUTUBE_FORCE_SSL_SCOPE,
 } from '@/lib/youtube-oauth'
-import { requiresPro } from '@/lib/entitlements'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,20 +26,16 @@ export async function GET(request: NextRequest) {
   const result = await requireCreator()
   if (!result.ok) return result.response
 
-  const { supabase, creatorId } = result.auth
+  const { creatorId } = result.auth
 
   // Opt-in only: ?replies=1 additionally requests write access so approved
-  // drafts can actually post to YouTube (app/api/draft-reply/approve). Gated to
-  // Pro here, at the point consent is requested, not just at send-time — a Free
-  // creator should never even see a "let this app post on your behalf" screen
-  // for a feature they can't use yet.
+  // drafts can actually post to YouTube (app/api/draft-reply/approve). Not
+  // gated to Pro here: a Free creator gets a one-time free trial of sending on
+  // their single oldest verified video (see isFirstVerifiedPost in
+  // lib/entitlements.ts), so they need to be able to grant this scope too.
+  // Whether a given approval actually sends is decided per-post at send time,
+  // not at consent time.
   const wantsReplyScope = request.nextUrl.searchParams.get('replies') === '1'
-  if (wantsReplyScope && (await requiresPro(supabase, creatorId))) {
-    return NextResponse.json(
-      { error: 'Reply-sending is a Pro feature. Upgrade to enable it.', upgrade_required: true },
-      { status: 402 }
-    )
-  }
 
   try {
     const state = createState(creatorId)
