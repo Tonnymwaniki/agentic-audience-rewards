@@ -100,7 +100,10 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
         const isGap = item.type === 'knowledge_gap'
         // Written by the contradiction pass (lib/profile-fact-status.ts).
         const isContradiction = item.type === 'profile_contradiction'
-        const isAgentNote = isInsight || isGap || isContradiction
+        // Written by lib/billing.ts's activateProSubscription, right after a
+        // real payment resolves — no comment involved, just a confirmation.
+        const isBillingUpgrade = item.type === 'billing_upgraded'
+        const isAgentNote = isInsight || isGap || isContradiction || isBillingUpgrade
 
         return (
           <li
@@ -125,7 +128,12 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
             <div className="flex items-start gap-3">
               {isAgentNote ? (
                 <span className="icon-badge icon-badge-purple flex-shrink-0" aria-hidden="true">
-                  {isContradiction ? (
+                  {isBillingUpgrade ? (
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M9 12.75 11.25 15 15 9.75" />
+                      <circle cx="12" cy="12" r="9" />
+                    </svg>
+                  ) : isContradiction ? (
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                       <path d="M12 3l9 16H3z" />
                       <path d="M12 10v4" />
@@ -157,7 +165,7 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                     />
                   )}
                   <p className="font-body text-sm font-medium text-text-primary">
-                    {isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : isContradiction ? 'Profile may be out of date' : comment?.authorName || 'Unknown'}
+                    {isBillingUpgrade ? "You're on Pro" : isInsight ? 'Audience insight' : isGap ? 'Suggested profile field' : isContradiction ? 'Profile may be out of date' : comment?.authorName || 'Unknown'}
                   </p>
                   {comment?.category && (
                     <span className={`badge badge-${comment.category}`}>
