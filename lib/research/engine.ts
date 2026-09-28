@@ -2473,8 +2473,6 @@ For broad, all-time questions about what the audience talks about, themes or tre
       const result = await callClaude(systemPrompt, messages, TOOLS, usageCtx)
       const toolUseBlocks = result.content.filter(b => b.type === 'tool_use')
 
-      console.log("RESEARCH TOOLS CALLED THIS TURN:", toolUseBlocks.map(t => ({ name: t.name, input: t.input })))
-
       if (toolUseBlocks.length === 0) {
         finalText = result.content.find(b => b.type === 'text')?.text || null
         break

@@ -749,9 +749,6 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       // every draftable category, since voice isn't category-specific.
       if (post.creator_id) {
         styleExamples = await loadStyleExamples(supabase, post.creator_id)
-        if (styleExamples.length > 0) {
-          console.log(`Categorize: applying ${styleExamples.length} style example(s) from past edits.`)
-        }
       }
 
       // Fetched once per run, not per comment — and only when there's actually a
@@ -762,9 +759,6 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
         const fields = await loadCustomProfileFields(supabase, post.creator_id)
         loadedCustomFields = fields
         customFieldContext = customFieldsToContext(fields)
-        if (customFieldContext.length > 0) {
-          console.log(`Categorize: applying ${customFieldContext.length} custom profile field(s).`)
-        }
       }
 
       if (post.creator_id && draftable.some(c => PROFILE_AWARE_CATEGORIES.has(c.category))) {

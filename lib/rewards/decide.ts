@@ -305,10 +305,6 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE}`
       messages.push({ role: 'user', content: toolResults })
     }
 
-    if (toolsUsed.length > 0) {
-      console.log(`Reward evaluate: ${member.display_name} — tools used: ${toolsUsed.join(', ')}`)
-    }
-
     const textBlock = content.find(
       (block): block is Extract<ContentBlock, { type: 'text' }> => block.type === 'text'
     )

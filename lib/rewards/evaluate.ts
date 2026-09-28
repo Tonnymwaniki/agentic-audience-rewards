@@ -191,9 +191,6 @@ export async function evaluateRewards(
 
   const comments = allComments
 
-  console.log("REWARD DEBUG - post_id received:", post_id)
-  console.log("REWARD DEBUG - comments returned:", comments.length, "post_id filter active:", !!post_id)
-
   const commentIds = comments.map(c => c.id)
 
   let categories: Array<{ comment_id: string; category: string; topic: string | null }> = []
@@ -222,8 +219,6 @@ export async function evaluateRewards(
     const memberComments = commentsByMember.get(member.id) || []
     return memberComments.length >= 1
   })
-
-  console.log("REWARD DEBUG - members found for evaluation:", eligibleMembers.length)
 
   // Held at 20, but the arithmetic behind it has been re-derived rather than
   // assumed. Worst case per member is now FIVE sequential Claude calls: the initial
@@ -334,9 +329,6 @@ export async function evaluateRewards(
         signals
       )
 
-      if (toolsUsed.length > 0) {
-        console.log(`Reward evaluate: ${member.display_name} — tools used: ${toolsUsed.join(', ')}`)
-      }
       if (critique.overturned) {
         logInfo('rewards.evaluate', 'Decision overturned on self-critique', { creator_id, audience_member_id: member.id, member: member.display_name })
       }

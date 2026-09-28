@@ -1,9 +1,13 @@
+import { redirect } from 'next/navigation'
+import { createClient } from '@/lib/supabase/server'
 import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import Link from 'next/link'
 import Avatar from '@/components/Avatar'
 import PageHeader from '@/components/PageHeader'
 import { logError, logWarn } from '@/lib/logger'
+
+export const dynamic = 'force-dynamic'
 
 function normalizeText(text: string): string {
   return text
@@ -13,11 +17,41 @@ function normalizeText(text: string): string {
 }
 
 export default async function RepeatedCommentsPage() {
+  // Was previously unauthenticated AND unscoped: it queried every post, comment
+  // and audience member in the database with no creator_id filter at all, so
+  // any visitor could see every business's commenters and comment text. Fixed
+  // to the same pattern every other dashboard page uses — session first, then
+  // every query scoped to that creator's own posts only.
+  const authClient = await createClient()
+  const {
+    data: { user },
+  } = await authClient.auth.getUser()
+
+  if (!user) redirect('/login')
+
   const supabase = createServiceClient()
+
+  const { data: creator, error: creatorError } = await supabase
+    .from('creators')
+    .select('id')
+    .eq('user_id', user.id)
+    .maybeSingle()
+
+  if (creatorError) {
+    logError('page.repeated', creatorError, { user_id: user.id, stage: 'fetch_creator' })
+    return (
+      <div>
+        <p className="text-red-500">Failed to load your account details.</p>
+      </div>
+    )
+  }
+
+  if (!creator) redirect('/dashboard/connect')
 
   const { data: posts, error: postsError } = await supabase
     .from('posts')
     .select('id')
+    .eq('creator_id', creator.id)
     .order('ingested_at', { ascending: false })
 
   if (postsError) {
@@ -124,19 +158,6 @@ export default async function RepeatedCommentsPage() {
   }
 
   const memberMap = new Map((audienceMembers || []).map(m => [m.id, m.display_name || 'Unknown']))
-
-  console.log("REPEATED DEBUG - memberIds count:", memberIds.length)
-  console.log("REPEATED DEBUG - audienceMembers count:", audienceMembers?.length || 0)
-  console.log("REPEATED DEBUG - sample audienceMembers:", JSON.stringify(audienceMembers?.slice(0, 3), null, 2))
-  console.log("REPEATED DEBUG - sample memberMap entries:", Array.from(memberMap.entries()).slice(0, 3))
-  console.log("REPEATED DEBUG - repeatedGroups count:", repeatedGroups.length)
-  if (repeatedGroups.length > 0) {
-    const firstGroup = repeatedGroups[0]
-    console.log("REPEATED DEBUG - first group uniqueMembers:", Array.from(firstGroup.uniqueMembers))
-    console.log("REPEATED DEBUG - first group memberPostIds:", Array.from(firstGroup.memberPostIds.entries()))
-    const exampleMemberId = Array.from(firstGroup.uniqueMembers)[0]
-    console.log("REPEATED DEBUG - example lookup for memberId:", exampleMemberId, "=>", memberMap.get(exampleMemberId))
-  }
 
   const postIdsSet = new Set(allCommentRows.map(c => c.post_id))
   const { data: postsData } = await supabase

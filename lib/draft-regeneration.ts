@@ -125,9 +125,6 @@ export async function regenerateDraftsForCreator(
   businessProfile = adjusted.profile
   const customFieldContext = customFieldsToContext(adjusted.customFields)
   const uncertainFacts = adjusted.uncertain
-  if (styleExamples.length > 0) {
-    console.log(`Draft regeneration: applying ${styleExamples.length} style example(s) from past edits.`)
-  }
 
   const comments: CommentRow[] = []
   let offset = 0
@@ -182,16 +179,6 @@ export async function regenerateDraftsForCreator(
     const checked = categoriesByCommentId.get(commentId)?.draft_reply_checked_at
     return checked ? new Date(checked).getTime() : 0
   }
-
-  console.log(
-    "REGEN DEBUG - total targets:",
-    targets.length,
-    "sample checked_at values:",
-    targets.slice(0, 5).map(t => ({
-      id: t.id,
-      checked_at: categoriesByCommentId.get(t.id)?.draft_reply_checked_at ?? null,
-    }))
-  )
 
   targets.sort((a, b) => lastCheckedAt(a.id) - lastCheckedAt(b.id))
 

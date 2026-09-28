@@ -9,8 +9,6 @@ import { recordAiUsage } from '@/lib/ai-usage'
  *  that runs at real volume) should pass it — otherwise this call's real
  *  Anthropic spend is invisible to that creator's AI budget (lib/entitlements.ts). */
 export async function updateAudienceProfile(audience_member_id: string, creatorId?: string | null) {
-  console.log("AUDIENCE MEMORY: starting for member", audience_member_id)
-
   const supabase = createServiceClient()
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)

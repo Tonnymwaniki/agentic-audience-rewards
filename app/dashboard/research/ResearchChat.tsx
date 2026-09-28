@@ -523,10 +523,8 @@ function VideoCardDisplay({ card }: { card: VideoCard }) {
 const MAX_TEXTAREA_HEIGHT = 200
 
 /**
- * The suggestion pills. Three open dedicated report pages instead of asking the
- * chat — a report is faster to read and doesn't cost a conversation turn. The
- * fourth stays a chat question: its natural page, /dashboard/repeated, isn't safe
- * to route people to until it's scoped to the signed-in creator.
+ * The suggestion pills. Report pages open directly instead of asking the chat
+ * — a report is faster to read and doesn't cost a conversation turn.
  */
 const SUGGESTIONS: Array<{ label: string; href?: string }> = [
   { label: "What's trending?", href: '/dashboard/research/trends' },
@@ -534,7 +532,10 @@ const SUGGESTIONS: Array<{ label: string; href?: string }> = [
   // No href: the Audience Insights report page was removed, but the question
   // itself is a good one, so it now runs through the chat like any other prompt.
   { label: 'What does my audience want?' },
-  { label: 'Show me repeated comments' },
+  // /dashboard/repeated is now scoped to the signed-in creator (it previously
+  // queried every creator's comments with no auth check at all — fixed), so
+  // this can link directly like the other report pages.
+  { label: 'Show me repeated comments', href: '/dashboard/repeated' },
 ]
 
 /** One pill: a link when it has a report page, otherwise a button that asks the chat. */
