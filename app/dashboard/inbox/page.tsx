@@ -42,11 +42,53 @@ export default async function InboxPage() {
     redirect('/login')
   }
 
-  const { data: posts, error: postsError } = await supabase
-    .from('posts')
-    .select('id, title, ingested_at, thumbnail_url, external_post_id, duration_seconds, view_count')
-    .eq('creator_id', creator.id)
-    .order('ingested_at', { ascending: false })
+  // channel_title (migration 51) may not exist yet on every database this code
+  // runs against — same self-healing pattern as the write side (ingest.ts,
+  // channel-videos.ts): probe for it and fall back to the older column list
+  // rather than breaking the whole page over a missing label.
+  const isMissingColumnError = (error: { code?: string; message?: string } | null, column: string) =>
+    !!error && (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes(column)
+
+  type PostRow = {
+    id: string
+    title: string | null
+    ingested_at: string | null
+    thumbnail_url: string | null
+    external_post_id: string | null
+    duration_seconds: number | null
+    view_count: number | null
+    channel_id: string | null
+    channel_title: string | null
+  }
+
+  const POSTS_COLUMNS = 'id, title, ingested_at, thumbnail_url, external_post_id, duration_seconds, view_count, channel_id'
+
+  let posts: PostRow[] | null = null
+  let postsError: { code?: string; message?: string } | null = null
+
+  {
+    const first = await supabase
+      .from('posts')
+      .select(`${POSTS_COLUMNS}, channel_title`)
+      .eq('creator_id', creator.id)
+      .order('ingested_at', { ascending: false })
+    posts = first.data as unknown as PostRow[] | null
+    postsError = first.error
+
+    if (postsError && isMissingColumnError(postsError, 'channel_title')) {
+      const fallback = await supabase
+        .from('posts')
+        .select(POSTS_COLUMNS)
+        .eq('creator_id', creator.id)
+        .order('ingested_at', { ascending: false })
+      // channel_title wasn't selected here — every row gets it back as null below.
+      posts = (fallback.data as unknown as Omit<PostRow, 'channel_title'>[] | null)?.map(p => ({
+        ...p,
+        channel_title: null,
+      })) ?? null
+      postsError = fallback.error
+    }
+  }
 
   if (postsError) {
     logError('page.inbox', postsError, { creator_id: creator.id, stage: 'fetch_posts' })
@@ -69,19 +111,51 @@ export default async function InboxPage() {
     thumbnail_url: string | null
     published_at: string | null
     post_id: string | null
+    channel_id: string | null
+    channel_title: string | null
   }> = []
+
+  type ChannelVideoRow = {
+    video_id: string
+    title: string | null
+    thumbnail_url: string | null
+    published_at: string | null
+    post_id: string | null
+    channel_id: string | null
+    channel_title: string | null
+  }
 
   {
     const pageSize = 1000
     let from = 0
+    const BASE_COLUMNS = 'video_id, title, thumbnail_url, published_at, post_id'
+    const FULL_COLUMNS = `${BASE_COLUMNS}, channel_id, channel_title`
+    // Resolved on the first page and reused after: channel_id/channel_title
+    // (migration 51) either exist on this database or they don't.
+    let hasChannelColumns = true
 
     for (;;) {
-      const { data: page, error: channelVideosError } = await supabase
+      const res = await supabase
         .from('channel_videos')
-        .select('video_id, title, thumbnail_url, published_at, post_id')
+        .select(hasChannelColumns ? FULL_COLUMNS : BASE_COLUMNS)
         .eq('creator_id', creator.id)
         .order('published_at', { ascending: false })
         .range(from, from + pageSize - 1)
+
+      let page = res.data as unknown as Partial<ChannelVideoRow>[] | null
+      let channelVideosError = res.error
+
+      if (channelVideosError && hasChannelColumns && isMissingColumnError(channelVideosError, 'channel_id')) {
+        hasChannelColumns = false
+        const retry = await supabase
+          .from('channel_videos')
+          .select(BASE_COLUMNS)
+          .eq('creator_id', creator.id)
+          .order('published_at', { ascending: false })
+          .range(from, from + pageSize - 1)
+        page = retry.data as unknown as Partial<ChannelVideoRow>[] | null
+        channelVideosError = retry.error
+      }
 
       if (channelVideosError) {
         logError('page.inbox', channelVideosError, { creator_id: creator.id, stage: 'fetch_channel_videos' })
@@ -89,7 +163,17 @@ export default async function InboxPage() {
       }
 
       if (!page || page.length === 0) break
-      channelVideos.push(...page)
+      channelVideos.push(
+        ...page.map(v => ({
+          video_id: v.video_id!,
+          title: v.title ?? null,
+          thumbnail_url: v.thumbnail_url ?? null,
+          published_at: v.published_at ?? null,
+          post_id: v.post_id ?? null,
+          channel_id: v.channel_id ?? null,
+          channel_title: v.channel_title ?? null,
+        }))
+      )
       if (page.length < pageSize) break
       from += pageSize
     }
@@ -180,7 +264,7 @@ export default async function InboxPage() {
     id: post.id,
     postId: post.id,
     videoId: null,
-    title: post.title,
+    title: post.title || 'Untitled video',
     sortedAt: post.ingested_at,
     durationSeconds: (post.duration_seconds as number | null) ?? null,
     viewCount: (post.view_count as number | null) ?? null,
@@ -194,6 +278,8 @@ export default async function InboxPage() {
     categorized: categorizedCounts[post.id] || 0,
     isTracked: trackedPostIds.has(post.id),
     analyzed: true,
+    channelId: (post.channel_id as string | null) ?? null,
+    channelTitle: (post.channel_title as string | null) ?? null,
   }))
 
   // post_id is the authoritative link, but a video analyzed before the
@@ -218,6 +304,8 @@ export default async function InboxPage() {
       categorized: 0,
       isTracked: false,
       analyzed: false,
+      channelId: v.channel_id,
+      channelTitle: v.channel_title,
     }))
 
   const allCards = [...analyzedCards, ...unanalyzedCards]

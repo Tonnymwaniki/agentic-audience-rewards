@@ -20,6 +20,10 @@ export type VideoCardData = {
   /** Both null for videos that exist only in the channel index — nothing is fetched for them. */
   durationSeconds: number | null
   viewCount: number | null
+  /** Which YouTube channel this video came from. Null for rows written before
+   * migration 51 (or if that migration hasn't run yet) — grouped as "Other videos". */
+  channelId: string | null
+  channelTitle: string | null
   /**
    * (comments + likes) ÷ views, pre-formatted. Null for unanalyzed videos and for
    * any video YouTube reports no views for — a rate over zero views is undefined,
@@ -29,6 +33,11 @@ export type VideoCardData = {
 }
 
 type SortKey = 'analyzed_first' | 'recent' | 'needs_analysis' | 'fully_analyzed'
+
+/** Groups videos with no recorded channel (pre-migration-51 rows, or a lookup
+ * that failed) into one bucket rather than hiding them or crashing the filter. */
+const UNKNOWN_CHANNEL_KEY = '__unknown__'
+const ALL_CHANNELS_KEY = 'all'
 
 const SORT_OPTIONS: Array<{ value: SortKey; label: string }> = [
   { value: 'analyzed_first', label: 'Analyzed first' },
@@ -250,7 +259,33 @@ export default function VideoGrid({
   // and interleaving them with blurred placeholders by date alone buried them.
   const [sort, setSort] = useState<SortKey>('analyzed_first')
   const [limit, setLimit] = useState(PAGE_SIZE)
+  // Which channel to show. Matters once a creator has researched more than one
+  // channel through Connect — without this, My Videos is one undifferentiated
+  // pile with no way to tell "my channel" apart from "the one I'm researching".
+  const [channelFilter, setChannelFilter] = useState<string>(ALL_CHANNELS_KEY)
   const router = useRouter()
+
+  // One row per distinct channel present in this list, newest-video-first count
+  // descending — the channel with the most videos here is probably the one the
+  // creator most wants to jump to. Hidden entirely when everything is from one
+  // channel (or none are labeled), so a single-channel creator sees no new UI.
+  const channelOptions = useMemo(() => {
+    const counts = new Map<string, { key: string; label: string; count: number }>()
+    for (const v of videos) {
+      const key = v.channelId || UNKNOWN_CHANNEL_KEY
+      const existing = counts.get(key)
+      if (existing) {
+        existing.count++
+      } else {
+        counts.set(key, {
+          key,
+          label: v.channelTitle || (key === UNKNOWN_CHANNEL_KEY ? 'Other videos' : 'Untitled channel'),
+          count: 1,
+        })
+      }
+    }
+    return Array.from(counts.values()).sort((a, b) => b.count - a.count)
+  }, [videos])
 
   // One analysis at a time. Kicking off several at once would put the same
   // creator through concurrent Anthropic batches for no benefit, and the card
@@ -336,10 +371,15 @@ export default function VideoGrid({
   }
 
   const visible = useMemo(() => {
+    const byChannel =
+      channelFilter === ALL_CHANNELS_KEY
+        ? videos
+        : videos.filter(v => (v.channelId || UNKNOWN_CHANNEL_KEY) === channelFilter)
+
     const needle = query.trim().toLowerCase()
     const filtered = needle
-      ? videos.filter(v => v.title.toLowerCase().includes(needle))
-      : videos
+      ? byChannel.filter(v => v.title.toLowerCase().includes(needle))
+      : byChannel
 
     // Copy before sorting — Array.prototype.sort mutates, and `videos` is the prop.
     const sorted = [...filtered]
@@ -370,7 +410,7 @@ export default function VideoGrid({
       const diff = analyzedRatio(b) - analyzedRatio(a)
       return diff !== 0 ? diff : byRecency(a, b)
     })
-  }, [videos, query, sort])
+  }, [videos, query, sort, channelFilter])
 
   const shown = visible.slice(0, limit)
   // Counted over the whole filtered set, not the rendered window: "next 10" should
@@ -412,6 +452,27 @@ export default function VideoGrid({
           />
         </div>
 
+        {/* Only shown once there's actually more than one channel to tell apart —
+            a creator who has only ever connected their own channel sees no new UI. */}
+        {channelOptions.length > 1 && (
+          <select
+            value={channelFilter}
+            onChange={e => {
+              setChannelFilter(e.target.value)
+              setLimit(PAGE_SIZE)
+            }}
+            aria-label="Filter by channel"
+            className="h-11 rounded-lg border border-white/10 bg-surface px-3 text-sm text-text-primary focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink focus:outline-none"
+          >
+            <option value={ALL_CHANNELS_KEY}>All channels ({videos.length})</option>
+            {channelOptions.map(option => (
+              <option key={option.key} value={option.key}>
+                {option.label} ({option.count})
+              </option>
+            ))}
+          </select>
+        )}
+
         <select
           value={sort}
           onChange={e => {
@@ -431,7 +492,9 @@ export default function VideoGrid({
 
       {visible.length === 0 ? (
         <div className="card p-6 text-center">
-          <p className="text-sm text-text-muted">No videos match “{query.trim()}”.</p>
+          <p className="text-sm text-text-muted">
+            {query.trim() ? `No videos match "${query.trim()}".` : 'No videos in this channel yet.'}
+          </p>
         </div>
       ) : (
         <>

@@ -42,6 +42,7 @@ const optionalPostColumns: Record<
   | 'duration_seconds'
   | 'youtube_category'
   | 'channel_id'
+  | 'channel_title'
   | 'tags'
   | 'has_captions'
   | 'youtube_comment_count'
@@ -55,6 +56,8 @@ const optionalPostColumns: Record<
   duration_seconds: true,
   youtube_category: true,
   channel_id: true,
+  // migration 51
+  channel_title: true,
   // migration 37
   tags: true,
   has_captions: true,
@@ -257,6 +260,8 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     // Recorded at ingest so ownership gating is a local read. Optional-column
     // handling below drops it on a database without migration 36.
     channel_id: meta.channelId,
+    // The channel's display name, for the My Videos channel filter (migration 51).
+    channel_title: meta.channelTitle,
     // Refreshed on every re-ingest of the same video, since the upsert conflicts
     // on (platform_id, external_post_id) — so counts track the video over time
     // rather than freezing at whatever they were on first import.

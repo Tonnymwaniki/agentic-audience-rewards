@@ -14,13 +14,22 @@ export type SyncResult =
  */
 const STORE_CHUNK = 10
 
-function toRow(creatorId: string, video: ChannelVideo) {
+function toRow(
+  creatorId: string,
+  video: ChannelVideo,
+  channelId: string | null,
+  channelTitle: string | null
+) {
   return {
     creator_id: creatorId,
     video_id: video.videoId,
     title: video.title,
     thumbnail_url: video.thumbnailUrl || null,
     published_at: video.publishedAt || null,
+    // Stamped once per sync (see channelId/channelTitle below) rather than looked
+    // up per video — every video in one sync belongs to the same channel.
+    channel_id: channelId,
+    channel_title: channelTitle,
   }
 }
 
@@ -36,6 +45,16 @@ export type SyncOptions = {
    * are present, since a specific selection is a stronger instruction than a count.
    */
   videos?: ChannelVideo[]
+  /**
+   * This channel's own id/display name, for grouping in My Videos — the caller
+   * already has these from its own channel-stats lookup (Connect fetches stats
+   * right before starting a sync), so this avoids a second YouTube call for
+   * something the sync would otherwise have to look up itself. Null when the
+   * caller couldn't get stats (e.g. YouTube hiccup); rows just land ungrouped
+   * rather than failing the sync over a label.
+   */
+  channelId?: string | null
+  channelTitle?: string | null
 }
 
 /**
@@ -64,22 +83,49 @@ export async function syncChannelVideos(
     .eq('id', creatorId)
 
   let stored = 0
+  const channelId = options.channelId ?? null
+  const channelTitle = options.channelTitle ?? null
+
+  // Columns added by migration 51. Same self-healing pattern as ingest.ts's
+  // optionalPostColumns: a deploy can land before the migration has been run
+  // against a given database, and a sync failing outright over a missing label
+  // column would be a much worse outcome than just syncing without it once.
+  const channelColumnsAvailable = { channel_id: true, channel_title: true }
 
   // Shared by both paths below: writes one chunk of already-known videos and
   // advances the progress counter the Connect page polls.
   const storeChunk = async (pageVideos: ChannelVideo[]) => {
     for (let i = 0; i < pageVideos.length; i += STORE_CHUNK) {
-      const chunk = pageVideos.slice(i, i + STORE_CHUNK).map(v => toRow(creatorId, v))
-      const { error } = await supabase
-        .from('channel_videos')
-        // post_id is deliberately absent from the payload, so bringing in a
-        // video that was already analyzed refreshes its title and thumbnail
-        // without clearing the link to its analysis.
-        .upsert(chunk, { onConflict: 'creator_id,video_id' })
-      if (error) {
-        throw new Error(`Failed to store channel videos: ${error.message}`)
+      const rows = pageVideos.slice(i, i + STORE_CHUNK).map(v => toRow(creatorId, v, channelId, channelTitle))
+
+      for (;;) {
+        const chunk = rows.map(row => {
+          const r: Record<string, unknown> = { ...row }
+          if (!channelColumnsAvailable.channel_id) delete r.channel_id
+          if (!channelColumnsAvailable.channel_title) delete r.channel_title
+          return r
+        })
+
+        const { error } = await supabase
+          .from('channel_videos')
+          // post_id is deliberately absent from the payload, so bringing in a
+          // video that was already analyzed refreshes its title and thumbnail
+          // without clearing the link to its analysis.
+          .upsert(chunk, { onConflict: 'creator_id,video_id' })
+
+        if (!error) break
+
+        const missing = (['channel_id', 'channel_title'] as const).find(
+          c => (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes(c) && channelColumnsAvailable[c]
+        )
+        if (!missing) {
+          throw new Error(`Failed to store channel videos: ${error.message}`)
+        }
+        channelColumnsAvailable[missing] = false
+        console.warn(`channel_videos.${missing} does not exist yet; syncing without it (run the pending migration)`)
       }
-      stored += chunk.length
+
+      stored += rows.length
       await supabase.from('creators').update({ channel_videos_synced_count: stored }).eq('id', creatorId)
     }
   }

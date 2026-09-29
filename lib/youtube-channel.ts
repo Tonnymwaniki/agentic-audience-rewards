@@ -8,6 +8,10 @@ export type ChannelStats = {
   createdAt: string | null
   /** snippet.country — owner-declared, often null. Not the audience's location. */
   country: string | null
+  /** The channel's own id (items[0].id) — stable across handle/customUrl changes. */
+  channelId: string | null
+  /** snippet.title — the channel's display name, for grouping videos in My Videos. */
+  channelTitle: string | null
 }
 
 export type ChannelVideo = {
@@ -15,6 +19,9 @@ export type ChannelVideo = {
   title: string
   thumbnailUrl: string
   publishedAt: string
+  /** The channel this video belongs to — every video from one sync shares the same pair. */
+  channelId: string
+  channelTitle: string
 }
 
 function resolveChannelInput(input: string): { kind: 'handle' | 'channelId' | 'customUrl'; value: string } | null {
@@ -62,9 +69,17 @@ function resolveChannelInput(input: string): { kind: 'handle' | 'channelId' | 'c
   return null
 }
 
-async function getUploadsPlaylistId(channelInput: { kind: string; value: string }) {
+/**
+ * snippet is requested alongside contentDetails at no extra quota cost (the part
+ * list doesn't change a channels.list call's price) purely to get the channel's
+ * id and display name here, once, rather than needing a second call — every
+ * video from this sync gets stamped with the same pair.
+ */
+async function getUploadsPlaylistId(
+  channelInput: { kind: string; value: string }
+): Promise<{ uploadsPlaylistId: string; channelId: string; channelTitle: string }> {
   const url = new URL(`${YOUTUBE_API_BASE}/channels`)
-  url.searchParams.set('part', 'contentDetails')
+  url.searchParams.set('part', 'contentDetails,snippet')
   url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
   url.searchParams.set('maxResults', '1')
 
@@ -93,7 +108,11 @@ async function getUploadsPlaylistId(channelInput: { kind: string; value: string 
     throw new Error('Channel has no uploads playlist')
   }
 
-  return uploadsPlaylistId
+  return {
+    uploadsPlaylistId,
+    channelId: channel.id,
+    channelTitle: channel.snippet?.title ?? '',
+  }
 }
 
 /**
@@ -148,7 +167,7 @@ export async function fetchAllChannelVideos(
     throw new Error('Invalid YouTube channel URL or handle')
   }
 
-  const uploadsPlaylistId = await getUploadsPlaylistId(channelInput)
+  const { uploadsPlaylistId, channelId, channelTitle } = await getUploadsPlaylistId(channelInput)
 
   const videos: ChannelVideo[] = []
   let pageToken: string | undefined
@@ -187,6 +206,8 @@ export async function fetchAllChannelVideos(
         title: snippet.title,
         thumbnailUrl: snippet.thumbnails?.medium?.url || snippet.thumbnails?.default?.url || '',
         publishedAt: snippet.publishedAt,
+        channelId,
+        channelTitle,
       })
     }
     videos.push(...pageVideos)
@@ -296,7 +317,7 @@ export async function fetchChannelVideos(channelUrlOrHandle: string): Promise<Ch
     throw new Error('Invalid YouTube channel URL or handle')
   }
 
-  const uploadsPlaylistId = await getUploadsPlaylistId(channelInput)
+  const { uploadsPlaylistId, channelId, channelTitle } = await getUploadsPlaylistId(channelInput)
 
   const playlistUrl = new URL(`${YOUTUBE_API_BASE}/playlistItems`)
   playlistUrl.searchParams.set('part', 'snippet')
@@ -322,6 +343,8 @@ export async function fetchChannelVideos(channelUrlOrHandle: string): Promise<Ch
       title: snippet.title,
       thumbnailUrl,
       publishedAt: snippet.publishedAt,
+      channelId,
+      channelTitle,
     }
   })
 }
@@ -372,11 +395,12 @@ export async function fetchChannelStats(channelUrlOrHandle: string): Promise<Cha
   }
 
   const data = await res.json()
-  const stats = data.items?.[0]?.statistics
+  const item = data.items?.[0]
+  const stats = item?.statistics
   if (!stats) {
     throw new Error('Channel not found')
   }
-  const snippet = data.items?.[0]?.snippet ?? {}
+  const snippet = item?.snippet ?? {}
 
   return {
     subscriberCount: parseCount(stats.subscriberCount),
@@ -385,5 +409,7 @@ export async function fetchChannelStats(channelUrlOrHandle: string): Promise<Cha
     createdAt: (snippet.publishedAt as string | undefined) ?? null,
     // Self-declared by the owner in YouTube settings; frequently absent.
     country: (snippet.country as string | undefined) ?? null,
+    channelId: (item?.id as string | undefined) ?? null,
+    channelTitle: (snippet.title as string | undefined) ?? null,
   }
 }

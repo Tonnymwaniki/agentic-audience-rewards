@@ -83,6 +83,13 @@ export async function POST(request: NextRequest) {
       .update({ channel_sync_status: 'syncing', channel_videos_synced_count: 0 })
       .eq('id', creatorId)
 
+    // Reused for every video this sync stores, so channel_videos rows can be
+    // grouped in My Videos without a second YouTube lookup. Null when the stats
+    // call itself failed — rows still land, just ungrouped, rather than losing
+    // the whole sync over a label.
+    const channelId = statsResult.success ? statsResult.stats.channelId : null
+    const channelTitle = statsResult.success ? statsResult.stats.channelTitle : null
+
     // Detached, so the creator watches numbered progress instead of a spinner on a
     // held-open request. Progress is polled from /api/creator/channel/sync-status.
     after(async () => {
@@ -91,7 +98,7 @@ export async function POST(request: NextRequest) {
           supabase,
           creatorId,
           channelUrl,
-          hasVideoList ? { videos } : { limit: video_limit }
+          { ...(hasVideoList ? { videos } : { limit: video_limit }), channelId, channelTitle }
         )
       } catch (err) {
         logError('api/creator/channel', err, { creator_id: creatorId, stage: 'background_sync' })

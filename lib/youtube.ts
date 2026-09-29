@@ -101,6 +101,9 @@ export async function fetchVideoMeta(videoId: string) {
     // Which channel owns this video. Already in the snippet we fetch, and it is
     // what capability gating compares against a verified OAuth grant.
     channelId: (snippet.channelId as string | undefined) ?? null,
+    // The channel's display name, for grouping videos by channel in My Videos.
+    // Same snippet, no extra quota.
+    channelTitle: (snippet.channelTitle as string | undefined) ?? null,
     likeCount: parseCount(statistics.likeCount),
     viewCount: parseCount(statistics.viewCount),
     durationSeconds: parseIsoDuration(item.contentDetails?.duration),
