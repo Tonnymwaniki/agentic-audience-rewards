@@ -26,10 +26,16 @@ function toRow(creatorId: string, video: ChannelVideo) {
 
 export type SyncOptions = {
   /**
-   * Bring in at most this many videos, newest first. The Connect flow always
-   * passes one (the creator's chosen number); omit it to walk the whole channel.
+   * Bring in at most this many videos, newest first. Used when the creator picked
+   * a quantity rather than specific videos; omit it to walk the whole channel.
    */
   limit?: number
+  /**
+   * Bring in exactly these videos — already fetched by the picker preview, so no
+   * further YouTube calls are needed here. Takes priority over `limit` when both
+   * are present, since a specific selection is a stronger instruction than a count.
+   */
+  videos?: ChannelVideo[]
 }
 
 /**
@@ -59,27 +65,39 @@ export async function syncChannelVideos(
 
   let stored = 0
 
+  // Shared by both paths below: writes one chunk of already-known videos and
+  // advances the progress counter the Connect page polls.
+  const storeChunk = async (pageVideos: ChannelVideo[]) => {
+    for (let i = 0; i < pageVideos.length; i += STORE_CHUNK) {
+      const chunk = pageVideos.slice(i, i + STORE_CHUNK).map(v => toRow(creatorId, v))
+      const { error } = await supabase
+        .from('channel_videos')
+        // post_id is deliberately absent from the payload, so bringing in a
+        // video that was already analyzed refreshes its title and thumbnail
+        // without clearing the link to its analysis.
+        .upsert(chunk, { onConflict: 'creator_id,video_id' })
+      if (error) {
+        throw new Error(`Failed to store channel videos: ${error.message}`)
+      }
+      stored += chunk.length
+      await supabase.from('creators').update({ channel_videos_synced_count: stored }).eq('id', creatorId)
+    }
+  }
+
   try {
-    const result = await fetchAllChannelVideos(
-      channelUrl,
-      async (_found, _pages, pageVideos) => {
-        for (let i = 0; i < pageVideos.length; i += STORE_CHUNK) {
-          const chunk = pageVideos.slice(i, i + STORE_CHUNK).map(v => toRow(creatorId, v))
-          const { error } = await supabase
-            .from('channel_videos')
-            // post_id is deliberately absent from the payload, so bringing in a
-            // video that was already analyzed refreshes its title and thumbnail
-            // without clearing the link to its analysis.
-            .upsert(chunk, { onConflict: 'creator_id,video_id' })
-          if (error) {
-            throw new Error(`Failed to store channel videos: ${error.message}`)
-          }
-          stored += chunk.length
-          await supabase.from('creators').update({ channel_videos_synced_count: stored }).eq('id', creatorId)
-        }
-      },
-      { limit: options.limit }
-    )
+    // A specific selection (from the comment-count picker) skips YouTube entirely —
+    // the preview call already fetched this metadata, so there is nothing left to
+    // walk or paginate.
+    const result = options.videos
+      ? await (async () => {
+          await storeChunk(options.videos!)
+          return { videos: options.videos!, pages: 0, hitCap: false }
+        })()
+      : await fetchAllChannelVideos(
+          channelUrl,
+          async (_found, _pages, pageVideos) => { await storeChunk(pageVideos) },
+          { limit: options.limit }
+        )
 
     await supabase
       .from('creators')

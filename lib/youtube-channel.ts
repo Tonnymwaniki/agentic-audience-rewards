@@ -214,6 +214,82 @@ export async function fetchAllChannelVideos(
   return { videos, pages, hitCap }
 }
 
+/**
+ * Comment counts for up to 50 video ids per call (the YouTube API's own batch
+ * limit for videos.list), run in parallel since — unlike playlistItems.list —
+ * these calls don't depend on a shared pageToken.
+ *
+ * A missing entry in the response (private/deleted since the playlist walk ran)
+ * and a channel that has turned comments off both come back as `null` here —
+ * `commentCount` is a public statistic, and YouTube simply omits the field
+ * rather than reporting zero, since zero-with-comments-on is a real, different
+ * state. Callers that need to tell those two `null` cases apart don't currently
+ * exist; if one does, this is where to split it (e.g. by also checking
+ * statistics presence vs. items presence).
+ */
+export async function fetchCommentCountsByIds(videoIds: string[]): Promise<Map<string, number | null>> {
+  const counts = new Map<string, number | null>()
+  if (videoIds.length === 0) return counts
+
+  const chunks: string[][] = []
+  for (let i = 0; i < videoIds.length; i += PAGE_SIZE) {
+    chunks.push(videoIds.slice(i, i + PAGE_SIZE))
+  }
+
+  const responses = await Promise.all(
+    chunks.map(async chunk => {
+      const url = new URL(`${YOUTUBE_API_BASE}/videos`)
+      url.searchParams.set('part', 'statistics')
+      url.searchParams.set('id', chunk.join(','))
+      url.searchParams.set('maxResults', String(PAGE_SIZE))
+      url.searchParams.set('key', process.env.YOUTUBE_API_KEY!)
+
+      const res = await fetch(url.toString())
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(`YouTube API error: ${res.status} - ${text}`)
+      }
+      return res.json()
+    })
+  )
+
+  for (const data of responses) {
+    for (const item of data.items ?? []) {
+      counts.set(item.id, parseCount(item.statistics?.commentCount))
+    }
+  }
+
+  return counts
+}
+
+export type ChannelVideoWithCommentCount = ChannelVideo & {
+  /** null means comments are disabled on this video (or it vanished since the playlist walk). */
+  commentCount: number | null
+}
+
+/**
+ * The channel's most recent `limit` videos, each carrying its public comment
+ * count — what the Connect picker needs to show "342 have comments, 158 don't"
+ * and let a creator choose individual videos rather than just "the last N".
+ *
+ * Two YouTube calls per 50 videos (one playlistItems.list page, one videos.list
+ * batch), so a 500-video scan costs about 20 quota units — bounded by
+ * MAX_VIDEOS_PER_SYNC same as an actual sync, since the picker only ever needs
+ * to cover what a sync could bring in.
+ */
+export async function fetchChannelVideosWithCommentCounts(
+  channelUrlOrHandle: string,
+  limit: number
+): Promise<{ videos: ChannelVideoWithCommentCount[]; hitCap: boolean }> {
+  const { videos, hitCap } = await fetchAllChannelVideos(channelUrlOrHandle, undefined, { limit })
+  const counts = await fetchCommentCountsByIds(videos.map(v => v.videoId))
+
+  return {
+    videos: videos.map(v => ({ ...v, commentCount: counts.get(v.videoId) ?? null })),
+    hitCap,
+  }
+}
+
 export async function fetchChannelVideos(channelUrlOrHandle: string): Promise<ChannelVideo[]> {
   const channelInput = resolveChannelInput(channelUrlOrHandle)
   if (!channelInput) {

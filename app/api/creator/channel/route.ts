@@ -4,12 +4,34 @@ import { requireCreator } from '@/lib/api-auth'
 import { refreshChannelStats } from '@/lib/channel-stats'
 import { syncChannelVideos } from '@/lib/channel-videos'
 import { isValidVideoLimit, MAX_VIDEOS_PER_SYNC } from '@/lib/channel-sync-limits'
+import type { ChannelVideo } from '@/lib/youtube-channel'
 import { logError } from '@/lib/logger'
 
+/** A minimal shape check on the client-supplied video list — not a full parse,
+ * just enough to reject garbage before it reaches storage. */
+function isValidVideoList(value: unknown): value is ChannelVideo[] {
+  return (
+    Array.isArray(value) &&
+    value.length >= 1 &&
+    value.length <= MAX_VIDEOS_PER_SYNC &&
+    value.every(
+      v =>
+        v &&
+        typeof v === 'object' &&
+        typeof (v as { videoId?: unknown }).videoId === 'string' &&
+        (v as { videoId: string }).videoId.length > 0 &&
+        typeof (v as { title?: unknown }).title === 'string'
+    )
+  )
+}
+
 /**
- * Connects a channel and brings `video_limit` of its most recent videos into My
- * Videos — metadata only. No comments are ingested and no analysis runs here;
- * that happens later, per video, when the creator chooses to analyze one.
+ * Connects a channel and brings videos into My Videos — metadata only. No
+ * comments are ingested and no analysis runs here; that happens later, per
+ * video, when the creator chooses to analyze one.
+ *
+ * Accepts either `video_limit` (bring in the N most recent) or `videos` (bring
+ * in exactly this set, as selected from the comment-count picker on Connect).
  */
 export async function POST(request: NextRequest) {
   try {
@@ -17,14 +39,23 @@ export async function POST(request: NextRequest) {
     if (!authResult.ok) return authResult.response
     const { supabase, creatorId } = authResult.auth
 
-    const { channel_url, video_limit } = await request.json()
+    const { channel_url, video_limit, videos } = await request.json()
     const channelUrl = typeof channel_url === 'string' ? channel_url.trim() : ''
 
     if (!channelUrl) {
       return NextResponse.json({ error: 'Missing channel_url' }, { status: 400 })
     }
+
+    const hasVideoList = videos !== undefined
     // Enforced here as well as on the page: a request can be sent without the page.
-    if (!isValidVideoLimit(video_limit)) {
+    if (hasVideoList) {
+      if (!isValidVideoList(videos)) {
+        return NextResponse.json(
+          { error: `videos must be a list of 1 to ${MAX_VIDEOS_PER_SYNC} videos, each with a videoId and title` },
+          { status: 400 }
+        )
+      }
+    } else if (!isValidVideoLimit(video_limit)) {
       return NextResponse.json(
         { error: `video_limit must be a whole number from 1 to ${MAX_VIDEOS_PER_SYNC}` },
         { status: 400 }
@@ -56,7 +87,12 @@ export async function POST(request: NextRequest) {
     // held-open request. Progress is polled from /api/creator/channel/sync-status.
     after(async () => {
       try {
-        await syncChannelVideos(supabase, creatorId, channelUrl, { limit: video_limit })
+        await syncChannelVideos(
+          supabase,
+          creatorId,
+          channelUrl,
+          hasVideoList ? { videos } : { limit: video_limit }
+        )
       } catch (err) {
         logError('api/creator/channel', err, { creator_id: creatorId, stage: 'background_sync' })
         await supabase.from('creators').update({ channel_sync_status: 'error' }).eq('id', creatorId)
@@ -68,7 +104,7 @@ export async function POST(request: NextRequest) {
       stats: statsResult.success ? statsResult.stats : null,
       statsError: statsResult.success ? null : statsResult.error,
       syncStarted: true,
-      videoLimit: video_limit,
+      videoLimit: hasVideoList ? videos.length : video_limit,
     })
   } catch (err) {
     logError('api/creator/channel', err, { stage: 'request' })

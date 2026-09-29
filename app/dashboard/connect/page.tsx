@@ -5,12 +5,17 @@ import { useRouter } from 'next/navigation'
 import { createClient } from '@/lib/supabase/client'
 import { useAnalyze } from '@/lib/hooks/useAnalyze'
 import { BUSINESS_CATEGORIES } from '@/lib/business-categories'
-import { MAX_VIDEOS_PER_SYNC } from '@/lib/channel-sync-limits'
 import MascotIcon from '@/components/MascotIcon'
 import { logError } from '@/lib/logger'
 
-/** Quick picks offered next to the number input, filtered to what the channel has. */
-const QUICK_PICKS = [20, 50, 100, 200]
+/** A video from the picker, carrying its public comment count (null = comments off). */
+type PickerVideo = {
+  videoId: string
+  title: string
+  thumbnailUrl: string
+  publishedAt: string
+  commentCount: number | null
+}
 
 const stepIconProps = {
   xmlns: 'http://www.w3.org/2000/svg',
@@ -177,11 +182,14 @@ export default function ConnectPage() {
 
   const [phase, setPhase] = useState<Phase>('form')
   const [formError, setFormError] = useState<string | null>(null)
-  // From the quick count.
+  // From the scan: the channel's total video count, and the (possibly smaller,
+  // most-recent-first) slice of videos we actually fetched comment counts for.
   const [videoCount, setVideoCount] = useState(0)
-  const [maxSelectable, setMaxSelectable] = useState(0)
-  // Kept as the raw input text so a creator can clear the field and type freely.
-  const [chosen, setChosen] = useState('')
+  const [videos, setVideos] = useState<PickerVideo[]>([])
+  const [truncated, setTruncated] = useState(false)
+  // Which videoIds the creator has checked. Starts pre-checked with every video
+  // that has comments — the ones with nothing to read are opt-in, not opt-out.
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   // The sync in progress.
   const [target, setTarget] = useState(0)
   const [brought, setBrought] = useState(0)
@@ -277,15 +285,25 @@ export default function ConnectPage() {
    * link has always used, which is why this hands over a channel URL rather than
    * introducing a parallel sync.
    */
-  async function handleSelectOwnedChannel(selected: OwnedChannel) {
-    setChannel(selected.channelUrl)
+  async function handleSelectOwnedChannel(owned: OwnedChannel) {
+    setChannel(owned.channelUrl)
+    await scanChannel(owned.channelUrl)
+  }
+
+  /**
+   * The shared "checking" step for both the verified and pasted-link paths:
+   * scans the channel's most recent videos and their comment counts, then hands
+   * control to the 'choose' phase's picker. One request does both jobs (total
+   * count + per-video counts) so there is a single, if slower, wait to show.
+   */
+  async function scanChannel(channelUrl: string) {
     setFormError(null)
     setPhase('checking')
     try {
-      const res = await fetch('/api/creator/channel/preview', {
+      const res = await fetch('/api/creator/channel/videos-preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel_url: selected.channelUrl }),
+        body: JSON.stringify({ channel_url: channelUrl }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -294,8 +312,16 @@ export default function ConnectPage() {
         return
       }
       setVideoCount(data.videoCount)
-      setMaxSelectable(data.maxSelectable)
-      setChosen(String(data.suggested))
+      setVideos(data.videos)
+      setTruncated(Boolean(data.truncated))
+      // Pre-check everything that actually has comments; the rest stay opt-in.
+      setSelected(
+        new Set(
+          (data.videos as PickerVideo[])
+            .filter(v => (v.commentCount ?? 0) > 0)
+            .map(v => v.videoId)
+        )
+      )
       setPhase('choose')
     } catch {
       setFormError("Couldn't check that channel. Please try again.")
@@ -331,40 +357,43 @@ export default function ConnectPage() {
     return () => clearInterval(interval)
   }, [phase, router])
 
-  // Step 1: a quick count, nothing saved yet.
+  // Step 1: scan the channel — nothing saved yet.
   async function handleFindVideos(e: React.FormEvent) {
     e.preventDefault()
     const trimmed = channel.trim()
     if (!trimmed) return
-
-    setFormError(null)
-    setPhase('checking')
-    try {
-      const res = await fetch('/api/creator/channel/preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel_url: trimmed }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setFormError(data.error || 'Something went wrong. Please try again.')
-        setPhase('form')
-        return
-      }
-      setVideoCount(data.videoCount)
-      setMaxSelectable(data.maxSelectable)
-      setChosen(String(data.suggested))
-      setPhase('choose')
-    } catch {
-      setFormError("Couldn't check that channel. Please try again.")
-      setPhase('form')
-    }
+    await scanChannel(trimmed)
   }
 
-  const chosenNumber = Number(chosen)
-  const chosenIsValid = /^\d+$/.test(chosen) && chosenNumber >= 1 && chosenNumber <= maxSelectable
+  const selectedVideos = videos.filter(v => selected.has(v.videoId))
+  const selectedComments = selectedVideos.reduce((sum, v) => sum + (v.commentCount ?? 0), 0)
+  const chosenIsValid = selectedVideos.length >= 1
 
-  // Step 2: bring exactly that many in.
+  function toggleVideo(videoId: string) {
+    setSelected(prev => {
+      const next = new Set(prev)
+      if (next.has(videoId)) {
+        next.delete(videoId)
+      } else {
+        next.add(videoId)
+      }
+      return next
+    })
+  }
+
+  function selectAllWithComments() {
+    setSelected(new Set(videos.filter(v => (v.commentCount ?? 0) > 0).map(v => v.videoId)))
+  }
+
+  function selectAll() {
+    setSelected(new Set(videos.map(v => v.videoId)))
+  }
+
+  function selectNone() {
+    setSelected(new Set())
+  }
+
+  // Step 2: bring in exactly the checked videos.
   async function handleBringIn() {
     if (!chosenIsValid) return
     setFormError(null)
@@ -382,14 +411,22 @@ export default function ConnectPage() {
       const res = await fetch('/api/creator/channel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel_url: channel.trim(), video_limit: chosenNumber }),
+        body: JSON.stringify({
+          channel_url: channel.trim(),
+          videos: selectedVideos.map(v => ({
+            videoId: v.videoId,
+            title: v.title,
+            thumbnailUrl: v.thumbnailUrl,
+            publishedAt: v.publishedAt,
+          })),
+        }),
       })
       const data = await res.json()
       if (!res.ok) {
         setFormError(data.error || 'Could not start bringing in your videos.')
         return
       }
-      setTarget(chosenNumber)
+      setTarget(selectedVideos.length)
       setBrought(0)
       setPhase('syncing')
     } catch {
@@ -492,11 +529,8 @@ export default function ConnectPage() {
   }
 
   if (phase === 'choose') {
-    const picks = QUICK_PICKS.filter(n => n < maxSelectable)
-    const pickClass = (selected: boolean) =>
-      `min-h-11 rounded-full border px-4 text-sm transition-colors ${
-        selected ? 'border-purple bg-purple text-white' : 'border-white/10 bg-surface text-text-muted hover:text-text-primary'
-      }`
+    const withComments = videos.filter(v => (v.commentCount ?? 0) > 0).length
+    const withoutComments = videos.length - withComments
 
     return (
       <div className="mx-auto max-w-2xl space-y-8">
@@ -507,6 +541,17 @@ export default function ConnectPage() {
           <h1 className="mt-2 font-display text-2xl font-semibold text-text-primary md:text-3xl">
             We found {videoCount.toLocaleString()} {videoCount === 1 ? 'video' : 'videos'} in this channel.
           </h1>
+          {videos.length > 0 && (
+            <p className="mt-2 text-sm text-text-muted">
+              {truncated
+                ? `Of the ${videos.length.toLocaleString()} most recent, `
+                : 'Of these, '}
+              <span className="text-text-primary">{withComments.toLocaleString()} have comments</span>
+              {' '}and{' '}
+              <span className="text-text-primary">{withoutComments.toLocaleString()} have none</span>
+              {' '}(disabled or empty).
+            </p>
+          )}
         </header>
 
           {videoCount === 0 ? (
@@ -524,48 +569,64 @@ export default function ConnectPage() {
               }}
               className="card space-y-4"
             >
-              <div>
-                <label htmlFor="video-limit" className="mb-2 block text-sm font-medium text-text-primary">
-                  How many would you like to bring into My Videos?
-                </label>
-                <input
-                  id="video-limit"
-                  type="number"
-                  inputMode="numeric"
-                  min={1}
-                  max={maxSelectable}
-                  step={1}
-                  value={chosen}
-                  onChange={e => setChosen(e.target.value)}
-                  aria-describedby="video-limit-help"
-                  className="flex h-12 w-full rounded-lg border border-white/10 bg-surface px-4 text-base text-text-primary focus:outline-none focus:ring-2 focus:ring-purple focus:ring-offset-2 focus:ring-offset-ink"
-                />
-                <p id="video-limit-help" className="mt-2 text-xs text-text-muted">
-                  Most recent first, 1 to {maxSelectable.toLocaleString()}.
-                  {videoCount > MAX_VIDEOS_PER_SYNC &&
-                    ` Up to ${MAX_VIDEOS_PER_SYNC} per session — you can bring in more later.`}
-                </p>
-                {chosen !== '' && !chosenIsValid && (
-                  <p className="mt-1 text-xs text-avax-red" role="alert">
-                    Enter a whole number from 1 to {maxSelectable.toLocaleString()}.
-                  </p>
-                )}
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-text-primary">Pick which videos to bring in</p>
+                <div className="flex flex-wrap gap-2">
+                  <button type="button" onClick={selectAllWithComments} className="text-xs text-purple underline hover:text-purple/80">
+                    Only ones with comments
+                  </button>
+                  <button type="button" onClick={selectAll} className="text-xs text-text-muted underline hover:text-text-primary">
+                    Select all
+                  </button>
+                  <button type="button" onClick={selectNone} className="text-xs text-text-muted underline hover:text-text-primary">
+                    Select none
+                  </button>
+                </div>
               </div>
 
-              <div className="flex flex-wrap gap-2">
-                {picks.map(n => (
-                  <button key={n} type="button" onClick={() => setChosen(String(n))} className={pickClass(chosenNumber === n)}>
-                    {n}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  onClick={() => setChosen(String(maxSelectable))}
-                  className={pickClass(chosenNumber === maxSelectable)}
-                >
-                  {videoCount <= MAX_VIDEOS_PER_SYNC ? `All ${maxSelectable}` : `Max ${maxSelectable}`}
-                </button>
-              </div>
+              <ul className="max-h-96 space-y-1 overflow-y-auto rounded-lg border border-white/10 p-1">
+                {videos.map(video => {
+                  const hasComments = (video.commentCount ?? 0) > 0
+                  const isChecked = selected.has(video.videoId)
+                  return (
+                    <li key={video.videoId}>
+                      <label
+                        className={`flex min-h-11 cursor-pointer items-center gap-3 rounded-lg p-2 transition-colors ${
+                          isChecked ? 'bg-surface-hover' : 'hover:bg-surface-hover/60'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={() => toggleVideo(video.videoId)}
+                          className="h-4 w-4 flex-shrink-0 accent-purple"
+                        />
+                        {video.thumbnailUrl ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img src={video.thumbnailUrl} alt="" className="h-9 w-16 flex-shrink-0 rounded object-cover" />
+                        ) : (
+                          <span className="h-9 w-16 flex-shrink-0 rounded bg-surface" aria-hidden="true" />
+                        )}
+                        <span className="min-w-0 flex-1 truncate text-sm text-text-primary">{video.title}</span>
+                        <span
+                          className={`flex-shrink-0 font-mono text-[10px] tracking-widest uppercase ${
+                            hasComments ? 'text-teal' : 'text-text-muted'
+                          }`}
+                        >
+                          {video.commentCount === null
+                            ? 'No comments'
+                            : `${video.commentCount.toLocaleString()} ${video.commentCount === 1 ? 'comment' : 'comments'}`}
+                        </span>
+                      </label>
+                    </li>
+                  )
+                })}
+              </ul>
+
+              <p className="text-sm text-text-primary">
+                {selectedVideos.length.toLocaleString()} {selectedVideos.length === 1 ? 'video' : 'videos'} selected ·{' '}
+                {selectedComments.toLocaleString()} {selectedComments === 1 ? 'comment' : 'comments'} total
+              </p>
 
               <p className="text-xs text-text-muted">
                 We only bring in titles and thumbnails. Nothing is analyzed until you choose a video in My Videos.
@@ -579,8 +640,8 @@ export default function ConnectPage() {
 
               <button type="submit" disabled={!chosenIsValid} className="btn-primary w-full disabled:opacity-50">
                 {chosenIsValid
-                  ? `Bring ${chosenNumber.toLocaleString()} ${chosenNumber === 1 ? 'video' : 'videos'} into My Videos`
-                  : 'Bring videos into My Videos'}
+                  ? `Bring ${selectedVideos.length.toLocaleString()} ${selectedVideos.length === 1 ? 'video' : 'videos'} into My Videos`
+                  : 'Select at least one video'}
               </button>
               <button
                 type="button"
