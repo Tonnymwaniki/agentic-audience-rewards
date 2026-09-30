@@ -11,6 +11,7 @@ import {
 import { requireCreator } from '@/lib/api-auth'
 import { logError, logInfo } from '@/lib/logger'
 import { checkPostVerification, VERIFY_OWNERSHIP_MESSAGE, VERIFY_OWNERSHIP_PATH } from '@/lib/channel-verification'
+import { buildCommenterContext } from '@/lib/audience-memory'
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
 
     const { data: comment } = await supabase
       .from('comments')
-      .select('text, post_id, comment_categories (category), posts (creator_id)')
+      .select('text, post_id, audience_member_id, comment_categories (category), posts (creator_id)')
       .eq('id', comment_id)
       .single()
 
@@ -105,7 +106,24 @@ export async function POST(request: NextRequest) {
       : { profile: businessProfile, customFields: [], uncertain: [] }
     const customFieldContext = customFieldsToContext(adjusted.customFields)
 
-    const draft = await generateDraftReply(comment.text, category, adjusted.profile, styleExamples, customFieldContext, adjusted.uncertain)
+    // Tone-only context (segment/level/profile_summary) — see generateDraftReply's
+    // commenterContext doc comment in lib/categorize.ts.
+    let commenterContext: string | null = null
+    const audienceMemberId = comment.audience_member_id as string | null
+    if (audienceMemberId) {
+      const { data: member, error: memberError } = await supabase
+        .from('audience_members')
+        .select('id, segment, level, profile_summary')
+        .eq('id', audienceMemberId)
+        .maybeSingle()
+      if (memberError) {
+        logError('api/draft-reply', memberError, { comment_id, stage: 'fetch_commenter_context' })
+      } else if (member) {
+        commenterContext = buildCommenterContext(member)
+      }
+    }
+
+    const draft = await generateDraftReply(comment.text, category, adjusted.profile, styleExamples, customFieldContext, adjusted.uncertain, null, commenterContext)
 
     const { error: updateError } = await supabase
       .from('comment_categories')

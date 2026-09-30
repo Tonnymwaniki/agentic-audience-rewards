@@ -2,6 +2,7 @@ import { createServiceClient } from '@/lib/supabase/service'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { loadCustomProfileFields, customFieldsToContext } from '@/lib/custom-profile-fields'
 import { applyFactStatusesForDrafts, loadFactStatuses } from '@/lib/profile-fact-status'
+import { loadCommenterContexts } from '@/lib/audience-memory'
 import {
   generateDraftReply,
   loadStyleExamples,
@@ -37,6 +38,7 @@ type CommentRow = {
   id: string
   text: string
   post_id: string
+  audience_member_id: string | null
   owner_replied_at?: string | null
 }
 
@@ -140,17 +142,17 @@ export async function regenerateDraftsForCreator(
     let commentsError: { code?: string; message?: string } | null
 
     if (ownerReplyColumnAvailable) {
-      const result = await supabase.from('comments').select('id, text, post_id, owner_replied_at').in('post_id', postIds).range(offset, offset + batchSize - 1)
+      const result = await supabase.from('comments').select('id, text, post_id, audience_member_id, owner_replied_at').in('post_id', postIds).range(offset, offset + batchSize - 1)
       batch = result.data
       commentsError = result.error
       if (commentsError && (commentsError.code === 'PGRST204' || commentsError.code === '42703') && (commentsError.message ?? '').includes('owner_replied_at')) {
         ownerReplyColumnAvailable = false
-        const fallback = await supabase.from('comments').select('id, text, post_id').in('post_id', postIds).range(offset, offset + batchSize - 1)
+        const fallback = await supabase.from('comments').select('id, text, post_id, audience_member_id').in('post_id', postIds).range(offset, offset + batchSize - 1)
         batch = fallback.data
         commentsError = fallback.error
       }
     } else {
-      const result = await supabase.from('comments').select('id, text, post_id').in('post_id', postIds).range(offset, offset + batchSize - 1)
+      const result = await supabase.from('comments').select('id, text, post_id, audience_member_id').in('post_id', postIds).range(offset, offset + batchSize - 1)
       batch = result.data
       commentsError = result.error
     }
@@ -206,6 +208,13 @@ export async function regenerateDraftsForCreator(
 
   const batchToProcess = targets.slice(0, MAX_REGENERATIONS_PER_RUN)
   const processedIds = new Set(batchToProcess.map(c => c.id))
+
+  // Tone-only context (segment/level/profile_summary) for whoever's in this batch —
+  // see generateDraftReply's commenterContext doc comment in lib/categorize.ts.
+  const commenterContextById = await loadCommenterContexts(
+    supabase,
+    batchToProcess.map(c => c.audience_member_id).filter((id): id is string => Boolean(id))
+  )
 
   // NOT `targets.length - batch.length`: eligibility never shrinks (an unapproved
   // draft stays eligible on purpose), so that subtraction is a constant and always
@@ -338,7 +347,8 @@ export async function regenerateDraftsForCreator(
         continue
       }
 
-      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples, customFieldContext, uncertainFacts)
+      const commenterContext = comment.audience_member_id ? commenterContextById.get(comment.audience_member_id) ?? null : null
+      const draft = await generateDraftReply(comment.text, category.category, businessProfile, styleExamples, customFieldContext, uncertainFacts, null, commenterContext)
 
       const stamped = await markChecked(comment.id, {
         draft_reply: draft.text,

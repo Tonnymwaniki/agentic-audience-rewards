@@ -5,6 +5,53 @@ import { updateAudienceLevel } from '@/lib/levels'
 import { logError, logInfo } from '@/lib/logger'
 import { recordAiUsage } from '@/lib/ai-usage'
 
+type CommenterProfileRow = { id: string; segment: string | null; level: string | null; profile_summary: string | null }
+
+/**
+ * Turns a stored audience-member row into the short line generateDraftReply
+ * (lib/categorize.ts) puts in front of the model as `commenterContext` — tone
+ * guidance only, e.g. "super fan — loyal fan — asks about restock a lot". Returns
+ * null when there's nothing worth saying yet (new/unsegmented commenter).
+ */
+export function buildCommenterContext(member: CommenterProfileRow): string | null {
+  const bits: string[] = []
+  if (member.level && member.level !== 'new') bits.push(member.level.replace(/_/g, ' '))
+  if (member.segment) bits.push(member.segment.replace(/_/g, ' '))
+  if (member.profile_summary) bits.push(member.profile_summary)
+  return bits.length ? bits.join(' — ') : null
+}
+
+/**
+ * Batch version: looks up segment/level/profile_summary for a set of audience
+ * member ids and returns a ready-to-use id → context string map, skipping anyone
+ * with nothing worth saying. Used wherever drafts are (re)generated in bulk so
+ * it's one query for the whole run rather than one per comment.
+ */
+export async function loadCommenterContexts(
+  supabase: SupabaseClient,
+  audienceMemberIds: string[]
+): Promise<Map<string, string>> {
+  const result = new Map<string, string>()
+  const uniqueIds = [...new Set(audienceMemberIds)]
+  if (uniqueIds.length === 0) return result
+
+  const { data: rows, error } = await supabase
+    .from('audience_members')
+    .select('id, segment, level, profile_summary')
+    .in('id', uniqueIds)
+
+  if (error) {
+    logError('audience-memory.loadCommenterContexts', error, { member_count: uniqueIds.length })
+    return result
+  }
+
+  for (const row of (rows ?? []) as CommenterProfileRow[]) {
+    const context = buildCommenterContext(row)
+    if (context) result.set(row.id, context)
+  }
+  return result
+}
+
 /** creatorId is optional for backward compatibility with any other caller, but
  *  every call from the reward-evaluation loop (its main caller, and the only one
  *  that runs at real volume) should pass it — otherwise this call's real

@@ -9,7 +9,7 @@ import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 import { logError, logWarn, logInfo } from '@/lib/logger'
 import { checkPostVerification } from '@/lib/channel-verification'
 import { recordAiUsage } from '@/lib/ai-usage'
-import { refreshAudienceProfiles } from '@/lib/audience-memory'
+import { refreshAudienceProfiles, loadCommenterContexts } from '@/lib/audience-memory'
 
 export type ProgressCallback = (count: number) => void
 
@@ -280,16 +280,17 @@ export async function generateDraftReply(
   styleExamples?: StyleExample[] | null,
   customFields?: string[] | null,
   uncertainFacts?: string[] | null,
-  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null,
+  commenterContext?: string | null
 ): Promise<DraftReplyResult> {
   try {
-    return await generateDraftReplyOnce(commentText, category, profile, styleExamples, customFields, uncertainFacts, usageCtx)
+    return await generateDraftReplyOnce(commentText, category, profile, styleExamples, customFields, uncertainFacts, usageCtx, commenterContext)
   } catch (err) {
     logWarn('categorize.generateDraftReply', 'First attempt failed; retrying once', {
       category,
       reason: err instanceof Error ? err.message : String(err),
     })
-    return generateDraftReplyOnce(commentText, category, profile, styleExamples, customFields, uncertainFacts, usageCtx)
+    return generateDraftReplyOnce(commentText, category, profile, styleExamples, customFields, uncertainFacts, usageCtx, commenterContext)
   }
 }
 
@@ -302,7 +303,15 @@ async function generateDraftReplyOnce(
   /** Contradicted profile facts, from applyFactStatusesForDrafts — never stated as fact. */
   uncertainFacts?: string[] | null,
   /** For AI-spend attribution (lib/ai-usage.ts) — optional so tests/direct calls don't need it. */
-  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null,
+  /**
+   * A short line about this commenter — segment/level/profile_summary
+   * (lib/audience-memory.ts) — e.g. "repeat commenter, loyal_fan, has asked about
+   * pricing before". Shapes TONE only ("good to hear from you again"); the prompt
+   * below explicitly forbids stating it as a fact, since it's our own inference
+   * from past comments, not something this commenter told us in THIS message.
+   */
+  commenterContext?: string | null
 ): Promise<DraftReplyResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
@@ -315,9 +324,14 @@ async function generateDraftReplyOnce(
     // Style applies to every category: how someone signs off or phrases things is
     // not specific to questions or purchase intent the way business facts are.
     const styleContext = buildStyleContext(styleExamples)
+    // Our own inference from past comments, not anything this commenter told us
+    // just now — so it's only allowed to shade tone, never appear as a stated fact.
+    const commenterNote = commenterContext
+      ? ` Some background on this commenter, for TONE only — never state this back to them as fact, and never imply you know something they haven't told you in this comment: ${commenterContext}`
+      : ''
     // JSON rather than bare text now, so the model can report how sure it is about
     // the reply alongside the reply itself.
-    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction}${styleContext}
+    const prompt = `You are drafting a short, professional reply from a content creator to an audience member. Their comment: '${commentText}'.${profileContext} ${instruction}${styleContext}${commenterNote}
 
 Respond with ONLY valid JSON, no preamble: {"reply": "the reply text", "confidence": "high" or "medium" or "low"}
 
@@ -896,6 +910,14 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     uncertainFacts = adjusted.uncertain
   }
 
+  // Segment/level/profile_summary for whoever's getting a drafted reply this pass —
+  // shapes tone only (see generateDraftReply's commenterContext doc comment), never
+  // stated as fact. Built once, up front, so the per-comment loop below is just a
+  // map lookup rather than a query per comment.
+  const commentMemberId = new Map(comments.map(c => [c.id, c.audience_member_id]))
+  const draftableMemberIds = draftable.map(c => commentMemberId.get(c.id)).filter((id): id is string => Boolean(id))
+  const commenterContextById = await loadCommenterContexts(supabase, draftableMemberIds)
+
   // Drafting makes LLM calls per comment but writes nothing to posts, so a long
   // pass would look dead to stale-run detection (lib/analysis-staleness.ts).
   // Re-reporting the unchanged categorized count leaves the progress UI as it is
@@ -982,7 +1004,8 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       }
 
       try {
-        const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts, usageCtx)
+        const commenterContext = commenterContextById.get(commentMemberId.get(comment.id) ?? '') ?? null
+        const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts, usageCtx, commenterContext)
         await supabase
           .from('comment_categories')
           .update({
@@ -1027,7 +1050,6 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   // accounts would otherwise show empty segments/levels for people who never
   // triggered either. Every path that categorizes comments (first analysis, cron
   // polling, manual re-analysis) now keeps this current the same way.
-  const commentMemberId = new Map(comments.map(c => [c.id, c.audience_member_id]))
   const involvedMemberIds = categorized.map(c => commentMemberId.get(c.id)).filter((id): id is string => Boolean(id))
   await refreshAudienceProfiles(supabase, involvedMemberIds, postCreatorId)
 
