@@ -9,6 +9,7 @@ import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 import { logError, logWarn, logInfo } from '@/lib/logger'
 import { checkPostVerification } from '@/lib/channel-verification'
 import { recordAiUsage } from '@/lib/ai-usage'
+import { refreshAudienceProfiles } from '@/lib/audience-memory'
 
 export type ProgressCallback = (count: number) => void
 
@@ -653,15 +654,15 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   // first, dropped on the specific "column does not exist" error rather than
   // failing the whole categorization run.
   let ownerReplyColumnAvailable = true
-  let comments: Array<{ id: string; text: string; owner_replied_at?: string | null }> | null = null
+  let comments: Array<{ id: string; text: string; audience_member_id: string; owner_replied_at?: string | null }> | null = null
   let commentsError: { code?: string; message?: string } | null = null
   {
-    const result = await supabase.from('comments').select('id, text, owner_replied_at').eq('post_id', post_id)
+    const result = await supabase.from('comments').select('id, text, audience_member_id, owner_replied_at').eq('post_id', post_id)
     comments = result.data
     commentsError = result.error
     if (commentsError && (commentsError.code === 'PGRST204' || commentsError.code === '42703') && (commentsError.message ?? '').includes('owner_replied_at')) {
       ownerReplyColumnAvailable = false
-      const fallback = await supabase.from('comments').select('id, text').eq('post_id', post_id)
+      const fallback = await supabase.from('comments').select('id, text, audience_member_id').eq('post_id', post_id)
       comments = fallback.data
       commentsError = fallback.error
     }
@@ -1019,6 +1020,16 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
 
 
   await createDraftNotifications(supabase, postCreatorId, postTitle, notifiable)
+
+  // Keeps audience_members.segment/level/profile_summary current for everyone who
+  // just got a newly-categorized comment. Before this, that data only refreshed
+  // when a creator clicked "Evaluate" on Rewards or hit /api/analyze — most
+  // accounts would otherwise show empty segments/levels for people who never
+  // triggered either. Every path that categorizes comments (first analysis, cron
+  // polling, manual re-analysis) now keeps this current the same way.
+  const commentMemberId = new Map(comments.map(c => [c.id, c.audience_member_id]))
+  const involvedMemberIds = categorized.map(c => commentMemberId.get(c.id)).filter((id): id is string => Boolean(id))
+  await refreshAudienceProfiles(supabase, involvedMemberIds, postCreatorId)
 
   return { success: true, categorized: categorized.length }
 }

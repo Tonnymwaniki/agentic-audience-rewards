@@ -1,6 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchInBatches } from '@/lib/supabase-helpers'
 import { isChannelVerified } from '@/lib/channel-verification'
+import { SEGMENTS } from '@/lib/segments'
+import { LEVELS } from '@/lib/levels'
 import { logError } from '@/lib/logger'
 
 /**
@@ -28,7 +30,7 @@ export type WorkspaceRaw = {
     duration_seconds: number | null
     youtube_category: string | null
   }>
-  comments: Array<{ id: string; parent_comment_id: string | null; ingested_at: string | null }>
+  comments: Array<{ id: string; parent_comment_id: string | null; ingested_at: string | null; audience_member_id: string | null }>
   categories: Array<{ comment_id: string; category: string | null; language: string | null; sentiment: string | null }>
   insights: Array<{ topic: string; comment_count: number; trend_direction: string | null; trend_pct: number | null; computed_at: string }>
   /** channel id -> verified, per isChannelVerified, for every channel with analyzed videos or a grant. ALWAYS unfiltered by channelScope — this is the picker's source of truth for which channels exist at all. */
@@ -36,6 +38,13 @@ export type WorkspaceRaw = {
   /** True when a channel scope was requested and this creator has more than one
    * channel — see WorkspaceSummary.intelligence.themesSpanAllChannels. */
   themesSpanAllChannels: boolean
+  /**
+   * One row per unique commenter behind `comments` above — so this respects the
+   * same channel scope automatically, with no separate filtering logic. segment/
+   * level are null for anyone not yet processed by refreshAudienceProfiles
+   * (lib/audience-memory.ts) or the older Rewards-evaluation path.
+   */
+  audienceMembers: Array<{ id: string; segment: string | null; level: string | null }>
 }
 
 export type Share = { key: string; count: number; percent: number }
@@ -84,6 +93,13 @@ export type WorkspaceSummary = {
     /** Shares of comments that HAVE a sentiment; unscored counted separately. */
     sentiment: { scored: number; unscored: number; shares: Share[] }
     categoryMix: Array<{ key: string; label: string; count: number }>
+  }
+  audience: {
+    total: number
+    /** How many of `total` have never been segmented/levelled yet (segment IS NULL) — surfaced so a creator isn't confused by numbers that don't add up to `total`. */
+    unprocessed: number
+    bySegment: Share[]
+    byLevel: Share[]
   }
 }
 
@@ -184,6 +200,31 @@ export function computeWorkspace(raw: WorkspaceRaw, now = Date.now()): Workspace
       sentiment: { scored, unscored, shares: shares(SENTIMENTS, sentimentCounts, scored) },
       categoryMix: CATEGORY_MIX.map(c => ({ ...c, count: categoryCounts.get(c.key) ?? 0 })),
     },
+    audience: (() => {
+      const segmentCounts = new Map<string, number>()
+      const levelCounts = new Map<string, number>()
+      let segmentedTotal = 0
+      let levelledTotal = 0
+      for (const m of raw.audienceMembers) {
+        if (m.segment) {
+          segmentCounts.set(m.segment, (segmentCounts.get(m.segment) ?? 0) + 1)
+          segmentedTotal++
+        }
+        if (m.level) {
+          levelCounts.set(m.level, (levelCounts.get(m.level) ?? 0) + 1)
+          levelledTotal++
+        }
+      }
+      return {
+        total: raw.audienceMembers.length,
+        // Segment and level are populated together (both written by the same
+        // refresh pass), so either count works as "not yet processed" — segment
+        // is used since it's the more decision-relevant of the two.
+        unprocessed: raw.audienceMembers.length - segmentedTotal,
+        bySegment: shares(SEGMENTS, segmentCounts, segmentedTotal),
+        byLevel: shares(LEVELS, levelCounts, levelledTotal),
+      }
+    })(),
   }
 }
 
@@ -222,7 +263,7 @@ export async function loadWorkspaceRaw(
   const comments = postList.length
     ? await fetchInBatches<WorkspaceRaw['comments'][number]>(supabase, {
         table: 'comments',
-        select: 'id, parent_comment_id, ingested_at',
+        select: 'id, parent_comment_id, ingested_at, audience_member_id',
         inColumn: 'post_id',
         inValues: postList.map(p => p.id),
       })
@@ -233,6 +274,20 @@ export async function loadWorkspaceRaw(
         select: 'comment_id, category, language, sentiment',
         inColumn: 'comment_id',
         inValues: comments.map(c => c.id),
+      })
+    : []
+
+  // The audience behind THIS scope's comments — automatically respects channelId
+  // filtering above with no separate query logic, since it's derived from the
+  // already-scoped `comments` rather than queried by creator_id directly (which
+  // would pull in every channel's commenters regardless of the picker).
+  const audienceMemberIds = [...new Set(comments.map(c => c.audience_member_id).filter((id): id is string => Boolean(id)))]
+  const audienceMembers = audienceMemberIds.length
+    ? await fetchInBatches<WorkspaceRaw['audienceMembers'][number]>(supabase, {
+        table: 'audience_members',
+        select: 'id, segment, level',
+        inColumn: 'id',
+        inValues: audienceMemberIds,
       })
     : []
 
@@ -260,5 +315,6 @@ export async function loadWorkspaceRaw(
     insights: (insights ?? []) as WorkspaceRaw['insights'],
     channels,
     themesSpanAllChannels: Boolean(channelId) && distinctChannelCount > 1,
+    audienceMembers,
   }
 }

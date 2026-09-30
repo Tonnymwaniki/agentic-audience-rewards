@@ -1,3 +1,4 @@
+import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClient } from '@/lib/supabase/service'
 import { updateAudienceSegment } from '@/lib/segments'
 import { updateAudienceLevel } from '@/lib/levels'
@@ -100,5 +101,63 @@ export async function updateAudienceProfile(audience_member_id: string, creatorI
     return { success: false, updated: false }
   } finally {
     clearTimeout(timeoutId)
+  }
+}
+
+/** A profile older than this is refreshed again even without a brand-new comment. */
+const STALE_PROFILE_MS = 3 * 24 * 60 * 60 * 1000
+
+/**
+ * How many full (LLM) profile refreshes one call will do. Segment/level are free
+ * and always refreshed for everyone passed in; this only bounds the summary calls,
+ * so a large batch (a channel's first full import) can't turn into hundreds of
+ * sequential Anthropic calls in one categorization run. Anyone left over stays
+ * eligible next time this runs, since staleness doesn't reset until it succeeds.
+ */
+const MAX_PROFILE_SUMMARIES_PER_CALL = 30
+
+/**
+ * Keeps segment/level/profile_summary current for a batch of audience members —
+ * meant to be called with everyone who just got a newly-categorized comment, from
+ * every path that categorizes comments (first analysis, cron polling, manual
+ * re-analysis). Before this existed, that data only ever updated when a creator
+ * clicked "Evaluate" on Rewards or hit /api/analyze, so most people's segment and
+ * level were simply never computed.
+ *
+ * Segment and level are rule-based (no model call) and always refreshed. The LLM
+ * summary is the only part that costs anything, so it's skipped for anyone whose
+ * profile_summary is less than STALE_PROFILE_MS old — a repeat commenter doesn't
+ * need a fresh paragraph after every single new comment — and capped per call.
+ */
+export async function refreshAudienceProfiles(
+  supabase: SupabaseClient,
+  audienceMemberIds: string[],
+  creatorId?: string | null
+): Promise<void> {
+  const uniqueIds = [...new Set(audienceMemberIds)]
+  if (uniqueIds.length === 0) return
+
+  const { data: rows, error } = await supabase.from('audience_members').select('id, profile_updated_at').in('id', uniqueIds)
+  if (error) {
+    logError('audienceMemory.refreshAudienceProfiles', error, { stage: 'fetch_staleness' })
+    return
+  }
+  const updatedAtById = new Map((rows ?? []).map(r => [r.id as string, r.profile_updated_at as string | null]))
+
+  let summariesUsed = 0
+  for (const id of uniqueIds) {
+    const updatedAt = updatedAtById.get(id) ?? null
+    const stale = !updatedAt || Date.now() - new Date(updatedAt).getTime() > STALE_PROFILE_MS
+
+    if (stale && summariesUsed < MAX_PROFILE_SUMMARIES_PER_CALL) {
+      summariesUsed++
+      // Does segment + level + summary in one call.
+      await updateAudienceProfile(id, creatorId)
+    } else {
+      // Either fresh enough already, or this call's summary budget is spent —
+      // segment/level still cost nothing, so they're never skipped.
+      await updateAudienceSegment(supabase, id)
+      await updateAudienceLevel(supabase, id)
+    }
   }
 }

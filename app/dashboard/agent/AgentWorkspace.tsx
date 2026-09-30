@@ -39,6 +39,20 @@ const SENTIMENT_TONE: Record<string, string> = {
 }
 const STATUS_LABELS: Record<string, string> = { done: 'Done', running: 'Running', error: 'Error', idle: 'Not analyzed' }
 
+const SEGMENT_LABELS: Record<string, string> = {
+  potential_customer: 'Potential customers',
+  critic: 'Critics',
+  loyal_fan: 'Loyal fans',
+  content_requester: 'Content requesters',
+  casual_viewer: 'Casual viewers',
+}
+const LEVEL_LABELS: Record<string, string> = {
+  new: 'New',
+  regular: 'Regular',
+  rising_fan: 'Rising fans',
+  super_fan: 'Super fans',
+}
+
 const fmtDate = (iso: string) =>
   new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Nairobi' }) + ' EAT'
 
@@ -240,6 +254,32 @@ function WorkspaceView({ s }: { s: WorkspaceSummary }) {
               </div>
             ))}
           </div>
+        </Block>
+
+        {/* ---------------------------------------------------------- audience */}
+        <Block title="Audience">
+          <Label>{s.audience.total.toLocaleString()} people who&apos;ve commented</Label>
+          {s.audience.total === 0 ? (
+            <Unavailable>not yet available</Unavailable>
+          ) : (
+            <>
+              {s.audience.unprocessed > 0 && (
+                <p className="mb-1.5 text-[11px] text-text-muted italic">
+                  {s.audience.unprocessed.toLocaleString()} not segmented yet — catches up as videos are (re-)analyzed
+                </p>
+              )}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <p className="mb-1 text-[10px] tracking-widest text-text-muted uppercase">By segment</p>
+                  <ShareBars items={s.audience.bySegment} labels={SEGMENT_LABELS} />
+                </div>
+                <div>
+                  <p className="mb-1 text-[10px] tracking-widest text-text-muted uppercase">By level</p>
+                  <ShareBars items={s.audience.byLevel} labels={LEVEL_LABELS} />
+                </div>
+              </div>
+            </>
+          )}
         </Block>
       </div>
     </section>

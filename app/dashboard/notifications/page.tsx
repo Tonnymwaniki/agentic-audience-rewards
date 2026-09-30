@@ -186,12 +186,14 @@ export default async function NotificationsPage() {
           : `${unreadCount} unread of ${items.length} recent`}
       </p>
 
-      <Link
-        href="/dashboard/pinned"
-        className="mb-4 inline-flex min-h-11 items-center gap-1 text-sm text-purple-text hover:underline"
-      >
-        Pinned comments →
-      </Link>
+      <div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1">
+        <Link href="/dashboard/pinned" className="inline-flex min-h-11 items-center gap-1 text-sm text-purple-text hover:underline">
+          Pinned comments →
+        </Link>
+        <Link href="/dashboard/messages" className="inline-flex min-h-11 items-center gap-1 text-sm text-purple-text hover:underline">
+          Messages →
+        </Link>
+      </div>
 
       <AutomationSettings />
 
