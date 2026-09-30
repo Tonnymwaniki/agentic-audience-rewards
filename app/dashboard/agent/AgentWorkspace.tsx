@@ -1,3 +1,4 @@
+import Link from 'next/link'
 import { createServiceClient } from '@/lib/supabase/service'
 import { computeWorkspace, loadWorkspaceRaw, type Share, type WorkspaceSummary } from '@/lib/agent-workspace'
 import { COMING_SOON, PlatformIcon } from '@/components/PlatformIcon'
@@ -258,6 +259,9 @@ function WorkspaceView({ s }: { s: WorkspaceSummary }) {
 
         {/* ---------------------------------------------------------- audience */}
         <Block title="Audience">
+          <Link href="/dashboard/audience" className="mb-2 inline-block text-xs text-purple-text hover:underline">
+            Browse people →
+          </Link>
           <Label>{s.audience.total.toLocaleString()} people who&apos;ve commented</Label>
           {s.audience.total === 0 ? (
             <Unavailable>not yet available</Unavailable>
