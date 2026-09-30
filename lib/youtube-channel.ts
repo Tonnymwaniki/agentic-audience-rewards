@@ -12,6 +12,8 @@ export type ChannelStats = {
   channelId: string | null
   /** snippet.title — the channel's display name, for grouping videos in My Videos. */
   channelTitle: string | null
+  /** snippet.description — the channel's own "About" text, self-written. */
+  description: string | null
 }
 
 export type ChannelVideo = {
@@ -411,5 +413,6 @@ export async function fetchChannelStats(channelUrlOrHandle: string): Promise<Cha
     country: (snippet.country as string | undefined) ?? null,
     channelId: (item?.id as string | undefined) ?? null,
     channelTitle: (snippet.title as string | undefined) ?? null,
+    description: (snippet.description as string | undefined) || null,
   }
 }

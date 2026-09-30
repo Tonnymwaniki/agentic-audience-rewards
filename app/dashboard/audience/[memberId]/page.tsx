@@ -6,6 +6,7 @@ import PageHeader from '@/components/PageHeader'
 import Avatar from '@/components/Avatar'
 import { VOIDED_UNVERIFIED_STATUS } from '@/lib/rewards/status'
 import { logError } from '@/lib/logger'
+import EnrichButton from './EnrichButton'
 
 export const dynamic = 'force-dynamic'
 
@@ -68,12 +69,52 @@ export default async function AudienceProfilePage({ params }: { params: Promise<
 
   const service = createServiceClient()
 
-  const { data: member, error: memberError } = await service
+  // channel_bio/channel_subscriber_count/etc (migration 56) may not exist yet on
+  // this database — same self-healing pattern used throughout, and a literal
+  // select string per branch to keep Supabase's type inference happy.
+  const MEMBER_SELECT_WITH_ENRICHMENT =
+    'id, external_id, display_name, segment, level, profile_summary, profile_updated_at, channel_bio, channel_subscriber_count, channel_video_count, channel_created_at, channel_enriched_at'
+  const MEMBER_SELECT_BASE = 'id, external_id, display_name, segment, level, profile_summary, profile_updated_at'
+
+  let member: unknown | null = null
+  let memberError: { code?: string; message?: string } | null = null
+  let enrichmentColumnsAvailable = true
+
+  const withEnrichment = await service
     .from('audience_members')
-    .select('id, display_name, segment, level, profile_summary, profile_updated_at')
+    .select(MEMBER_SELECT_WITH_ENRICHMENT)
     .eq('id', memberId)
     .eq('creator_id', creator.id)
     .maybeSingle()
+  member = withEnrichment.data
+  memberError = withEnrichment.error
+
+  if (memberError && (memberError.code === 'PGRST204' || memberError.code === '42703')) {
+    enrichmentColumnsAvailable = false
+    const base = await service
+      .from('audience_members')
+      .select(MEMBER_SELECT_BASE)
+      .eq('id', memberId)
+      .eq('creator_id', creator.id)
+      .maybeSingle()
+    member = base.data
+    memberError = base.error
+  }
+
+  const memberRow = member as {
+    id: string
+    external_id: string | null
+    display_name: string | null
+    segment: string | null
+    level: string | null
+    profile_summary: string | null
+    profile_updated_at: string | null
+    channel_bio?: string | null
+    channel_subscriber_count?: number | null
+    channel_video_count?: number | null
+    channel_created_at?: string | null
+    channel_enriched_at?: string | null
+  } | null
 
   if (memberError) {
     logError('page.audienceProfile', memberError, { creator_id: creator.id, member_id: memberId, stage: 'fetch_member' })
@@ -83,7 +124,7 @@ export default async function AudienceProfilePage({ params }: { params: Promise<
       </div>
     )
   }
-  if (!member) notFound()
+  if (!memberRow) notFound()
 
   const { data: commentRows, error: commentsError } = await service
     .from('comments')
@@ -112,7 +153,8 @@ export default async function AudienceProfilePage({ params }: { params: Promise<
     .eq('audience_member_id', memberId)
     .neq('status', VOIDED_UNVERIFIED_STATUS)
 
-  const name = member.display_name || 'Unknown'
+  const name = memberRow.display_name || 'Unknown'
+  const hasChannelInfo = Boolean(memberRow.channel_enriched_at && (memberRow.channel_bio || memberRow.channel_subscriber_count != null || memberRow.channel_video_count != null || memberRow.channel_created_at))
 
   return (
     <div className="mx-auto max-w-2xl">
@@ -123,11 +165,11 @@ export default async function AudienceProfilePage({ params }: { params: Promise<
           <Avatar name={name} size={48} />
           <div className="min-w-0 flex-1">
             <div className="flex flex-wrap items-center gap-2">
-              {member.segment && <span className="badge">{SEGMENT_LABELS[member.segment] ?? member.segment}</span>}
-              {member.level && <span className="badge">{LEVEL_LABELS[member.level] ?? member.level}</span>}
+              {memberRow.segment && <span className="badge">{SEGMENT_LABELS[memberRow.segment] ?? memberRow.segment}</span>}
+              {memberRow.level && <span className="badge">{LEVEL_LABELS[memberRow.level] ?? memberRow.level}</span>}
             </div>
-            {member.profile_summary ? (
-              <p className="mt-2 text-sm leading-relaxed text-text-primary">{member.profile_summary}</p>
+            {memberRow.profile_summary ? (
+              <p className="mt-2 text-sm leading-relaxed text-text-primary">{memberRow.profile_summary}</p>
             ) : (
               <p className="mt-2 text-sm italic text-text-muted">
                 Not enough comments yet for a summary — needs at least 2.
@@ -163,6 +205,58 @@ export default async function AudienceProfilePage({ params }: { params: Promise<
           </Link>
         </div>
       </section>
+
+      {enrichmentColumnsAvailable && (
+        <section className="card mt-3">
+          <h2 className="font-display text-sm font-semibold text-text-primary">Channel info</h2>
+          {hasChannelInfo ? (
+            <>
+              {memberRow.channel_bio && (
+                <p className="mt-2 text-sm leading-relaxed text-text-primary">{memberRow.channel_bio}</p>
+              )}
+              <div className="mt-3 grid grid-cols-3 gap-2">
+                <div>
+                  <p className="font-display text-base leading-none text-text-primary">
+                    {memberRow.channel_subscriber_count != null ? memberRow.channel_subscriber_count.toLocaleString() : '—'}
+                  </p>
+                  <p className="mt-1 text-[11px] text-text-muted">Subscribers</p>
+                </div>
+                <div>
+                  <p className="font-display text-base leading-none text-text-primary">
+                    {memberRow.channel_video_count != null ? memberRow.channel_video_count.toLocaleString() : '—'}
+                  </p>
+                  <p className="mt-1 text-[11px] text-text-muted">Videos</p>
+                </div>
+                <div>
+                  <p className="font-display text-sm leading-none text-text-primary">
+                    {memberRow.channel_created_at
+                      ? new Date(memberRow.channel_created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' })
+                      : '—'}
+                  </p>
+                  <p className="mt-1 text-[11px] text-text-muted">Channel created</p>
+                </div>
+              </div>
+              <p className="mt-3 text-[11px] text-text-muted">
+                From their public YouTube channel — refreshed{' '}
+                {memberRow.channel_enriched_at ? new Date(memberRow.channel_enriched_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : 'recently'}.
+              </p>
+              <div className="mt-2">
+                <EnrichButton memberId={memberId} label="Refresh channel info" />
+              </div>
+            </>
+          ) : (
+            <>
+              <p className="mt-2 text-sm text-text-muted">
+                Pull their public channel bio, subscriber count, and video count from YouTube. This never reveals a real
+                name, email, or location — YouTube doesn&apos;t expose those.
+              </p>
+              <div className="mt-2">
+                <EnrichButton memberId={memberId} label="Fetch channel info" />
+              </div>
+            </>
+          )}
+        </section>
+      )}
 
       <h2 className="mt-6 mb-2 font-display text-sm font-semibold text-text-primary">Recent comments</h2>
       {comments.length === 0 ? (
