@@ -1,4 +1,5 @@
 import { redirect } from 'next/navigation'
+import Link from 'next/link'
 import { createClient } from '@/lib/supabase/server'
 import PageHeader from '@/components/PageHeader'
 import NotificationsList, { type InboxItem } from './NotificationsList'
@@ -184,6 +185,13 @@ export default async function NotificationsPage() {
           ? 'Comments needing your attention will appear here.'
           : `${unreadCount} unread of ${items.length} recent`}
       </p>
+
+      <Link
+        href="/dashboard/pinned"
+        className="mb-4 inline-flex min-h-11 items-center gap-1 text-sm text-purple-text hover:underline"
+      >
+        Pinned comments →
+      </Link>
 
       <AutomationSettings />
 

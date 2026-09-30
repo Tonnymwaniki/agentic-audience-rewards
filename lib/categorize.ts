@@ -649,10 +649,23 @@ ${JSON.stringify(batch)}${retrySuffix}`
 export async function categorizePost(post_id: string, onProgress?: ProgressCallback) {
   const supabase = createServiceClient()
 
-  const { data: comments, error: commentsError } = await supabase
-    .from('comments')
-    .select('id, text')
-    .eq('post_id', post_id)
+  // owner_replied_at (migration 55) may not exist yet on this database — tried
+  // first, dropped on the specific "column does not exist" error rather than
+  // failing the whole categorization run.
+  let ownerReplyColumnAvailable = true
+  let comments: Array<{ id: string; text: string; owner_replied_at?: string | null }> | null = null
+  let commentsError: { code?: string; message?: string } | null = null
+  {
+    const result = await supabase.from('comments').select('id, text, owner_replied_at').eq('post_id', post_id)
+    comments = result.data
+    commentsError = result.error
+    if (commentsError && (commentsError.code === 'PGRST204' || commentsError.code === '42703') && (commentsError.message ?? '').includes('owner_replied_at')) {
+      ownerReplyColumnAvailable = false
+      const fallback = await supabase.from('comments').select('id, text').eq('post_id', post_id)
+      comments = fallback.data
+      commentsError = fallback.error
+    }
+  }
 
   if (commentsError) {
     logError('categorize.categorizePost', commentsError, { post_id, stage: 'fetch_comments' })
@@ -662,6 +675,11 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
   if (!comments || comments.length === 0) {
     return { success: true, categorized: 0 }
   }
+
+  // Comments the channel owner has already personally replied to (migration 55) —
+  // computed at ingest time from data already fetched, no LLM/API call involved.
+  // These never need a drafted reply, whatever category the model assigns them.
+  const ownerRepliedIds = ownerReplyColumnAvailable ? new Set(comments.filter(c => c.owner_replied_at).map(c => c.id)) : new Set<string>()
 
   // BUG FIX: this used to run with no filter at all, so on any database with more
   // than Supabase's default 1000-row response cap in comment_categories (true of
@@ -846,7 +864,7 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     }
   }
 
-  type SkipReason = 'unscreened' | 'not_business_relevant' | 'relevance_check_failed' | 'draft_generation_failed' | 'unverified_channel'
+  type SkipReason = 'unscreened' | 'not_business_relevant' | 'relevance_check_failed' | 'draft_generation_failed' | 'unverified_channel' | 'owner_already_replied'
 
   const notifiable: Array<{ commentId: string; category: string; text: string; skipReason?: SkipReason }> = []
 
@@ -894,6 +912,16 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     if (!text) continue
 
     try {
+      // Already personally answered by the channel owner — checked before
+      // escalation/relevance so an answered comment never triggers an LLM call or
+      // a notification, and never falls through to whatever bucket the content
+      // classifier happened to pick (the bug this was written to fix: these used
+      // to be indistinguishable from a comment nobody has addressed).
+      if (ownerRepliedIds.has(comment.id)) {
+        await writeSkipReason(comment.id, 'owner_already_replied')
+        continue
+      }
+
       // Escalation was assessed in the categorization pass and already written to
       // escalation_flag, so no extra call here — just honour it. It still overrides
       // both the relevance check and drafting: a legal threat classified as a

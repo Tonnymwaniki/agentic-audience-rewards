@@ -127,12 +127,22 @@ export async function GET(request: NextRequest) {
 
         // Posts belonging to this creator's verified channels — the acting
         // capability only ever applies to those, so there is no point scanning
-        // drafts on unverified/research channels at all.
-        const { data: posts, error: postsError } = await supabase
+        // drafts on unverified/research channels at all. pinned_comment_id comes
+        // along so its comment can be excluded below — the pinned slot is the most
+        // visible spot on the video, so it never gets an unattended reply, however
+        // automation is configured.
+        let { data: posts, error: postsError } = await supabase
           .from('posts')
-          .select('id')
+          .select('id, pinned_comment_id')
           .eq('creator_id', creatorId)
           .in('channel_id', verifiedChannelIds)
+
+        if (postsError && (postsError.code === 'PGRST204' || postsError.code === '42703') && (postsError.message ?? '').includes('pinned_comment_id')) {
+          // Migration 55 hasn't run yet on this database — nothing to exclude.
+          const fallback = await supabase.from('posts').select('id').eq('creator_id', creatorId).in('channel_id', verifiedChannelIds)
+          posts = (fallback.data ?? []).map(p => ({ ...p, pinned_comment_id: null }))
+          postsError = fallback.error
+        }
 
         if (postsError) {
           logError('api/cron/auto-reply', postsError, { creator_id: creatorId, stage: 'fetch_posts' })
@@ -145,6 +155,8 @@ export async function GET(request: NextRequest) {
           summary.push(result)
           continue
         }
+
+        const pinnedCommentIds = new Set((posts ?? []).map(p => p.pinned_comment_id as string | null).filter((id): id is string => Boolean(id)))
 
         // Undrafted, unapproved, unsent, matching category — pulled generously
         // (more than maxPerRun) since confidence filtering happens client-side
@@ -183,6 +195,9 @@ export async function GET(request: NextRequest) {
 
         const eligible = candidates
           .filter(c => !NEVER_AUTO_SEND_CATEGORIES.has(c.category))
+          // The pinned comment gets the most visibility on the video — always
+          // requires manual approval, however automation is configured.
+          .filter(c => !pinnedCommentIds.has(c.commentId))
           .filter(c => meetsMinimumConfidence(c.confidence, minConfidence))
           .slice(0, maxPerRun)
 

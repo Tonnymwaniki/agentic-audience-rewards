@@ -37,6 +37,7 @@ type CommentRow = {
   id: string
   text: string
   post_id: string
+  owner_replied_at?: string | null
 }
 
 type CategoryRow = {
@@ -126,17 +127,33 @@ export async function regenerateDraftsForCreator(
   const customFieldContext = customFieldsToContext(adjusted.customFields)
   const uncertainFacts = adjusted.uncertain
 
+  // owner_replied_at (migration 55) may not exist yet on this database — dropped
+  // on the specific "column does not exist" error rather than failing the run.
+  let ownerReplyColumnAvailable = true
   const comments: CommentRow[] = []
   let offset = 0
   const batchSize = 1000
   let hasMore = true
 
   while (hasMore) {
-    const { data: batch, error: commentsError } = await supabase
-      .from('comments')
-      .select('id, text, post_id')
-      .in('post_id', postIds)
-      .range(offset, offset + batchSize - 1)
+    let batch: unknown[] | null
+    let commentsError: { code?: string; message?: string } | null
+
+    if (ownerReplyColumnAvailable) {
+      const result = await supabase.from('comments').select('id, text, post_id, owner_replied_at').in('post_id', postIds).range(offset, offset + batchSize - 1)
+      batch = result.data
+      commentsError = result.error
+      if (commentsError && (commentsError.code === 'PGRST204' || commentsError.code === '42703') && (commentsError.message ?? '').includes('owner_replied_at')) {
+        ownerReplyColumnAvailable = false
+        const fallback = await supabase.from('comments').select('id, text, post_id').in('post_id', postIds).range(offset, offset + batchSize - 1)
+        batch = fallback.data
+        commentsError = fallback.error
+      }
+    } else {
+      const result = await supabase.from('comments').select('id, text, post_id').in('post_id', postIds).range(offset, offset + batchSize - 1)
+      batch = result.data
+      commentsError = result.error
+    }
 
     if (commentsError) {
       logError('drafts.regenerate', commentsError, { creator_id, stage: 'fetch_comments' })
@@ -144,7 +161,7 @@ export async function regenerateDraftsForCreator(
     }
 
     if (batch && batch.length > 0) {
-      comments.push(...batch)
+      comments.push(...(batch as unknown as CommentRow[]))
       offset += batchSize
     }
 
@@ -168,7 +185,12 @@ export async function regenerateDraftsForCreator(
     const category = categoriesByCommentId.get(comment.id)
     if (!category || !DRAFTABLE_CATEGORIES.has(category.category)) return false
     // Never clobber a draft the creator has already approved.
-    return !category.draft_reply_approved_at
+    if (category.draft_reply_approved_at) return false
+    // Already personally answered by the channel owner — no draft needed, however
+    // stale the last check. Handled explicitly below (not just filtered out here)
+    // so the skip reason gets recorded even the first time this runs after the
+    // backfill/an owner reply lands.
+    return true
   })
 
   // Eligibility can't shrink as work completes (an unapproved draft stays eligible
@@ -249,6 +271,14 @@ export async function regenerateDraftsForCreator(
     const meta = postMeta.get(comment.post_id)
 
     try {
+      // Already personally answered by the channel owner (migration 55) — no draft
+      // needed, and no API call to find that out; checked before anything else.
+      if (ownerReplyColumnAvailable && comment.owner_replied_at) {
+        await markChecked(comment.id, { draft_reply: null, draft_skip_reason: 'owner_already_replied' })
+        skippedCasual++
+        continue
+      }
+
       // Regeneration runs over rows categorized at some earlier time, so it can't
       // use a fresh batch result. Fast path first: an already-flagged row needs no
       // API call at all.

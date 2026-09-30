@@ -50,7 +50,9 @@ const optionalPostColumns: Record<
   | 'live_scheduled_end_at'
   | 'live_actual_start_at'
   | 'live_actual_end_at'
-  | 'raw_api_response',
+  | 'raw_api_response'
+  | 'pinned_comment_id'
+  | 'pinned_comment_confirmed',
   boolean
 > = {
   duration_seconds: true,
@@ -67,6 +69,58 @@ const optionalPostColumns: Record<
   live_actual_start_at: true,
   live_actual_end_at: true,
   raw_api_response: true,
+  // migration 55
+  pinned_comment_id: true,
+  pinned_comment_confirmed: true,
+}
+
+/** comments.owner_replied_at/owner_reply_comment_id (migration 55). */
+let ownerReplyColumnsAvailable = true
+
+/**
+ * Marks a top-level comment as already answered by the channel owner, computed
+ * purely from data already ingested (no extra YouTube API calls). Only ever sets
+ * this once per comment — the earliest owner reply is what matters, and an
+ * existing value is never overwritten by a later one.
+ */
+async function markOwnerReplied(supabase: SupabaseService, parentCommentId: string, replyCommentId: string, repliedAt: string) {
+  if (!ownerReplyColumnsAvailable) return
+  const { error } = await supabase
+    .from('comments')
+    .update({ owner_replied_at: repliedAt, owner_reply_comment_id: replyCommentId })
+    .eq('id', parentCommentId)
+    .is('owner_replied_at', null)
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    ownerReplyColumnsAvailable = false
+    console.warn('comments.owner_replied_at does not exist yet; skipping owner-reply detection (run the pending migration)')
+  } else if (error) {
+    logError('ingest.markOwnerReplied', error, { parent_comment_id: parentCommentId, reply_comment_id: replyCommentId })
+  }
+}
+
+/**
+ * Guesses which comment is pinned: the first top-level comment YouTube returns
+ * (default order=relevance tends to surface a pinned comment first — see the
+ * migration 55 header for why this is a guess, not a certainty). Only sets it the
+ * first time a post has more than one comment, and never touches a post whose pin
+ * the creator has already confirmed or corrected — so this can't silently
+ * override their choice on a later re-ingest.
+ */
+async function guessPinnedComment(supabase: SupabaseService, postId: string, firstCommentId: string) {
+  if (!optionalPostColumns.pinned_comment_id || !optionalPostColumns.pinned_comment_confirmed) return
+  const { error } = await supabase
+    .from('posts')
+    .update({ pinned_comment_id: firstCommentId })
+    .eq('id', postId)
+    .is('pinned_comment_id', null)
+    .eq('pinned_comment_confirmed', false)
+  if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+    optionalPostColumns.pinned_comment_id = false
+    optionalPostColumns.pinned_comment_confirmed = false
+    console.warn('posts.pinned_comment_id does not exist yet; skipping pinned-comment guess (run the pending migration)')
+  } else if (error) {
+    logError('ingest.guessPinnedComment', error, { post_id: postId })
+  }
 }
 
 /** The column an "unknown column" error names, if it's one of the optional ones. */
@@ -189,7 +243,7 @@ async function ingestReplies(
   supabase: SupabaseService,
   parents: FetchedComment[],
   parentIdsByExternalId: Map<string, string>,
-  args: { postId: string; platformId: string; creatorId: string; skipExternalIds?: Set<string> }
+  args: { postId: string; platformId: string; creatorId: string; skipExternalIds?: Set<string>; ownerChannelId?: string | null }
 ): Promise<{ stored: string[]; fetched: number; truncated: boolean }> {
   const fetchable = parents.filter(p => p.replyCount > 0 && parentIdsByExternalId.has(p.externalCommentId))
   if (fetchable.length === 0 || !(await replyStorageAvailable(supabase))) return { stored: [], fetched: 0, truncated: false }
@@ -209,6 +263,12 @@ async function ingestReplies(
     if (!parentCommentId) continue
     const id = await storeComment(supabase, reply, { ...args, parentCommentId })
     if (id) stored.push(id)
+    // Owner-reply detection: free from data already fetched, no extra API calls.
+    // Every reply already carries authorChannelId; the post's own channel_id
+    // (passed down as ownerChannelId) is the only other piece needed.
+    if (id && args.ownerChannelId && reply.authorChannelId === args.ownerChannelId) {
+      await markOwnerReplied(supabase, parentCommentId, id, reply.publishedAt)
+    }
   }
   logInfo('ingest.fetchReplies', 'Replies ingested', {
     post_id: args.postId,
@@ -326,9 +386,18 @@ export async function ingestYouTubeVideo(creator_id: string, youtube_url: string
     commentsIngested++
   }
 
+  // Best-effort pinned-comment guess (migration 55 header explains why it's only
+  // a guess): the first comment YouTube returns, under the default relevance
+  // ordering this app already fetches with. Only fires when there's more than one
+  // comment to actually distinguish a "pin" from — a single-comment video's only
+  // comment isn't meaningfully "pinned".
+  if (comments.length > 1 && parentIds.has(comments[0].externalCommentId)) {
+    await guessPinnedComment(supabase, postId, parentIds.get(comments[0].externalCommentId)!)
+  }
+
   // Replies are stored as ordinary comments on the same post, so everything
   // downstream treats them exactly like top-level comments.
-  const replies = await ingestReplies(supabase, comments, parentIds, { postId, platformId: platform.id, creatorId: creator_id })
+  const replies = await ingestReplies(supabase, comments, parentIds, { postId, platformId: platform.id, creatorId: creator_id, ownerChannelId: meta.channelId })
   commentsIngested += replies.stored.length
 
   return { success: true, postId, commentsIngested, repliesIngested: replies.stored.length }
@@ -388,12 +457,38 @@ export async function ingestNewComments(creator_id: string, post_id: string, vid
     for (const row of rows ?? []) parentIds.set(row.external_comment_id as string, row.id as string)
   }
 
+  // Best-effort pinned-comment guess, same rule as first ingest: only the first
+  // time (guessPinnedComment no-ops once a guess or a confirmed pin already
+  // exists), and only when there's more than one comment. The first comment might
+  // be one stored long before this poll, so its stored id isn't necessarily in
+  // parentIds — looked up directly rather than skipped.
+  if (allComments.length > 1) {
+    const firstExternalId = allComments[0].externalCommentId
+    let firstStoredId = parentIds.get(firstExternalId)
+    if (!firstStoredId) {
+      const { data: row } = await supabase.from('comments').select('id').eq('post_id', post_id).eq('external_comment_id', firstExternalId).maybeSingle()
+      firstStoredId = (row?.id as string | undefined) ?? undefined
+    }
+    if (firstStoredId) await guessPinnedComment(supabase, post_id, firstStoredId)
+  }
+
+  // The post's own channel — needed to tell an owner's reply apart from any other
+  // viewer's. Read defensively: channel_id (migration 36) may not exist yet.
+  let ownerChannelId: string | null = null
+  const { data: postRow, error: postRowError } = await supabase.from('posts').select('channel_id').eq('id', post_id).maybeSingle()
+  if (postRowError && !(postRowError.code === 'PGRST204' || postRowError.code === '42703')) {
+    logError('ingest.ingestNewComments', postRowError, { post_id, stage: 'fetch_channel_id' })
+  } else {
+    ownerChannelId = (postRow?.channel_id as string | null) ?? null
+  }
+
   // Skips replies already stored, so a poll only writes (and later categorizes) new ones.
   const replies = await ingestReplies(supabase, allComments, parentIds, {
     postId: post_id,
     platformId: platform.id,
     creatorId: creator_id,
     skipExternalIds: knownIds,
+    ownerChannelId,
   })
   commentsIngested += replies.stored.length
   newCommentIds.push(...replies.stored)
