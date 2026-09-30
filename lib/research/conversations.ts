@@ -21,6 +21,9 @@ export type ConversationSummary = {
   createdAt: string
   updatedAt: string
   messageCount: number
+  /** The channel this conversation is scoped to, or null for "all channels" (every
+   * conversation started before this existed, and any started without picking one). */
+  channelId: string | null
 }
 
 const TITLE_TIMEOUT_MS = 10000
@@ -42,24 +45,78 @@ export function conversationsAvailable(): boolean {
   return tablesAvailable
 }
 
-/** Creates a conversation for this creator. Returns null if storage is unavailable. */
+/** True once the database reports channel_id missing (migration 20240101000054). */
+let channelColumnAvailable = true
+
+/**
+ * Creates a conversation for this creator, optionally scoped to one channel — see
+ * research_conversations.channel_id. Returns null if storage is unavailable.
+ */
 export async function createConversation(
   supabase: SupabaseClient,
-  creatorId: string
+  creatorId: string,
+  channelId?: string | null
 ): Promise<string | null> {
   if (!tablesAvailable) return null
 
-  const { data, error } = await supabase
-    .from('research_conversations')
-    .insert([{ creator_id: creatorId }])
-    .select('id')
-    .single()
+  const row: Record<string, unknown> = { creator_id: creatorId }
+  if (channelId && channelColumnAvailable) row.channel_id = channelId
+
+  const { data, error } = await supabase.from('research_conversations').insert([row]).select('id').single()
+
+  if (error && (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes('channel_id')) {
+    channelColumnAvailable = false
+    console.warn('research_conversations.channel_id does not exist yet; creating an unscoped conversation (run the pending migration)')
+    const retry = await supabase
+      .from('research_conversations')
+      .insert([{ creator_id: creatorId }])
+      .select('id')
+      .single()
+    if (retry.error) {
+      logError('research.conversations.create', retry.error, { creator_id: creatorId })
+      return null
+    }
+    return retry.data.id as string
+  }
 
   if (error) {
     if (!markUnavailable(error)) logError('research.conversations.create', error, { creator_id: creatorId })
     return null
   }
   return data.id as string
+}
+
+/**
+ * The channel a conversation is scoped to, for continuing it on a later turn — the
+ * scope a conversation started with must stay fixed for every turn of that same
+ * conversation, so this is read once per request rather than re-derived from
+ * whatever the client happens to send that turn.
+ *
+ * Returns undefined (not null) when the conversation can't be read at all, so
+ * callers can tell "scoped to nothing" from "couldn't find out."
+ */
+export async function getConversationChannelId(
+  supabase: SupabaseClient,
+  conversationId: string
+): Promise<string | null | undefined> {
+  if (!tablesAvailable || !channelColumnAvailable) return null
+
+  const { data, error } = await supabase
+    .from('research_conversations')
+    .select('channel_id')
+    .eq('id', conversationId)
+    .maybeSingle()
+
+  if (error) {
+    if ((error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes('channel_id')) {
+      channelColumnAvailable = false
+      return null
+    }
+    logError('research.conversations.getChannelId', error, { conversation_id: conversationId })
+    return undefined
+  }
+
+  return (data?.channel_id as string | null) ?? null
 }
 
 /**
@@ -171,12 +228,24 @@ export async function listConversations(
 ): Promise<ConversationSummary[]> {
   if (!tablesAvailable) return []
 
-  const { data, error } = await supabase
+  let { data, error } = await supabase
     .from('research_conversations')
-    .select('id, title, created_at, updated_at')
+    .select('id, title, created_at, updated_at, channel_id')
     .eq('creator_id', creatorId)
     .order('updated_at', { ascending: false })
     .limit(limit)
+
+  if (error && (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes('channel_id')) {
+    channelColumnAvailable = false
+    const fallback = await supabase
+      .from('research_conversations')
+      .select('id, title, created_at, updated_at')
+      .eq('creator_id', creatorId)
+      .order('updated_at', { ascending: false })
+      .limit(limit)
+    data = fallback.data as unknown as typeof data
+    error = fallback.error
+  }
 
   if (error) {
     if (!markUnavailable(error)) logError('research.conversations.list', error, { creator_id: creatorId })
@@ -204,6 +273,7 @@ export async function listConversations(
     createdAt: r.created_at as string,
     updatedAt: r.updated_at as string,
     messageCount: counts.get(r.id as string) ?? 0,
+    channelId: ((r as { channel_id?: string | null }).channel_id) ?? null,
   }))
 }
 

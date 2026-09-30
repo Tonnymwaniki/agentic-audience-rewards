@@ -29,6 +29,14 @@ export type InboxComment = {
   replySendStatus: string | null
   /** True when the auto-reply cron approved+sent this, not a manual click. */
   replyAutoSent: boolean
+  /** Why there's no draft, when draftReply is null but this wasn't escalated or locked. */
+  draftSkipReason: string | null
+}
+
+const SKIP_REASON_LABELS: Record<string, string> = {
+  unscreened: "The agent couldn't confirm this comment was safe to auto-reply to.",
+  relevance_check_failed: "The agent couldn't finish checking this one — try Regenerate, or reply yourself.",
+  draft_generation_failed: 'Drafting failed for this comment — try Regenerate, or reply yourself.',
 }
 
 export type InboxItem = {
@@ -60,6 +68,44 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
   const [readIds, setReadIds] = useState<Set<string>>(
     () => new Set(items.filter(i => i.read).map(i => i.id))
   )
+
+  // A comment that gained a draft via "Try again" (below), keyed by comment id, so
+  // the card becomes actionable immediately without waiting for a reload.
+  const [regenerated, setRegenerated] = useState<Record<string, string>>({})
+  const [regenerating, setRegenerating] = useState<Set<string>>(new Set())
+  const [regenerateError, setRegenerateError] = useState<Record<string, string>>({})
+
+  async function tryAgain(commentId: string) {
+    setRegenerating(prev => new Set(prev).add(commentId))
+    setRegenerateError(prev => {
+      const next = { ...prev }
+      delete next[commentId]
+      return next
+    })
+    try {
+      const res = await fetch('/api/draft-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ comment_id: commentId }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok || !data?.draft_reply) {
+        throw new Error(data?.error || 'Could not draft a reply this time.')
+      }
+      setRegenerated(prev => ({ ...prev, [commentId]: data.draft_reply }))
+    } catch (err) {
+      setRegenerateError(prev => ({
+        ...prev,
+        [commentId]: err instanceof Error ? err.message : 'Could not draft a reply this time.',
+      }))
+    } finally {
+      setRegenerating(prev => {
+        const next = new Set(prev)
+        next.delete(commentId)
+        return next
+      })
+    }
+  }
 
   async function markRead(id: string) {
     if (readIds.has(id)) return
@@ -95,7 +141,17 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
         const isRead = readIds.has(item.id)
         const comment = item.comment
         const escalation = normalizeEscalation(comment?.escalationFlag ?? null)
-        const actionable = Boolean(comment?.draftReply)
+        // A comment freshly drafted via "Try again" overrides the server-rendered
+        // (null) draftReply, so the card becomes actionable immediately.
+        const liveDraftReply = (comment && regenerated[comment.id]) || comment?.draftReply || null
+        const actionable = Boolean(liveDraftReply)
+        const skipReason = comment?.draftSkipReason ?? null
+        const canTryAgain = skipReason === 'relevance_check_failed' || skipReason === 'draft_generation_failed'
+        // Shown only when there's genuinely nothing else explaining the empty state —
+        // escalation and the locked-draft notice already have their own banners, and
+        // a fresh regenerate takes priority over the stale reason it replaced.
+        const showSkipReason =
+          Boolean(comment) && !actionable && !comment?.approved && !comment?.draftLocked && !escalation && skipReason && SKIP_REASON_LABELS[skipReason]
         // Written by the Insight Agent (lib/insight-agent.ts): about a theme across
         // many comments, so there is no commenter to show.
         const isInsight = item.type === 'insight'
@@ -217,10 +273,34 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                 <DraftReplyEditor
                   className="mt-2"
                   commentId={comment.id}
-                  draftReply={comment.draftReply!}
+                  draftReply={liveDraftReply!}
                   finalReplyText={comment.finalReplyText}
                   onApproved={() => void markRead(item.id)}
                 />
+              )}
+
+              {/* No draft, but not for one of the reasons that already has its own
+                  banner (escalated, locked, approved) — this is the gap that used to
+                  be invisible: a question or complaint that silently got no reply. */}
+              {showSkipReason && comment && (
+                <div className="mt-2 rounded-md border border-white/10 bg-surface-hover p-3">
+                  <p className="text-xs leading-snug text-text-muted">{SKIP_REASON_LABELS[skipReason!]}</p>
+                  {canTryAgain && (
+                    <div className="mt-2 flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void tryAgain(comment.id)}
+                        disabled={regenerating.has(comment.id)}
+                        className="inline-flex min-h-9 items-center rounded-lg border border-white/10 px-3 text-xs font-medium text-text-primary transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-50"
+                      >
+                        {regenerating.has(comment.id) ? 'Trying again…' : 'Try again'}
+                      </button>
+                      {regenerateError[comment.id] && (
+                        <span className="text-xs text-avax-red">{regenerateError[comment.id]}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
               {comment?.draftLocked && (

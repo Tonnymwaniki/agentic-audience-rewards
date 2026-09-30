@@ -11,8 +11,8 @@ import { COMING_SOON, PlatformIcon } from '@/components/PlatformIcon'
  * `creatorId` must be the session-derived id; the service client is needed for the
  * channel-verification lookup (youtube_oauth_tokens is service-role only).
  */
-export default async function AgentWorkspace({ creatorId }: { creatorId: string }) {
-  const summary = computeWorkspace(await loadWorkspaceRaw(createServiceClient(), creatorId))
+export default async function AgentWorkspace({ creatorId, channelId }: { creatorId: string; channelId?: string | null }) {
+  const summary = computeWorkspace(await loadWorkspaceRaw(createServiceClient(), creatorId, channelId))
   return <WorkspaceView s={summary} />
 }
 
@@ -198,6 +198,9 @@ function WorkspaceView({ s }: { s: WorkspaceSummary }) {
         {/* ----------------------------------------------------- intelligence */}
         <Block title="Intelligence">
           <Label>Top themes{s.intelligence.themes ? ` · as of ${fmtDate(s.intelligence.themes.computedAt)}` : ''}</Label>
+          {s.intelligence.themesSpanAllChannels && (
+            <p className="mb-1.5 text-[11px] text-text-muted italic">across all your channels — themes aren&apos;t computed per channel yet</p>
+          )}
           {s.intelligence.themes ? (
             <ul className="space-y-1">
               {s.intelligence.themes.items.map(t => (

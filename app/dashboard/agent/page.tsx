@@ -16,9 +16,10 @@ import { Suspense } from 'react'
 import AgentWorkspace, { AgentWorkspaceSkeleton } from './AgentWorkspace'
 import { logError } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/service'
-import { resolveVerifiedPostIds } from '@/lib/channel-verification'
+import { getChannelVerificationSummary, resolveVerifiedPostIds, UNKNOWN_CHANNEL_ID } from '@/lib/channel-verification'
 import { countsAsRecognition } from '@/lib/rewards/status'
 import { computeAgentHeaderStats, type StatsRewardEvent } from '@/lib/agent-stats'
+import AgentChannelFilter from './AgentChannelFilter'
 
 export const dynamic = 'force-dynamic'
 
@@ -35,7 +36,12 @@ function greetingFor(date: Date): string {
   return 'Good evening'
 }
 
-export default async function AgentHomePage() {
+export default async function AgentHomePage({
+  searchParams,
+}: {
+  searchParams: Promise<{ channel?: string }>
+}) {
+  const { channel: requestedChannel } = await searchParams
   const supabase = await createClient()
   const {
     data: { user },
@@ -72,10 +78,22 @@ export default async function AgentHomePage() {
 
   // posted_at is the video's real YouTube upload time, needed by the "since
   // posted" view to measure how long after publication each comment arrived.
-  const { data: posts, error: postsError } = await supabase
-    .from('posts')
-    .select('id, title, posted_at')
-    .eq('creator_id', creator.id)
+  // channel_id (migration 51) may not exist yet on this database — self-healing
+  // fallback, same pattern used elsewhere.
+  type PostRow = { id: string; title: string | null; posted_at: string | null; channel_id: string | null }
+  let posts: PostRow[] | null = null
+  let postsError: { code?: string; message?: string } | null = null
+  {
+    const first = await supabase.from('posts').select('id, title, posted_at, channel_id').eq('creator_id', creator.id)
+    posts = first.data as unknown as PostRow[] | null
+    postsError = first.error
+
+    if (postsError && (postsError.code === 'PGRST204' || postsError.code === '42703') && (postsError.message ?? '').includes('channel_id')) {
+      const fallback = await supabase.from('posts').select('id, title, posted_at').eq('creator_id', creator.id)
+      posts = (fallback.data as unknown as Omit<PostRow, 'channel_id'>[] | null)?.map(p => ({ ...p, channel_id: null })) ?? null
+      postsError = fallback.error
+    }
+  }
 
   if (postsError) {
     logError('page.agent', postsError, { creator_id: creator.id, stage: 'fetch_posts' })
@@ -86,7 +104,7 @@ export default async function AgentHomePage() {
     )
   }
 
-  const postIds = (posts || []).map(p => p.id)
+  const allPosts = posts || []
 
   // Safeguard for anyone landing here directly — a bookmark, the back button, or a
   // typed URL — before analyzing anything. Agent Home with no videos is a page of
@@ -98,9 +116,36 @@ export default async function AgentHomePage() {
   // rather than a failed read.
   //
   // Must stay outside any try/catch — redirect() signals by throwing.
-  if (postIds.length === 0) {
+  if (allPosts.length === 0) {
     redirect(CONNECT_PATH)
   }
+
+  // Every channel this creator has ever analyzed — their own AND every "paste any
+  // channel URL" research target — so Agent Home can be scoped to ONE of them
+  // instead of blending all of them into one set of numbers by default. Service
+  // client: the summary reads youtube_oauth_tokens, which the signed-in role can't
+  // see; creator.id is from the session above.
+  const channelSummary = await getChannelVerificationSummary(createServiceClient(), creator.id)
+  const knownChannels = channelSummary.filter(c => c.channelId !== UNKNOWN_CHANNEL_ID)
+  const verifiedChannels = knownChannels.filter(c => c.verified)
+
+  let selectedChannelId: string | null
+  if (requestedChannel === 'all') {
+    selectedChannelId = null
+  } else if (requestedChannel && knownChannels.some(c => c.channelId === requestedChannel)) {
+    selectedChannelId = requestedChannel
+  } else if (!requestedChannel && verifiedChannels.length === 1) {
+    // Unambiguous default: this creator has exactly one verified (their own)
+    // channel, so Agent Home opens scoped to it rather than blended with whatever
+    // else they've researched. A creator with zero or several verified channels
+    // gets "all channels" as the default instead, with the selector to narrow it.
+    selectedChannelId = verifiedChannels[0].channelId
+  } else {
+    selectedChannelId = null
+  }
+
+  const scopedPosts = selectedChannelId ? allPosts.filter(p => p.channel_id === selectedChannelId) : allPosts
+  const postIds = scopedPosts.map(p => p.id)
 
   type CommentRow = { id: string; posted_at: string; post_id: string; ingested_at: string | null }
   const allComments: CommentRow[] = []
@@ -253,7 +298,7 @@ export default async function AgentHomePage() {
   // timestamp is reported rather than silently assumed.
   const latencyActivity = computeLatencyActivity(
     allComments,
-    new Map((posts || []).map(p => [p.id, (p.posted_at as string | null) ?? null]))
+    new Map(scopedPosts.map(p => [p.id, p.posted_at ?? null]))
   )
 
   // Every category row for this creator is already loaded above for the drafts and
@@ -267,7 +312,7 @@ export default async function AgentHomePage() {
   // The same tally again, split per video, so the breakdown widget can cycle
   // through them. Built from the two arrays already in memory — commentsById maps
   // a category row back to the video its comment belongs to.
-  const postById = new Map((posts || []).map(p => [p.id, (p.title as string | null) || 'Untitled video']))
+  const postById = new Map(scopedPosts.map(p => [p.id, p.title || 'Untitled video']))
   const postIdByCommentId = new Map(allComments.map(c => [c.id, c.post_id]))
   const countsByPost = new Map<string, Record<string, number>>()
 
@@ -300,6 +345,14 @@ export default async function AgentHomePage() {
           <CategoryPrompt />
         </div>
       )}
+      {knownChannels.length > 1 && (
+        <div className="mb-4">
+          <AgentChannelFilter
+            channels={knownChannels.map(c => ({ channelId: c.channelId, title: c.title, verified: c.verified }))}
+            selectedChannelId={selectedChannelId}
+          />
+        </div>
+      )}
       <AgentSummary
         greeting={greetingFor(new Date())}
         creatorDisplayName={creatorDisplayName}
@@ -314,7 +367,7 @@ export default async function AgentHomePage() {
         purchaseIntentReadyCount={purchaseIntentReadyCount}
         workspace={
           <Suspense fallback={<AgentWorkspaceSkeleton />}>
-            <AgentWorkspace creatorId={creator.id} />
+            <AgentWorkspace creatorId={creator.id} channelId={selectedChannelId} />
           </Suspense>
         }
         categoryCounts={categoryCounts}

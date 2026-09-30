@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { requireCreator } from '@/lib/api-auth'
-import { conversationBelongsTo, loadMessages } from '@/lib/research/conversations'
+import { conversationBelongsTo, getConversationChannelId, loadMessages } from '@/lib/research/conversations'
 import { logError } from '@/lib/logger'
 
 /**
@@ -22,8 +22,9 @@ export async function GET(_request: NextRequest, { params }: { params: Promise<{
     }
 
     const messages = await loadMessages(supabase, id)
+    const channelId = await getConversationChannelId(supabase, id)
 
-    return NextResponse.json({ id, messages })
+    return NextResponse.json({ id, messages, channelId: channelId === undefined ? null : channelId })
   } catch (err) {
     logError('api/research/conversations/[id]', err, { stage: 'request' })
     return NextResponse.json({ error: 'Internal error' }, { status: 500 })

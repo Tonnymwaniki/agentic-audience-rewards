@@ -107,14 +107,31 @@ export async function POST(request: NextRequest) {
 
     const draft = await generateDraftReply(comment.text, category, adjusted.profile, styleExamples, customFieldContext, adjusted.uncertain)
 
-    await supabase
+    const { error: updateError } = await supabase
       .from('comment_categories')
       .update({
         draft_reply: draft.text,
         draft_confidence: draft.confidence,
         draft_reply_created_at: new Date().toISOString(),
+        // Clears any stale skip reason from before this manual regenerate — a draft
+        // now exists, so "needs your reply, drafting failed" would otherwise linger
+        // and contradict what's right there in the editor.
+        draft_skip_reason: null,
       })
       .eq('comment_id', comment_id)
+
+    // draft_skip_reason (migration 53) may not exist yet on this database — retry
+    // without it rather than losing the regenerated draft over a missing column.
+    if (updateError && (updateError.code === 'PGRST204' || updateError.code === '42703')) {
+      await supabase
+        .from('comment_categories')
+        .update({
+          draft_reply: draft.text,
+          draft_confidence: draft.confidence,
+          draft_reply_created_at: new Date().toISOString(),
+        })
+        .eq('comment_id', comment_id)
+    }
 
     return NextResponse.json({ draft_reply: draft.text, draft_confidence: draft.confidence })
   } catch (err) {

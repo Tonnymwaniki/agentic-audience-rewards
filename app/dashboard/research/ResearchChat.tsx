@@ -11,6 +11,7 @@ import { InterestBars, TrendingList } from './AudienceInsights'
 import type { SidebarInterest, SidebarTrendingTopic } from './ResearchSidebar'
 import ConversationHistory from './ConversationHistory'
 import MascotIcon from '@/components/MascotIcon'
+import ChannelScopePicker from './ChannelScopePicker'
 
 // Messages are only ever created client-side (the list starts empty on both
 // server and client), so formatting a local time here can't cause a hydration
@@ -1119,6 +1120,7 @@ export default function ResearchChat({
           className="flex-shrink-0 border-t border-white/10 px-4 py-3"
           style={{ paddingBottom: 'calc(0.75rem + env(safe-area-inset-bottom))' }}
         >
+          <ChannelScopePicker className="mx-auto mb-2 max-w-2xl" />
           <form onSubmit={handleSubmit} className="mx-auto flex max-w-2xl items-end gap-2">
             <textarea
               ref={textareaRef}
@@ -1207,6 +1209,7 @@ export default function ResearchChat({
       {/* Composer is permanently bottom-anchored within the panel now. */}
       <div className="flex-shrink-0 border-t border-white/10 px-5 py-4">
         <div className="mx-auto max-w-2xl">
+          <ChannelScopePicker className="mb-2" />
           <form onSubmit={handleSubmit} className="flex items-end gap-3">
             <textarea
               ref={textareaRef}

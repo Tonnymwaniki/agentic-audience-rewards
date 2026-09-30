@@ -209,6 +209,11 @@ export async function regenerateDraftsForCreator(
   let skippedCasual = 0
   let failed = 0
 
+  // draft_skip_reason (migration 53) may not exist yet on this database — same
+  // self-healing pattern used throughout: drop it from every future call rather
+  // than letting every markChecked in this run fail over one missing column.
+  let skipReasonColumnAvailable = true
+
   // Stamps draft_reply_checked_at (plus any draft fields) so this comment moves to
   // the back of the queue. Called for EVERY outcome — drafted, skipped, or failed —
   // because an unstamped comment stays at the front and blocks the next run.
@@ -216,10 +221,21 @@ export async function regenerateDraftsForCreator(
     // Clearing a draft clears its creation time too — a draft_reply_created_at
     // with no draft_reply reads as "a draft was written" to anything counting them.
     const cleared = 'draft_reply' in extra && extra.draft_reply === null ? { draft_reply_created_at: null } : {}
-    const { error } = await supabase
-      .from('comment_categories')
-      .update({ draft_reply_checked_at: new Date().toISOString(), ...extra, ...cleared })
-      .eq('comment_id', commentId)
+    const payload: Record<string, unknown> = { draft_reply_checked_at: new Date().toISOString(), ...extra, ...cleared }
+    if (!skipReasonColumnAvailable) delete payload.draft_skip_reason
+
+    const { error } = await supabase.from('comment_categories').update(payload).eq('comment_id', commentId)
+
+    if (error && (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes('draft_skip_reason')) {
+      skipReasonColumnAvailable = false
+      delete payload.draft_skip_reason
+      const retry = await supabase.from('comment_categories').update(payload).eq('comment_id', commentId)
+      if (retry.error) {
+        logError('drafts.regenerate', retry.error, { creator_id, stage: 'mark_checked_retry' })
+        return false
+      }
+      return true
+    }
 
     if (error) {
       logError('drafts.regenerate', error, { creator_id, stage: 'mark_checked' })
@@ -256,21 +272,28 @@ export async function regenerateDraftsForCreator(
 
       if (checkFailed) {
         console.warn(`Escalation check failed for comment ${comment.id}; skipping regeneration.`)
-        await markChecked(comment.id)
+        // Same "we don't know it's safe" case as an unscreened comment in the
+        // categorizePost path — recorded so it can be found and surfaced rather than
+        // just logged to the console.
+        await markChecked(comment.id, { draft_skip_reason: 'unscreened' })
         skippedCasual++
         continue
       }
 
       if (RELEVANCE_CHECK_CATEGORIES.has(category.category)) {
-        const relevant = await isBusinessRelevant(
+        const relevance = await isBusinessRelevant(
           comment.text,
           meta?.title || '',
           meta?.description || ''
         )
-        if (!relevant) {
+        if (!relevance.relevant) {
           // Casual comments get no draft, but must still be stamped — otherwise
-          // they'd be re-evaluated on every future run forever.
-          await markChecked(comment.id)
+          // they'd be re-evaluated on every future run forever. A failed check (vs a
+          // genuine "this is casual" judgment) is recorded distinctly, same as the
+          // categorizePost path, so it doesn't read as an intentional filter.
+          await markChecked(comment.id, {
+            draft_skip_reason: relevance.checkFailed ? 'relevance_check_failed' : 'not_business_relevant',
+          })
           skippedCasual++
           continue
         }
@@ -281,6 +304,7 @@ export async function regenerateDraftsForCreator(
       const verification = await checkPostVerification(supabase, creator_id, comment.post_id)
       if (!verification.verified) {
         skippedUnverified++
+        await markChecked(comment.id, { draft_skip_reason: 'unverified_channel' })
         continue
       }
 
@@ -290,6 +314,7 @@ export async function regenerateDraftsForCreator(
         draft_reply: draft.text,
         draft_confidence: draft.confidence,
         draft_reply_created_at: new Date().toISOString(),
+        draft_skip_reason: null,
       })
 
       if (stamped) {

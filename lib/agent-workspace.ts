@@ -31,8 +31,11 @@ export type WorkspaceRaw = {
   comments: Array<{ id: string; parent_comment_id: string | null; ingested_at: string | null }>
   categories: Array<{ comment_id: string; category: string | null; language: string | null; sentiment: string | null }>
   insights: Array<{ topic: string; comment_count: number; trend_direction: string | null; trend_pct: number | null; computed_at: string }>
-  /** channel id -> verified, per isChannelVerified, for every channel with analyzed videos or a grant. */
+  /** channel id -> verified, per isChannelVerified, for every channel with analyzed videos or a grant. ALWAYS unfiltered by channelScope — this is the picker's source of truth for which channels exist at all. */
   channels: Array<{ channelId: string; title: string | null; verified: boolean; videos: number }>
+  /** True when a channel scope was requested and this creator has more than one
+   * channel — see WorkspaceSummary.intelligence.themesSpanAllChannels. */
+  themesSpanAllChannels: boolean
 }
 
 export type Share = { key: string; count: number; percent: number }
@@ -70,6 +73,14 @@ export type WorkspaceSummary = {
   intelligence: {
     /** null when insights have never been computed for this account. */
     themes: { computedAt: string; items: Array<{ topic: string; comments: number; trend: string | null; trendPct: number | null }> } | null
+    /**
+     * True when a channel scope is active AND the creator has more than one
+     * channel — audience_insights (the themes source) has no channel_id column,
+     * so themes are always computed across every channel. Rather than silently
+     * showing another channel's themes as if they belonged to the selected one,
+     * the UI reads this to caption them "across all your channels".
+     */
+    themesSpanAllChannels: boolean
     /** Shares of comments that HAVE a sentiment; unscored counted separately. */
     sentiment: { scored: number; unscored: number; shares: Share[] }
     categoryMix: Array<{ key: string; label: string; count: number }>
@@ -169,6 +180,7 @@ export function computeWorkspace(raw: WorkspaceRaw, now = Date.now()): Workspace
             items: themes.map(t => ({ topic: t.topic, comments: t.comment_count, trend: t.trend_direction, trendPct: t.trend_pct })),
           }
         : null,
+      themesSpanAllChannels: raw.themesSpanAllChannels,
       sentiment: { scored, unscored, shares: shares(SENTIMENTS, sentimentCounts, scored) },
       categoryMix: CATEGORY_MIX.map(c => ({ ...c, count: categoryCounts.get(c.key) ?? 0 })),
     },
@@ -179,8 +191,18 @@ export function computeWorkspace(raw: WorkspaceRaw, now = Date.now()): Workspace
  * Loads the raw rows for one creator. `supabase` must be a SERVICE client (the
  * grant table behind isChannelVerified is service-role only) and `creatorId` must
  * come from the session.
+ *
+ * `channelId`, when given, scopes ingestion/health/intelligence.categoryMix to
+ * that one channel's posts — without it, EVERY channel the creator has ever
+ * analyzed (their own AND every "paste any channel URL" research target) is
+ * blended into one set of numbers, which is the pre-existing behavior kept when
+ * no scope is requested.
  */
-export async function loadWorkspaceRaw(supabase: SupabaseClient, creatorId: string): Promise<WorkspaceRaw> {
+export async function loadWorkspaceRaw(
+  supabase: SupabaseClient,
+  creatorId: string,
+  channelId?: string | null
+): Promise<WorkspaceRaw> {
   const [{ data: creator }, { data: posts, error: postsError }, { data: grants }, { data: insights }] = await Promise.all([
     supabase.from('creators').select('subscriber_count, channel_stats_updated_at, last_channel_check_at').eq('id', creatorId).maybeSingle(),
     supabase.from('posts').select('id, channel_id, analysis_status, ingested_at, duration_seconds, youtube_category').eq('creator_id', creatorId),
@@ -189,7 +211,14 @@ export async function loadWorkspaceRaw(supabase: SupabaseClient, creatorId: stri
   ])
   if (postsError) logError('agentWorkspace.load', postsError, { creator_id: creatorId, stage: 'posts' })
 
-  const postList = (posts ?? []) as WorkspaceRaw['posts']
+  // Unfiltered — used for the channels[] picker source and to know whether more
+  // than one channel exists at all (for the themesSpanAllChannels caveat below).
+  const allPosts = (posts ?? []) as WorkspaceRaw['posts']
+  const distinctChannelCount = new Set(allPosts.map(p => p.channel_id).filter(Boolean)).size
+
+  // The actual scope everything else in this function is computed from.
+  const postList = channelId ? allPosts.filter(p => p.channel_id === channelId) : allPosts
+
   const comments = postList.length
     ? await fetchInBatches<WorkspaceRaw['comments'][number]>(supabase, {
         table: 'comments',
@@ -211,7 +240,7 @@ export async function loadWorkspaceRaw(supabase: SupabaseClient, creatorId: stri
   // isChannelVerified — the same per-channel test the capability gates use.
   const titles = new Map(((grants ?? []) as Array<{ channel_id: string | null; channel_title: string | null }>).filter(g => g.channel_id).map(g => [g.channel_id as string, g.channel_title]))
   const videosByChannel = new Map<string, number>()
-  for (const p of postList) if (p.channel_id) videosByChannel.set(p.channel_id, (videosByChannel.get(p.channel_id) ?? 0) + 1)
+  for (const p of allPosts) if (p.channel_id) videosByChannel.set(p.channel_id, (videosByChannel.get(p.channel_id) ?? 0) + 1)
   const channelIds = [...new Set([...titles.keys(), ...videosByChannel.keys()])]
   const channels = await Promise.all(
     channelIds.map(async channelId => ({
@@ -230,5 +259,6 @@ export async function loadWorkspaceRaw(supabase: SupabaseClient, creatorId: stri
     categories,
     insights: (insights ?? []) as WorkspaceRaw['insights'],
     channels,
+    themesSpanAllChannels: Boolean(channelId) && distinctChannelCount > 1,
   }
 }

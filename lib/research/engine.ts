@@ -41,6 +41,13 @@ export type ToolContext = {
   postMap: Map<string, string>
   postThumbnails: Map<string, string | null>
   /**
+   * The channel this turn is scoped to, or null for "all channels" — the only
+   * behavior before per-conversation channel scoping existed. When set, postIds
+   * above is ALREADY filtered to this channel, so every tool is automatically
+   * scoped without needing its own awareness of channels.
+   */
+  channelId: string | null
+  /**
    * Posts on channels whose ownership is verified: only their drafts are pending
    * work. Drafts written before verification existed, on unverified channels, are
    * never reported as awaiting approval — they can't be approved.
@@ -2373,27 +2380,65 @@ export type ResearchTurnResult = {
 /**
  * Builds the per-request tool context for one creator. `creatorId` must come
  * from the authenticated session — every tool is scoped by it.
+ *
+ * `channelId`, when given, narrows postIds/postMap to that one channel BEFORE any
+ * tool ever runs — this is the single choke point every tool reads posts through,
+ * so scoping it here scopes the whole conversation without touching each tool.
+ * Without it (the default), posts from every channel the creator has ever
+ * analyzed — their own AND every "paste any channel" research target — are
+ * blended into one pool, which is the pre-existing behavior kept for
+ * conversations that were never scoped to a channel.
  */
-export async function buildResearchContext(supabase: SupabaseClient, creator_id: string): Promise<ToolContext> {
-    const { data: posts, error: postsError } = await supabase
+export async function buildResearchContext(
+  supabase: SupabaseClient,
+  creator_id: string,
+  channelId?: string | null
+): Promise<ToolContext> {
+    // channel_id/channel_title (migration 51) may not exist yet on this database —
+    // same self-healing pattern used throughout: fall back to the unscoped column
+    // list rather than breaking Research chat over a missing label.
+    const BASE_COLUMNS = 'id, title, thumbnail_url'
+    let { data: posts, error: postsError } = await supabase
       .from('posts')
-      .select('id, title, thumbnail_url')
+      .select(`${BASE_COLUMNS}, channel_id`)
       .eq('creator_id', creator_id)
+
+    let channelColumnAvailable = true
+    if (postsError && (postsError.code === 'PGRST204' || postsError.code === '42703') && (postsError.message ?? '').includes('channel_id')) {
+      channelColumnAvailable = false
+      const fallback = await supabase.from('posts').select(BASE_COLUMNS).eq('creator_id', creator_id)
+      posts = fallback.data as unknown as typeof posts
+      postsError = fallback.error
+    }
 
     if (postsError) {
       logError('research.engine.buildContext', postsError, { creator_id })
       throw new Error('Failed to fetch posts')
     }
 
-    const postList = posts || []
+    let postList = (posts || []) as Array<{ id: string; title: string | null; thumbnail_url: string | null; channel_id?: string | null }>
+
+    // A channel was requested but the column isn't there yet: fail closed to an
+    // EMPTY post set rather than silently ignoring the scope and answering from
+    // every channel blended — a wrong "no data on that channel yet" beats a
+    // confidently wrong answer built from someone else's audience.
+    if (channelId && !channelColumnAvailable) {
+      logWarn('research.engine.buildContext', 'Channel scoping requested but posts.channel_id does not exist yet; returning no posts', { creator_id, channel_id: channelId })
+      postList = []
+    } else if (channelId) {
+      postList = postList.filter(p => p.channel_id === channelId)
+    }
+
+    const postIds = postList.map(p => p.id)
     const ctx: ToolContext = {
       supabase,
       creatorId: creator_id,
-      postIds: postList.map(p => p.id),
-      postMap: new Map(postList.map(p => [p.id, p.title])),
+      postIds,
+      postMap: new Map(postList.map(p => [p.id, p.title as string])),
       postThumbnails: new Map(postList.map(p => [p.id, p.thumbnail_url as string | null])),
+      channelId: channelId ?? null,
       // Callers pass the service client (the grant table is service-role only).
-      actionablePostIds: await resolveVerifiedPostIds(supabase, creator_id, postList.map(p => p.id)),
+      actionablePostIds: await resolveVerifiedPostIds(supabase, creator_id, postIds),
       entityAliases: await loadEntityAliases(supabase, creator_id),
       evidence: new EvidenceRegistry(),
     }

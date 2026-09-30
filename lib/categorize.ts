@@ -3,6 +3,7 @@ import { ENTITY_EXTRACTION_RULES, normalizeEntities } from '@/lib/entities'
 import { loadCustomProfileFields, customFieldsToContext, type CustomProfileField } from '@/lib/custom-profile-fields'
 import { applyFactStatusesForDrafts, loadFactStatuses } from '@/lib/profile-fact-status'
 import { createServiceClient } from '@/lib/supabase/service'
+import { fetchInBatches } from '@/lib/supabase-helpers'
 import { normalizeConfidence, CONFIDENCE_PROMPT_GUIDANCE, type Confidence } from '@/lib/confidence'
 import { normalizeEscalation, type EscalationType } from '@/lib/escalation'
 import { logError, logWarn, logInfo } from '@/lib/logger'
@@ -265,7 +266,33 @@ export type DraftReplyResult = {
   confidence: Confidence | null
 }
 
+/**
+ * One retry, so a single dropped connection or momentary Anthropic hiccup doesn't
+ * turn into a silently-missing draft on a genuine question. Not a loop: a second
+ * consecutive failure is much more likely to be a real outage than bad luck, and
+ * retrying indefinitely would just make one bad comment stall a whole batch.
+ */
 export async function generateDraftReply(
+  commentText: string,
+  category: string,
+  profile?: BusinessProfile | null,
+  styleExamples?: StyleExample[] | null,
+  customFields?: string[] | null,
+  uncertainFacts?: string[] | null,
+  usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
+): Promise<DraftReplyResult> {
+  try {
+    return await generateDraftReplyOnce(commentText, category, profile, styleExamples, customFields, uncertainFacts, usageCtx)
+  } catch (err) {
+    logWarn('categorize.generateDraftReply', 'First attempt failed; retrying once', {
+      category,
+      reason: err instanceof Error ? err.message : String(err),
+    })
+    return generateDraftReplyOnce(commentText, category, profile, styleExamples, customFields, uncertainFacts, usageCtx)
+  }
+}
+
+async function generateDraftReplyOnce(
   commentText: string,
   category: string,
   profile?: BusinessProfile | null,
@@ -351,6 +378,15 @@ On confidence: ${CONFIDENCE_PROMPT_GUIDANCE} For a drafted reply, "high" means t
   }
 }
 
+export type RelevanceResult = {
+  relevant: boolean
+  /** True when the check itself errored/timed out, so `relevant: false` was a
+   * fail-closed default rather than an actual "this is casual" judgment — callers
+   * use this to record draft_skip_reason accurately instead of both cases looking
+   * like the same intentional filter. */
+  checkFailed: boolean
+}
+
 // Cheap pre-check before spending a full draft-reply call on a question/complaint:
 // skips drafting for casual/off-topic comments (upload schedule, chit-chat) so only
 // genuine business inquiries get a reply drafted. Fails closed (treats errors as
@@ -361,7 +397,7 @@ export async function isBusinessRelevant(
   postTitle: string,
   postDescription: string,
   usageCtx?: { supabase: SupabaseClient; creatorId: string; postId?: string | null } | null
-): Promise<boolean> {
+): Promise<RelevanceResult> {
   const controller = new AbortController()
   const timeoutId = setTimeout(() => controller.abort(), 15000)
 
@@ -400,14 +436,14 @@ export async function isBusinessRelevant(
       })
     }
 
-    return content === 'business'
+    return { relevant: content === 'business', checkFailed: false }
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') {
       logWarn('categorize.isBusinessRelevant', 'Relevance check timed out after 15s', { post_title: postTitle })
     } else {
       logError('categorize.isBusinessRelevant', err, { post_title: postTitle })
     }
-    return false
+    return { relevant: false, checkFailed: true }
   } finally {
     clearTimeout(timeoutId)
   }
@@ -627,18 +663,27 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     return { success: true, categorized: 0 }
   }
 
-  const { data: existingCategories, error: categoriesError } = await supabase
-    .from('comment_categories')
-    .select('comment_id')
-
-  if (categoriesError) {
-    logError('categorize.categorizePost', categoriesError, { post_id, stage: 'fetch_existing_categories' })
+  // BUG FIX: this used to run with no filter at all, so on any database with more
+  // than Supabase's default 1000-row response cap in comment_categories (true of
+  // any real production account), it silently returned an arbitrary 1000 rows out
+  // of the WHOLE TABLE across every creator — not this post's comments. Comments
+  // that already had a category but fell outside that 1000 looked "uncategorized"
+  // here, got reprocessed, and their category/topics/draft could be silently
+  // overwritten. fetchInBatches scopes this correctly to this post's own comment
+  // ids, chunking the `in` list and paging each chunk so it holds even for videos
+  // with thousands of comments.
+  const existingCategories = await fetchInBatches<{ comment_id: string }>(supabase, {
+    table: 'comment_categories',
+    select: 'comment_id',
+    inColumn: 'comment_id',
+    inValues: comments.map(c => c.id),
+    throwOnError: true,
+  }).catch(err => {
+    logError('categorize.categorizePost', err, { post_id, stage: 'fetch_existing_categories' })
     throw new Error('Failed to fetch existing categories')
-  }
+  })
 
-  const categorizedIds = new Set(
-    existingCategories?.map(c => c.comment_id) || []
-  )
+  const categorizedIds = new Set(existingCategories.map(c => c.comment_id))
   const uncategorized = comments.filter(c => !categorizedIds.has(c.id))
 
   if (uncategorized.length === 0) {
@@ -801,7 +846,27 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
     }
   }
 
-  const notifiable: Array<{ commentId: string; category: string; text: string }> = []
+  type SkipReason = 'unscreened' | 'not_business_relevant' | 'relevance_check_failed' | 'draft_generation_failed' | 'unverified_channel'
+
+  const notifiable: Array<{ commentId: string; category: string; text: string; skipReason?: SkipReason }> = []
+
+  // comment_categories.draft_skip_reason (migration 53) may not exist yet on every
+  // database — same self-healing pattern used throughout this codebase. Probed
+  // once per run rather than per comment.
+  let skipReasonColumnAvailable = true
+  async function writeSkipReason(commentId: string, reason: SkipReason): Promise<void> {
+    if (!skipReasonColumnAvailable) return
+    const { error } = await supabase
+      .from('comment_categories')
+      .update({ draft_skip_reason: reason })
+      .eq('comment_id', commentId)
+    if (error && (error.code === 'PGRST204' || error.code === '42703')) {
+      skipReasonColumnAvailable = false
+      console.warn('comment_categories.draft_skip_reason does not exist yet; skip reasons will not be recorded (run the pending migration)')
+    } else if (error) {
+      logError('categorize.categorizePost', error, { post_id, comment_id: commentId, stage: 'write_skip_reason' })
+    }
+  }
 
   // Contradicted profile facts come out of the verified set and go in as uncertain.
   let uncertainFacts: string[] = []
@@ -840,17 +905,37 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       }
 
       if (!comment.escalationScreened) {
-        // The model omitted the escalation key for this item. No flag is written —
-        // a malformed response must not label someone's complaint a legal threat —
-        // but drafting is skipped anyway, because the safe failure here is silence
-        // rather than an auto-reply to something unscreened.
-        console.warn(`Comment ${comment.id} was not escalation-screened; skipping draft.`)
+        // The model omitted the escalation key for this item. No escalation_flag is
+        // written — a malformed response must not label someone's complaint a legal
+        // threat — but drafting is skipped anyway, because the safe failure here is
+        // silence rather than an auto-reply to something unscreened. THIS USED TO BE
+        // a console.warn and nothing else: the comment vanished from view exactly
+        // like a genuinely off-topic one. It's now recorded and surfaced instead, so
+        // an unscreened question shows up as "needs your reply" rather than looking
+        // like a miss.
+        await writeSkipReason(comment.id, 'unscreened')
+        notifiable.push({ commentId: comment.id, category: comment.category, text, skipReason: 'unscreened' })
         continue
       }
 
       if (relevanceCheckCategories.has(comment.category)) {
-        const isRelevant = await isBusinessRelevant(text, postTitle, postDescription, usageCtx)
-        if (!isRelevant) continue
+        const relevance = await isBusinessRelevant(text, postTitle, postDescription, usageCtx)
+        if (!relevance.relevant) {
+          if (relevance.checkFailed) {
+            // The check itself errored/timed out — "not relevant" here was a
+            // fail-closed default, not a real judgment that this is casual chit-chat.
+            // A genuine business question could be sitting behind this failure, so
+            // it's surfaced rather than dropped.
+            await writeSkipReason(comment.id, 'relevance_check_failed')
+            notifiable.push({ commentId: comment.id, category: comment.category, text, skipReason: 'relevance_check_failed' })
+          } else {
+            // Working as designed: genuinely judged casual/off-topic. No notification
+            // — surfacing every off-topic question would just be noise — but the
+            // reason is still recorded so a creator who goes looking can see why.
+            await writeSkipReason(comment.id, 'not_business_relevant')
+          }
+          continue
+        }
       }
 
       // CAPABILITY GATE. Drafting is skipped outright rather than generated and
@@ -858,25 +943,39 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
       // producing one for a channel nobody has proven they own is the thing to
       // avoid — not merely showing it. Skipping also saves the LLM call.
       // Categorization above has already run and is deliberately NOT gated.
+      // Not pushed to `notifiable`: this is already surfaced at the channel level
+      // via ChannelVerificationBanner, and would otherwise flood the inbox with one
+      // entry per comment on every unverified channel a creator has researched.
       if (!draftingAllowed) {
         skippedUnverified++
+        await writeSkipReason(comment.id, 'unverified_channel')
         continue
       }
 
-      const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts, usageCtx)
-      const draftReply = draft.text
-      await supabase
-        .from('comment_categories')
-        .update({
-          draft_reply: draftReply,
-          draft_confidence: draft.confidence,
-          draft_reply_created_at: new Date().toISOString(),
-        })
-        .eq('comment_id', comment.id)
+      try {
+        const draft = await generateDraftReply(text, comment.category, businessProfile, styleExamples, customFieldContext, uncertainFacts, usageCtx)
+        await supabase
+          .from('comment_categories')
+          .update({
+            draft_reply: draft.text,
+            draft_confidence: draft.confidence,
+            draft_reply_created_at: new Date().toISOString(),
+          })
+          .eq('comment_id', comment.id)
 
-      notifiable.push({ commentId: comment.id, category: comment.category, text })
+        notifiable.push({ commentId: comment.id, category: comment.category, text })
+      } catch (draftErr) {
+        // Both attempts (generateDraftReply already retries once) failed. THIS USED
+        // TO be caught by the outer catch below with only a log line — the comment
+        // then had no draft, no notification, and nothing distinguishing it from a
+        // correctly-skipped one. Now it's recorded and still surfaced, so the
+        // creator sees "needs your reply" instead of the question just disappearing.
+        logError('categorize.categorizePost', draftErr, { post_id, comment_id: comment.id, stage: 'generate_draft_reply' })
+        await writeSkipReason(comment.id, 'draft_generation_failed')
+        notifiable.push({ commentId: comment.id, category: comment.category, text, skipReason: 'draft_generation_failed' })
+      }
     } catch (err) {
-      logError('categorize.categorizePost', err, { post_id, comment_id: comment.id, stage: 'generate_draft_reply' })
+      logError('categorize.categorizePost', err, { post_id, comment_id: comment.id, stage: 'draft_loop' })
     }
   }
 
@@ -912,11 +1011,17 @@ export async function categorizePost(post_id: string, onProgress?: ProgressCallb
  * Never throws. A notification is an accessory to the draft that was already
  * written successfully — failing the whole analysis over one is the wrong trade.
  */
+const SKIP_REASON_NOTIFICATION_LABELS: Record<string, string> = {
+  unscreened: 'needs your reply — could not confirm it was safe to auto-reply',
+  relevance_check_failed: 'needs your reply — the agent could not finish checking this one',
+  draft_generation_failed: 'needs your reply — drafting failed for this one',
+}
+
 async function createDraftNotifications(
   supabase: SupabaseClient,
   creatorId: string | null,
   videoTitle: string,
-  notifiable: Array<{ commentId: string; category: string; text: string }>
+  notifiable: Array<{ commentId: string; category: string; text: string; skipReason?: string }>
 ): Promise<void> {
   if (!creatorId || notifiable.length === 0) return
 
@@ -937,14 +1042,18 @@ async function createDraftNotifications(
     const already = new Set((existing || []).map(row => row.comment_id))
     const rows = notifiable
       .filter(n => !already.has(n.commentId))
-      .map(n => ({
-        creator_id: creatorId,
-        comment_id: n.commentId,
-        type: n.category,
-        message: `New ${n.category.replace(/_/g, ' ')} comment${videoTitle ? ` on ${videoTitle}` : ''}: ${
-          n.text.length > 100 ? n.text.slice(0, 100) + '…' : n.text
-        }`,
-      }))
+      .map(n => {
+        const label = n.skipReason ? SKIP_REASON_NOTIFICATION_LABELS[n.skipReason] : null
+        const heading = label
+          ? `New ${n.category.replace(/_/g, ' ')} comment${videoTitle ? ` on ${videoTitle}` : ''} — ${label}`
+          : `New ${n.category.replace(/_/g, ' ')} comment${videoTitle ? ` on ${videoTitle}` : ''}`
+        return {
+          creator_id: creatorId,
+          comment_id: n.commentId,
+          type: n.category,
+          message: `${heading}: ${n.text.length > 100 ? n.text.slice(0, 100) + '…' : n.text}`,
+        }
+      })
 
     if (rows.length === 0) return
 

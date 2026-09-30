@@ -23,6 +23,7 @@ type CategoryInfo = {
   escalation_flag: string | null
   reply_send_status: string | null
   reply_auto_sent: boolean | null
+  draft_skip_reason: string | null
 }
 
 type NotificationRow = {
@@ -92,30 +93,28 @@ export default async function NotificationsPage() {
       )
     `
 
+  // Migrations 52 (reply_auto_sent) and 53 (draft_skip_reason) may not have run yet
+  // on this database — tried together first, then each dropped in turn on the
+  // specific "column does not exist" error, rather than breaking the whole page.
+  let optionalColumns = ['reply_auto_sent', 'draft_skip_reason']
   let rows: unknown[] | null = null
   let error: { code?: string; message?: string } | null = null
-  {
-    const first = await supabase
+
+  for (;;) {
+    const result = await supabase
       .from('notifications')
-      .select(NOTIFICATIONS_SELECT(`${CATEGORY_COLUMNS_BASE}, reply_auto_sent`))
+      .select(NOTIFICATIONS_SELECT([CATEGORY_COLUMNS_BASE, ...optionalColumns].join(', ')))
       .eq('creator_id', creator.id)
       .order('created_at', { ascending: false })
       .limit(PAGE_SIZE)
-    rows = first.data
-    error = first.error
+    rows = result.data
+    error = result.error
 
-    // reply_auto_sent (migration 52) may not exist yet on this database — same
-    // self-healing pattern used throughout: fall back rather than break the page.
-    if (error && (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes('reply_auto_sent')) {
-      const fallback = await supabase
-        .from('notifications')
-        .select(NOTIFICATIONS_SELECT(CATEGORY_COLUMNS_BASE))
-        .eq('creator_id', creator.id)
-        .order('created_at', { ascending: false })
-        .limit(PAGE_SIZE)
-      rows = fallback.data
-      error = fallback.error
-    }
+    const missing = optionalColumns.find(
+      c => error && (error.code === 'PGRST204' || error.code === '42703') && (error.message ?? '').includes(c)
+    )
+    if (!missing) break
+    optionalColumns = optionalColumns.filter(c => c !== missing)
   }
 
   if (error) {
@@ -168,6 +167,7 @@ export default async function NotificationsPage() {
             draftLocked,
             replySendStatus: info?.reply_send_status ?? null,
             replyAutoSent: info?.reply_auto_sent ?? false,
+            draftSkipReason: info?.draft_skip_reason ?? null,
           }
         : null,
     }

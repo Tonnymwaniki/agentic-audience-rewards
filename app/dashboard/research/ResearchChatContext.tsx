@@ -83,6 +83,15 @@ type ResearchChatValue = {
   conversationId: string | null
   /** True while a saved conversation is being fetched back. */
   loadingConversation: boolean
+  /**
+   * The channel this conversation is scoped to, or null for "all channels" (every
+   * conversation's default). Freely changeable before the first message; locked
+   * once a conversation exists, since a conversation's scope is fixed at creation
+   * (see research_conversations.channel_id).
+   */
+  channelId: string | null
+  /** No-op once `hasMessages` is true — scope can't change mid-conversation. */
+  setChannelId: (id: string | null) => void
   setInput: (value: string) => void
   sendMessage: (text: string) => Promise<void>
   regenerate: () => Promise<void>
@@ -117,11 +126,23 @@ export function ResearchChatProvider({
   const [error, setError] = useState<string | null>(null)
   const [conversationId, setConversationId] = useState<string | null>(null)
   const [loadingConversation, setLoadingConversation] = useState(false)
+  const [channelId, setChannelIdState] = useState<string | null>(null)
 
   // Read inside requestAssistant without making it a dependency: adding the id to
   // the dep array would rebuild the callback the moment the first answer assigns
   // one, and sendMessage's own deps with it, for no behavioural gain.
   const conversationIdRef = useRef<string | null>(null)
+  const channelIdRef = useRef<string | null>(null)
+
+  // Scope can only be picked before a conversation exists — once the server has
+  // created one (and possibly stored a channel_id on it), changing this ref would
+  // desync the client's idea of the scope from what's actually persisted and what
+  // every subsequent turn is answered from.
+  const setChannelId = useCallback((id: string | null) => {
+    if (conversationIdRef.current) return
+    channelIdRef.current = id
+    setChannelIdState(id)
+  }, [])
 
   const hasMessages = messages.length > 0
   const lastAssistantIndex = messages.map(m => m.role).lastIndexOf('assistant')
@@ -148,6 +169,10 @@ export function ResearchChatProvider({
             // Set only when an earlier question was edited: tells the server how
             // many stored turns to keep before appending this one.
             truncate_to: truncateTo,
+            // Only meaningful when this is the first turn of a new conversation —
+            // the server ignores it on a continuing one and uses that
+            // conversation's own stored scope instead (see the route's comment).
+            channel_id: channelIdRef.current,
           }),
         })
 
@@ -262,6 +287,11 @@ export function ResearchChatProvider({
     setLoading(false)
     conversationIdRef.current = null
     setConversationId(null)
+    // A fresh conversation goes back to "all channels" by default — the previous
+    // one's scope doesn't carry over, since the creator may be starting a
+    // completely different line of inquiry.
+    channelIdRef.current = null
+    setChannelIdState(null)
   }, [])
 
   /**
@@ -292,6 +322,12 @@ export function ResearchChatProvider({
       )
       conversationIdRef.current = id
       setConversationId(id)
+      // Restores whatever scope this saved conversation was created with, so
+      // continuing it (and the UI showing that scope) matches what every future
+      // turn of it will actually be answered from.
+      const restoredChannelId = typeof data.channelId === 'string' ? data.channelId : null
+      channelIdRef.current = restoredChannelId
+      setChannelIdState(restoredChannelId)
       setInput('')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not open that conversation')
@@ -311,6 +347,8 @@ export function ResearchChatProvider({
       creatorName,
       conversationId,
       loadingConversation,
+      channelId,
+      setChannelId,
       setInput,
       sendMessage,
       regenerate,
@@ -318,7 +356,7 @@ export function ResearchChatProvider({
       startNewChat,
       loadConversation,
     }),
-    [messages, input, loading, error, hasMessages, lastAssistantIndex, creatorName, conversationId, loadingConversation, sendMessage, regenerate, editMessage, startNewChat, loadConversation]
+    [messages, input, loading, error, hasMessages, lastAssistantIndex, creatorName, conversationId, loadingConversation, channelId, setChannelId, sendMessage, regenerate, editMessage, startNewChat, loadConversation]
   )
 
   return <ResearchChatContext.Provider value={value}>{children}</ResearchChatContext.Provider>
