@@ -25,6 +25,10 @@ export type InboxComment = {
    * verification existed). Kept, never offered for approval — draftReply is null.
    */
   draftLocked: boolean
+  /** 'sent' | 'failed' | 'skipped' | null (never attempted, e.g. Free plan with no trial left). */
+  replySendStatus: string | null
+  /** True when the auto-reply cron approved+sent this, not a manual click. */
+  replyAutoSent: boolean
 }
 
 export type InboxItem = {
@@ -229,7 +233,26 @@ export default function NotificationsList({ items }: { items: InboxItem[] }) {
                 </p>
               )}
 
-              {comment?.approved && <p className="mt-2 text-xs text-green">Reply approved</p>}
+              {comment?.approved && (
+                <div className="mt-2 rounded-md border border-green/20 bg-green/5 p-3">
+                  <p className="text-xs font-medium text-green">
+                    {comment.replySendStatus === 'sent'
+                      ? comment.replyAutoSent
+                        ? 'Sent automatically'
+                        : 'Reply approved and sent'
+                      : comment.replySendStatus === 'failed'
+                        ? 'Approved, but sending to YouTube failed'
+                        : 'Reply approved'}
+                  </p>
+                  {/* The actual text is what makes this auditable — "Reply approved"
+                      alone told a creator nothing about what was actually posted in
+                      their name, which matters even more once auto-send can post
+                      without them ever seeing it beforehand. */}
+                  {comment.finalReplyText && (
+                    <p className="mt-1 text-xs leading-relaxed text-text-primary">{comment.finalReplyText}</p>
+                  )}
+                </div>
+              )}
 
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 {isInsight && (
